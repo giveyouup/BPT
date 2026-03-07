@@ -6,7 +6,7 @@ import { parseStipendMapping } from '../utils/stipendMappingParser'
 import { parseShiftSummary } from '../utils/shiftUtils'
 import { formatMonthYear, formatDateFull } from '../utils/dateUtils'
 import { useData } from '../context/DataContext'
-import type { LineItem, ShiftEntry, Schedule, StipendMapping } from '../types'
+import type { LineItem, ShiftEntry, Schedule, StipendMapping, StipendRate } from '../types'
 
 const MONTH_NAMES = [
   'January', 'February', 'March', 'April', 'May', 'June',
@@ -14,6 +14,61 @@ const MONTH_NAMES = [
 ]
 
 function genId() { return `sched-${Date.now()}-${Math.random().toString(36).slice(2)}` }
+
+// ─── Shared helpers ───────────────────────────────────────────────────────────
+
+const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+const PICKER_YEARS = Array.from({ length: 10 }, (_, i) => new Date().getFullYear() - 3 + i)
+const SEL_CLS = 'bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500'
+
+function lastDayOfMonthStr(ym: string): string {
+  const [y, m] = ym.split('-').map(Number)
+  const d = new Date(y, m, 0)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+function stipendDateRange(m: StipendMapping, nextM: StipendMapping | null): string {
+  const [y, mo] = m.effectiveDate.split('-').map(Number)
+  const from = formatMonthYear(y, mo)
+  if (m.endDate) {
+    const [ey, emo] = m.endDate.split('-').map(Number)
+    return `${from} – ${formatMonthYear(ey, emo)}`
+  }
+  if (!nextM) return `${from} – present`
+  const [ny, nmo] = nextM.effectiveDate.split('-').map(Number)
+  const endMo = nmo === 1 ? 12 : nmo - 1
+  const endY = nmo === 1 ? ny - 1 : ny
+  return `${from} – ${formatMonthYear(endY, endMo)}`
+}
+
+function MonthPicker({ value, onChange, placeholder = 'Select' }: {
+  value: string
+  onChange: (val: string) => void
+  placeholder?: string
+}) {
+  const yr = value ? parseInt(value.slice(0, 4)) : ''
+  const mo = value ? parseInt(value.slice(5, 7)) : ''
+  const setYr = (y: string) => {
+    if (!y) { onChange(''); return }
+    onChange(`${y}-${String(mo || 1).padStart(2, '0')}`)
+  }
+  const setMo = (m: string) => {
+    if (!m) { onChange(''); return }
+    onChange(`${yr || new Date().getFullYear()}-${String(m).padStart(2, '0')}`)
+  }
+  return (
+    <div className="flex items-center gap-1">
+      <select value={mo} onChange={(e) => setMo(e.target.value)} className={SEL_CLS}>
+        <option value="">{placeholder}</option>
+        {MONTHS.map((name, i) => <option key={i + 1} value={i + 1}>{name}</option>)}
+      </select>
+      <select value={yr} onChange={(e) => setYr(e.target.value)} className={SEL_CLS}>
+        <option value="">{placeholder}</option>
+        {PICKER_YEARS.map((y) => <option key={y} value={y}>{y}</option>)}
+      </select>
+    </div>
+  )
+}
 
 // ─── PCR Upload ───────────────────────────────────────────────────────────────
 
@@ -92,6 +147,15 @@ function PcrUploadTab() {
 
   return (
     <div>
+      <div className="bg-gray-800/30 border border-gray-700/50 rounded-lg px-4 py-3 mb-5">
+        <p className="text-xs font-semibold text-gray-400 mb-1">Expected format</p>
+        <p className="text-xs text-gray-500">
+          Excel (.xlsx) export from the PCR billing system. Each row represents one billing line item.
+          Required columns: Incident ID, Service Date, Ticket #, CPT/ASA code, Modifier, Unit Value,
+          Distribution Value, Start Time, End Time, and Total Time. Service dates are extracted automatically
+          from the filename if present.
+        </p>
+      </div>
       {/* Drop zone */}
       <div
         onDragOver={(e) => { e.preventDefault(); setDragging(true) }}
@@ -348,6 +412,15 @@ function ScheduleUploadTab() {
 
   return (
     <div>
+      <div className="bg-gray-800/30 border border-gray-700/50 rounded-lg px-4 py-3 mb-5">
+        <p className="text-xs font-semibold text-gray-400 mb-1">Expected format</p>
+        <p className="text-xs text-gray-500">
+          iCalendar file (.ics) exported from your calendar application. Shift assignments must be
+          all-day events. The event title should contain the shift type (e.g., G1, G2, G3, APS, GI, V, POSTCALL).
+          Multiple events on the same day are combined into a single entry. You can select a date range
+          after parsing to import only a subset of events.
+        </p>
+      </div>
       {/* Drop zone */}
       <div
         onDragOver={(e) => { e.preventDefault(); setDragging(true) }}
@@ -575,16 +648,25 @@ function ScheduleUploadTab() {
 // ─── Stipend Rates Upload ─────────────────────────────────────────────────────
 
 function StipendRatesTab() {
-  const { stipendMappings: existingMappings, saveStipendMapping, deleteStipendMapping } = useData()
+  const { stipendMappings: ctxMappings, saveStipendMapping, deleteStipendMapping } = useData()
+
+  // Sort descending (newest first) for display
+  const existingMappings = [...ctxMappings].sort((a, b) => b.effectiveDate.localeCompare(a.effectiveDate))
+
+  // ── Upload state ──────────────────────────────────────────────────────────
   const today = new Date()
-  const defaultEffective = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-01`
+  const defaultUploadMonth = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`
 
   const [dragging, setDragging] = useState(false)
   const [file, setFile] = useState<File | null>(null)
   const [rates, setRates] = useState<StipendMapping['rates'] | null>(null)
   const [parseError, setParseError] = useState<string | null>(null)
-  const [effectiveDate, setEffectiveDate] = useState(defaultEffective)
+  const [uploadMonth, setUploadMonth] = useState(defaultUploadMonth)
   const [saved, setSaved] = useState(false)
+
+  // ── Edit state ────────────────────────────────────────────────────────────
+  const [expandedId, setExpandedId] = useState<string | null>(null)
+  const [draft, setDraft] = useState<StipendMapping | null>(null)
 
   const handleFile = useCallback(async (f: File) => {
     setFile(f); setRates(null); setParseError(null); setSaved(false)
@@ -612,15 +694,49 @@ function StipendRatesTab() {
       name: file.name.replace(/\.[^.]+$/, ''),
       filename: file.name,
       uploadDate: new Date().toISOString(),
-      effectiveDate,
+      effectiveDate: uploadMonth + '-01',
       rates,
     }
     await saveStipendMapping(mapping)
     setSaved(true); setFile(null); setRates(null)
   }
 
+  const expandMapping = (m: StipendMapping) => {
+    setExpandedId(m.id)
+    setDraft({ ...m, rates: m.rates.map((r) => ({ ...r })) })
+  }
+
+  const collapseMapping = () => { setExpandedId(null); setDraft(null) }
+
+  const saveDraft = async () => {
+    if (!draft) return
+    await saveStipendMapping(draft)
+    collapseMapping()
+  }
+
+  const handleDelete = async (id: string) => {
+    if (!confirm('Delete this stipend schedule? This cannot be undone.')) return
+    await deleteStipendMapping(id)
+    if (expandedId === id) collapseMapping()
+  }
+
+  const updateRate = (idx: number, field: keyof StipendRate, value: string | number) => {
+    if (!draft) return
+    setDraft({ ...draft, rates: draft.rates.map((r, i) => i === idx ? { ...r, [field]: value } : r) })
+  }
+
   return (
     <div>
+      <div className="bg-gray-800/30 border border-gray-700/50 rounded-lg px-4 py-3 mb-5">
+        <p className="text-xs font-semibold text-gray-400 mb-1">Expected format</p>
+        <p className="text-xs text-gray-500">
+          2-column Excel (.xlsx) spreadsheet. Column A: shift type key (e.g., G1_weekday, G1_weekend, APS, BR, NIR, GI).
+          Column B: dollar amount per shift day. Set the effective month after upload to control which
+          pay periods these rates apply to.
+        </p>
+      </div>
+
+      {/* Drop zone */}
       <div
         onDragOver={(e) => { e.preventDefault(); setDragging(true) }}
         onDragLeave={() => setDragging(false)}
@@ -650,7 +766,6 @@ function StipendRatesTab() {
                 d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
             </svg>
             <p className="text-sm text-gray-400 mb-1">Drop your stipend rates .xlsx file here</p>
-            <p className="text-xs text-gray-600 mb-2">2-column spreadsheet: shift name | dollar amount</p>
             <label className="cursor-pointer">
               <span className="text-xs text-indigo-400 font-medium hover:text-indigo-300">or click to browse</span>
               <input type="file" accept=".xlsx,.xls" className="hidden"
@@ -674,17 +789,12 @@ function StipendRatesTab() {
 
       {rates && (
         <div className="bg-gray-800/50 border border-gray-700 rounded-xl p-4 mb-6">
-          <div className="flex items-center gap-4 mb-3">
-            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Effective Date</p>
-            <input
-              type="date"
-              value={effectiveDate}
-              onChange={(e) => setEffectiveDate(e.target.value)}
-              className="bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-xs text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-            />
-            <p className="text-xs text-gray-600">Rates apply to all service dates on or after this date</p>
+          <div className="flex items-center gap-4 mb-3 flex-wrap">
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Effective from</p>
+            <MonthPicker value={uploadMonth} onChange={setUploadMonth} />
+            <p className="text-xs text-gray-600">Rates apply from this month onward</p>
           </div>
-          <div className="grid grid-cols-2 gap-1 max-h-48 overflow-y-auto">
+          <div className="grid grid-cols-2 gap-1 max-h-48 overflow-y-auto mb-4">
             {rates.map((r) => (
               <div key={r.shiftType} className="flex justify-between text-xs py-1 px-2 rounded hover:bg-gray-800">
                 <span className="font-mono text-gray-400">{r.shiftType}</span>
@@ -694,45 +804,174 @@ function StipendRatesTab() {
           </div>
           <button
             onClick={handleSave}
-            className="mt-4 w-full py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-500 transition-colors"
+            className="w-full py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-500 transition-colors"
           >
             Save Stipend Rates
           </button>
         </div>
       )}
 
+      {/* Saved rate schedules */}
       {existingMappings.length > 0 && (
         <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
           <div className="px-5 py-4 border-b border-gray-800">
-            <h3 className="text-sm font-semibold text-gray-300">Saved Stipend Rate Versions</h3>
+            <h3 className="text-sm font-semibold text-gray-300">Saved Stipend Rate Schedules</h3>
           </div>
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-gray-800">
-                {['File', 'Effective Date', 'Rates'].map((h) => (
-                  <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">{h}</th>
-                ))}
-                <th className="px-4 py-3" />
-              </tr>
-            </thead>
-            <tbody>
-              {[...existingMappings].reverse().map((m) => (
-                <tr key={m.id} className="border-b border-gray-800">
-                  <td className="px-4 py-3 text-gray-300">{m.filename}</td>
-                  <td className="px-4 py-3 text-gray-300">{formatDateFull(m.effectiveDate)}</td>
-                  <td className="px-4 py-3 text-gray-400">{m.rates.length}</td>
-                  <td className="px-4 py-3 text-right">
-                    <button
-                      onClick={() => { deleteStipendMapping(m.id) }}
-                      className="text-gray-700 hover:text-red-400 text-xs"
+          <div className="divide-y divide-gray-800">
+            {existingMappings.map((m, i) => {
+              const isExpanded = expandedId === m.id
+              const isCurrent = i === 0
+              // nextM is the later-effective mapping (lower index in descending sort = earlier index = i-1)
+              const nextM = existingMappings[i - 1] ?? null
+
+              return (
+                <div key={m.id}>
+                  {/* Row header */}
+                  <button
+                    onClick={() => isExpanded ? collapseMapping() : expandMapping(m)}
+                    className="w-full flex items-center gap-3 px-4 py-3 hover:bg-gray-800 transition-colors text-left"
+                  >
+                    <svg
+                      className={`w-3 h-3 text-gray-600 flex-shrink-0 transition-transform ${isExpanded ? 'rotate-90' : ''}`}
+                      fill="none" stroke="currentColor" viewBox="0 0 24 24"
                     >
-                      Remove
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                    </svg>
+                    <span className="text-sm font-medium text-gray-200">{m.name || m.filename}</span>
+                    <span className="text-xs text-gray-600 mx-1">·</span>
+                    <span className="text-xs text-gray-500 flex-1">{stipendDateRange(m, nextM)}</span>
+                    {isCurrent && (
+                      <span className="text-xs px-1.5 py-0.5 bg-indigo-900/40 text-indigo-400 rounded">current</span>
+                    )}
+                    <span className="text-xs text-gray-700 ml-2">{m.rates.length} rates</span>
+                  </button>
+
+                  {/* Expanded editor */}
+                  {isExpanded && draft?.id === m.id && (
+                    <div className="border-t border-gray-800 p-4">
+                      {/* Name + dates */}
+                      <div className="grid grid-cols-3 gap-4 mb-4">
+                        <div>
+                          <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Name</label>
+                          <input
+                            type="text"
+                            value={draft.name}
+                            onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+                            placeholder="e.g. 2025 Rates"
+                            className="bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 w-full"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Effective from</label>
+                          <MonthPicker
+                            value={draft.effectiveDate.slice(0, 7)}
+                            onChange={(v) => setDraft({ ...draft, effectiveDate: v ? v + '-01' : draft.effectiveDate })}
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">
+                            Till <span className="font-normal text-gray-600 normal-case">(blank = ongoing)</span>
+                          </label>
+                          <div className="flex items-center gap-2">
+                            <MonthPicker
+                              value={draft.endDate ? draft.endDate.slice(0, 7) : ''}
+                              onChange={(v) => setDraft({ ...draft, endDate: v ? lastDayOfMonthStr(v) : undefined })}
+                              placeholder="—"
+                            />
+                            {draft.endDate && (
+                              <button
+                                onClick={() => setDraft({ ...draft, endDate: undefined })}
+                                className="text-gray-600 hover:text-gray-400"
+                              >
+                                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                </svg>
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Rates table */}
+                      <table className="w-full text-sm mb-3">
+                        <thead>
+                          <tr className="border-b border-gray-800">
+                            <th className="pb-2 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Shift Type</th>
+                            <th className="pb-2 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider pl-4">Amount</th>
+                            <th className="pb-2 w-8" />
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {draft.rates.map((rate, ri) => (
+                            <tr key={ri} className="border-b border-gray-800/50">
+                              <td className="py-1.5 pr-4">
+                                <input
+                                  value={rate.shiftType}
+                                  onChange={(e) => updateRate(ri, 'shiftType', e.target.value)}
+                                  placeholder="e.g. G1_weekend"
+                                  className="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs font-mono text-gray-200 focus:outline-none focus:ring-1 focus:ring-indigo-500 w-full"
+                                />
+                              </td>
+                              <td className="py-1.5 pl-4 pr-4">
+                                <div className="flex items-center gap-1">
+                                  <span className="text-gray-500 text-xs">$</span>
+                                  <input
+                                    type="number"
+                                    step="0.01"
+                                    value={rate.amount}
+                                    onChange={(e) => updateRate(ri, 'amount', parseFloat(e.target.value) || 0)}
+                                    className="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 focus:outline-none focus:ring-1 focus:ring-indigo-500 w-28"
+                                  />
+                                </div>
+                              </td>
+                              <td className="py-1.5">
+                                <button
+                                  onClick={() => setDraft({ ...draft, rates: draft.rates.filter((_, j) => j !== ri) })}
+                                  className="text-gray-700 hover:text-red-400 transition-colors"
+                                >
+                                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                                  </svg>
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+
+                      <button
+                        onClick={() => setDraft({ ...draft, rates: [...draft.rates, { shiftType: '', amount: 0 }] })}
+                        className="text-xs text-indigo-400 hover:text-indigo-300 font-medium mb-4"
+                      >
+                        + Add Rate
+                      </button>
+
+                      <div className="flex items-center gap-3 border-t border-gray-800 pt-4">
+                        <button
+                          onClick={saveDraft}
+                          className="px-4 py-1.5 bg-indigo-600 text-white rounded text-xs font-medium hover:bg-indigo-500 transition-colors"
+                        >
+                          Save
+                        </button>
+                        <button
+                          onClick={collapseMapping}
+                          className="px-4 py-1.5 text-gray-400 hover:text-gray-200 text-xs font-medium"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          onClick={() => handleDelete(m.id)}
+                          className="ml-auto text-xs text-red-500 hover:text-red-400 font-medium"
+                        >
+                          Delete Schedule
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
         </div>
       )}
     </div>
@@ -753,7 +992,7 @@ export default function Upload() {
 
   return (
     <div className="p-8 max-w-2xl">
-      <h2 className="text-2xl font-bold text-gray-100 mb-6">Upload</h2>
+      <h2 className="text-2xl font-bold text-gray-100 mb-6">Upload Data</h2>
 
       <div className="flex border-b border-gray-800 mb-6">
         <button className={tabCls('pcr')} onClick={() => setTab('pcr')}>PCR Report</button>
