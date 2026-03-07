@@ -3,13 +3,13 @@ import {
   BarChart, Bar, Cell, LineChart, Line, XAxis, YAxis, CartesianGrid,
   Tooltip, Legend, ResponsiveContainer,
 } from 'recharts'
-import { getReports, getSchedules, getSettings, getStipendMappings } from '../utils/storage'
+import { useData } from '../context/DataContext'
 import { computeCalendarYearStats } from '../utils/calculations'
 import {
   formatCurrency, formatCurrencyFull, formatHours, formatMonthYear, getMonthName,
 } from '../utils/dateUtils'
 import StatCard from '../components/StatCard'
-import { isOffDayShift, getFixedShiftKey, isCallShift } from '../utils/shiftUtils'
+import { isOffDayShift, getFixedShiftKey, isCallShift, resolveShiftAlias } from '../utils/shiftUtils'
 
 function shiftSortKey(shift: string): string {
   const u = shift.toUpperCase()
@@ -44,10 +44,7 @@ export default function AnnualSummary() {
   const { year: yearParam } = useParams<{ year: string }>()
   const navigate = useNavigate()
 
-  const reports = getReports()
-  const allSchedules = getSchedules()
-  const settings = getSettings()
-  const allMappings = getStipendMappings()
+  const { reports, schedules: allSchedules, settings, stipendMappings: allMappings } = useData()
   const years = [...new Set(reports.map((r) => r.year))].sort((a, b) => b - a)
   const year = yearParam ? parseInt(yearParam) : years[0]
 
@@ -69,6 +66,23 @@ export default function AnnualSummary() {
   const ytdHours = yearStats.reduce((s, m) => s + m.totalHours, 0)
   const ytdCases = yearStats.reduce((s, m) => s + m.totalCases, 0)
 
+  const offDays = (() => {
+    const dateMap = new Map<string, string[]>()
+    for (const sched of [...allSchedules].sort((a, b) => a.uploadDate.localeCompare(b.uploadDate))) {
+      for (const entry of sched.entries) dateMap.set(entry.date, entry.shiftTypes)
+    }
+    let vacation = 0, holiday = 0, postcall = 0
+    const prefix = `${year}-`
+    for (const [date, shiftTypes] of dateMap) {
+      if (!date.startsWith(prefix)) continue
+      if (!shiftTypes.every(isOffDayShift)) continue
+      if (shiftTypes.some((s) => s.toUpperCase() === 'V')) vacation++
+      else if (shiftTypes.some((s) => s.toUpperCase() === 'H')) holiday++
+      else if (shiftTypes.some((s) => s.toUpperCase() === 'POSTCALL')) postcall++
+    }
+    return { vacation, holiday, postcall, total: vacation + holiday + postcall }
+  })()
+
   const shiftHoursData = (() => {
     const map = new Map<string, { total: number; count: number }>()
     for (const month of yearStats) {
@@ -76,7 +90,7 @@ export default function AnnualSummary() {
         if (day.hours <= 0 || day.shiftTypes.length === 0) continue
         for (const rawSt of day.shiftTypes) {
           if (isOffDayShift(rawSt) || getFixedShiftKey(rawSt)) continue
-          const canonical = rawSt.toUpperCase()
+          const canonical = resolveShiftAlias(rawSt.toUpperCase())
           const key = isCallShift(canonical)
             ? `${canonical} ${day.isCallWeekend ? 'WE' : 'WD'}`
             : canonical
@@ -124,15 +138,29 @@ export default function AnnualSummary() {
       </div>
 
       {/* YTD Stats */}
-      <div className="grid grid-cols-3 gap-4 mb-8">
-        <StatCard label="YTD Cases" value={String(ytdCases)} sub={`${yearStats.length} months`} />
-        <StatCard label="YTD Units" value={ytdUnits.toFixed(2)} color="indigo" />
-        <StatCard label="YTD Unit Pay" value={formatCurrency(ytdUnitPay)} color="green"
-          sub={ytdUnits > 0 ? `Avg $${(ytdUnitPay / ytdUnits).toFixed(2)}/unit` : undefined} private />
-        <StatCard label="YTD Stipends" value={formatCurrency(ytdStipends)} private />
-        <StatCard label="YTD Total Pay" value={formatCurrency(ytdTotal)} color="green" sub="Units + stipends" private />
+      <div className="grid grid-cols-4 gap-4 mb-8">
+        <StatCard label="YTD Total Pay" value={formatCurrency(ytdTotal)} color="green"
+          sub={`${formatCurrency(ytdUnitPay)} unit · ${formatCurrency(ytdStipends)} stipends`} private />
         <StatCard label="YTD Hours" value={formatHours(ytdHours)}
-          sub={`${yearStats.reduce((s, m) => s + m.daysWorked, 0)} days worked`} />
+          sub={`${yearStats.reduce((s, m) => s + m.daysWorked, 0)} days worked · ${yearStats.length} months`} />
+        <StatCard
+          label="Avg $/hr"
+          value={ytdHours > 0 ? `$${(ytdTotal / ytdHours).toFixed(0)}/hr` : '—'}
+          sub="Total compensation ÷ hours"
+          color="amber"
+          private
+        />
+        <StatCard
+          label="YTD Days Off"
+          value={offDays.total > 0 ? String(offDays.total) : '—'}
+          sub={offDays.total > 0
+            ? [
+                offDays.postcall > 0 ? `${offDays.postcall} postcall` : '',
+                offDays.holiday > 0 ? `${offDays.holiday} holiday` : '',
+                offDays.vacation > 0 ? `${offDays.vacation} vacation` : '',
+              ].filter(Boolean).join(' · ')
+            : undefined}
+        />
       </div>
 
       {/* Charts row 1 */}
@@ -232,7 +260,7 @@ export default function AnnualSummary() {
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-gray-800">
-              {['Month', 'Cases', 'Units', '$/Unit', 'Unit Pay', 'Stipends', 'Total Pay', 'Hours', 'Days'].map((h) => (
+              {['Month', 'Cases', 'Units', '$/Unit', 'Unit Pay', 'Stipends', 'Total Pay', 'Hours', '$/hr', 'Days'].map((h) => (
                 <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">{h}</th>
               ))}
             </tr>
@@ -242,6 +270,7 @@ export default function AnnualSummary() {
               const avgRate = s.totalDistributableUnits > 0
                 ? s.unitCompensation / s.totalDistributableUnits
                 : null
+              const dollarPerHr = s.totalHours > 0 ? s.totalCompensation / s.totalHours : null
               return (
                 <tr key={s.id} onClick={() => navigate(`/calendar/${s.year}-${String(s.month).padStart(2, '0')}`)}
                   className="border-b border-gray-800 hover:bg-gray-800 cursor-pointer transition-colors">
@@ -253,6 +282,7 @@ export default function AnnualSummary() {
                   <td className="px-4 py-3 text-gray-400">{formatCurrencyFull(s.totalStipends)}</td>
                   <td className="px-4 py-3 text-emerald-400 font-semibold">{formatCurrencyFull(s.totalCompensation)}</td>
                   <td className="px-4 py-3 text-gray-400">{formatHours(s.totalHours)}</td>
+                  <td className="px-4 py-3 text-amber-400">{dollarPerHr != null ? `$${dollarPerHr.toFixed(0)}` : '—'}</td>
                   <td className="px-4 py-3 text-gray-400">{s.daysWorked}</td>
                 </tr>
               )
@@ -270,6 +300,7 @@ export default function AnnualSummary() {
               <td className="px-4 py-3 text-gray-300">{formatCurrencyFull(ytdStipends)}</td>
               <td className="px-4 py-3 text-emerald-400">{formatCurrencyFull(ytdTotal)}</td>
               <td className="px-4 py-3 text-gray-300">{formatHours(ytdHours)}</td>
+              <td className="px-4 py-3 text-amber-400">{ytdHours > 0 ? `$${(ytdTotal / ytdHours).toFixed(0)}` : '—'}</td>
               <td className="px-4 py-3 text-gray-300">{yearStats.reduce((s, m) => s + m.daysWorked, 0)}</td>
             </tr>
           </tfoot>

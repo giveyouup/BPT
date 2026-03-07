@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { getReports, getSchedules, getSettings, getStipendMappings, saveManualShift, saveReport } from '../utils/storage'
+import { useData } from '../context/DataContext'
 import { computeCalendarMonthStats, getApplicableMapping } from '../utils/calculations'
 import {
   formatMonthYear, formatDateFull, formatHours, formatCurrency, formatCurrencyFull,
@@ -15,16 +15,13 @@ export default function CalendarMonthDetail() {
   const { yearMonth } = useParams<{ yearMonth: string }>()
   const navigate = useNavigate()
 
+  const { reports: allReports, schedules: allSchedules, settings, stipendMappings: allMappings, saveReport, saveManualShift } = useData()
+
   if (!yearMonth) return null
   const [yearStr, monthStr] = yearMonth.split('-')
   const calYear = parseInt(yearStr)
   const calMonth = parseInt(monthStr)
   if (isNaN(calYear) || isNaN(calMonth)) return null
-
-  const allReports = getReports()
-  const allSchedules = getSchedules()
-  const settings = getSettings()
-  const allMappings = getStipendMappings()
 
   const stats = computeCalendarMonthStats(calYear, calMonth, allReports, allSchedules, settings, allMappings)
   const activeMapping = getApplicableMapping(calYear, calMonth, allMappings)
@@ -77,7 +74,7 @@ export default function CalendarMonthDetail() {
 
   const labeledReport = allReports.find((r) => r.year === calYear && r.month === calMonth)
 
-  const saveHoursOverride = (date: string) => {
+  const saveHoursOverride = async (date: string) => {
     if (!labeledReport) return
     const hours = parseFloat(hoursInput)
     const workingDayOverrides = { ...labeledReport.workingDayOverrides }
@@ -86,7 +83,7 @@ export default function CalendarMonthDetail() {
     } else {
       delete workingDayOverrides[date]
     }
-    saveReport({ ...labeledReport, workingDayOverrides })
+    await saveReport({ ...labeledReport, workingDayOverrides })
     setEditingHoursDate(null)
     refresh()
   }
@@ -243,7 +240,7 @@ export default function CalendarMonthDetail() {
                           </div>
                           <div className="flex items-center gap-2">
                             <button
-                              onClick={() => { saveManualShift(day.date, shiftDraft); setEditingShiftDate(null); refresh() }}
+                              onClick={async () => { await saveManualShift(day.date, shiftDraft); setEditingShiftDate(null); refresh() }}
                               className="text-xs text-indigo-400 font-medium hover:text-indigo-300"
                             >Save</button>
                             <button

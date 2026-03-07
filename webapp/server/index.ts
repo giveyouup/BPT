@@ -1,0 +1,87 @@
+import express from 'express'
+import path from 'path'
+import {
+  getReports, getReport, upsertReport, deleteReport,
+  getSchedules, upsertSchedule, deleteSchedule,
+  getManualShifts, upsertManualShift,
+  getSettings, upsertSettings,
+  getStipendMappings, upsertStipendMapping, deleteStipendMapping,
+} from './db'
+
+const app = express()
+const PORT = parseInt(process.env.PORT ?? '3001', 10)
+
+app.use(express.json({ limit: '10mb' }))
+
+// ─── Reports ──────────────────────────────────────────────────────────────────
+
+app.get('/api/reports', (_req, res) => res.json(getReports()))
+
+app.get('/api/reports/:id', (req, res) => {
+  const r = getReport(req.params.id)
+  r ? res.json(r) : res.status(404).json({ error: 'Not found' })
+})
+
+app.put('/api/reports/:id', (req, res) => {
+  upsertReport(req.body)
+  res.json({ ok: true })
+})
+
+app.delete('/api/reports/:id', (req, res) => {
+  deleteReport(req.params.id)
+  res.json({ ok: true })
+})
+
+// ─── Schedules ────────────────────────────────────────────────────────────────
+
+app.get('/api/schedules', (_req, res) => res.json(getSchedules()))
+
+app.put('/api/schedules/:id', (req, res) => {
+  upsertSchedule(req.body)
+  res.json({ ok: true })
+})
+
+app.delete('/api/schedules/:id', (req, res) => {
+  deleteSchedule(req.params.id)
+  res.json({ ok: true })
+})
+
+// ─── Manual Shifts ────────────────────────────────────────────────────────────
+
+app.get('/api/manual-shifts', (_req, res) => res.json(getManualShifts()))
+
+app.put('/api/manual-shifts/:date', (req, res) => {
+  upsertManualShift(req.params.date, req.body.shiftTypes ?? [])
+  res.json({ ok: true })
+})
+
+// ─── Settings ─────────────────────────────────────────────────────────────────
+
+app.get('/api/settings', (_req, res) => res.json(getSettings()))
+
+app.put('/api/settings', (req, res) => {
+  upsertSettings(req.body)
+  res.json({ ok: true })
+})
+
+// ─── Stipend Mappings ─────────────────────────────────────────────────────────
+
+app.get('/api/stipend-mappings', (_req, res) => res.json(getStipendMappings()))
+
+app.put('/api/stipend-mappings/:id', (req, res) => {
+  upsertStipendMapping(req.body)
+  res.json({ ok: true })
+})
+
+app.delete('/api/stipend-mappings/:id', (req, res) => {
+  deleteStipendMapping(req.params.id)
+  res.json({ ok: true })
+})
+
+// ─── Serve static frontend ────────────────────────────────────────────────────
+
+const distPath = path.resolve(__dirname, '../../dist')
+app.use(express.static(distPath))
+app.get('*', (_req, res) => res.sendFile(path.join(distPath, 'index.html')))
+
+app.listen(PORT, () => console.log(`BPT server running on port ${PORT}`))

@@ -1,4 +1,5 @@
 import { Routes, Route, Navigate } from 'react-router-dom'
+import { DataProvider, useData } from './context/DataContext'
 import Layout from './components/Layout'
 import Dashboard from './pages/Dashboard'
 import Upload from './pages/Upload'
@@ -7,7 +8,15 @@ import CalendarMonthDetail from './pages/CalendarMonthDetail'
 import AnnualSummary from './pages/AnnualSummary'
 import Settings from './pages/Settings'
 
-export default function App() {
+function AppContent() {
+  const { loading } = useData()
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-screen bg-gray-950">
+        <div className="text-gray-400 text-sm">Loading…</div>
+      </div>
+    )
+  }
   return (
     <Layout>
       <Routes>
@@ -21,5 +30,13 @@ export default function App() {
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </Layout>
+  )
+}
+
+export default function App() {
+  return (
+    <DataProvider>
+      <AppContent />
+    </DataProvider>
   )
 }

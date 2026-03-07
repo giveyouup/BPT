@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { getSettings, saveSettings, getStipendMappings, saveStipendMapping, deleteStipendMapping } from '../utils/storage'
+import { useData } from '../context/DataContext'
 import { computeFederalHolidays, getFederalHolidayLabels } from '../utils/shiftUtils'
 import { formatDateFull, formatMonthYear } from '../utils/dateUtils'
 import { parseStipendMapping } from '../utils/stipendMappingParser'
@@ -57,7 +57,15 @@ function MonthPicker({ value, onChange, placeholder = 'Select' }: {
 }
 
 export default function Settings() {
-  const [settings, setSettings] = useState(() => getSettings())
+  const {
+    settings: apiSettings,
+    saveSettings: contextSaveSettings,
+    stipendMappings: ctxMappings,
+    saveStipendMapping,
+    deleteStipendMapping,
+  } = useData()
+
+  const [settings, setSettings] = useState(apiSettings)
   const [saved, setSaved] = useState(false)
   const [holidayYear, setHolidayYear] = useState(new Date().getFullYear())
   const [customDateInput, setCustomDateInput] = useState('')
@@ -98,8 +106,8 @@ export default function Settings() {
     setHolidayList(activeList.filter((d) => d !== date))
   }
 
-  const handleSave = () => {
-    saveSettings(settings)
+  const handleSave = async () => {
+    await contextSaveSettings(settings)
     setSaved(true)
     setTimeout(() => setSaved(false), 2000)
   }
@@ -107,14 +115,9 @@ export default function Settings() {
   const years = Array.from({ length: 5 }, (_, i) => new Date().getFullYear() - 1 + i)
 
   // ── Stipend schedules ────────────────────────────────────────────────────────
-  const loadMappings = () =>
-    [...getStipendMappings()].sort((a, b) => b.effectiveDate.localeCompare(a.effectiveDate))
-
-  const [stipendMappings, setStipendMappings] = useState<StipendMapping[]>(loadMappings)
+  const stipendMappings = [...ctxMappings].sort((a, b) => b.effectiveDate.localeCompare(a.effectiveDate))
   const [expandedStipendId, setExpandedStipendId] = useState<string | null>(null)
   const [stipendDraft, setStipendDraft] = useState<StipendMapping | null>(null)
-
-  const refreshMappings = () => setStipendMappings(loadMappings())
 
   const expandMapping = (m: StipendMapping) => {
     setExpandedStipendId(m.id)
@@ -126,14 +129,13 @@ export default function Settings() {
     setStipendDraft(null)
   }
 
-  const saveStipend = () => {
+  const saveStipend = async () => {
     if (!stipendDraft) return
-    saveStipendMapping(stipendDraft)
-    refreshMappings()
+    await saveStipendMapping(stipendDraft)
     collapseMapping()
   }
 
-  const handleNewSchedule = () => {
+  const handleNewSchedule = async () => {
     const now = new Date()
     const ym = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
     const newM: StipendMapping = {
@@ -144,16 +146,14 @@ export default function Settings() {
       effectiveDate: ym + '-01',
       rates: [],
     }
-    saveStipendMapping(newM)
-    refreshMappings()
+    await saveStipendMapping(newM)
     setExpandedStipendId(newM.id)
     setStipendDraft({ ...newM })
   }
 
-  const handleDeleteStipend = (id: string) => {
+  const handleDeleteStipend = async (id: string) => {
     if (!confirm('Delete this stipend schedule? This cannot be undone.')) return
-    deleteStipendMapping(id)
-    refreshMappings()
+    await deleteStipendMapping(id)
     if (expandedStipendId === id) collapseMapping()
   }
 
@@ -197,18 +197,17 @@ export default function Settings() {
     }
   }
 
-  const handleUploadSave = () => {
+  const handleUploadSave = async () => {
     if (!uploadRates) return
     const mapping: StipendMapping = {
       id: `upload_${Date.now()}`,
-      name: uploadFilename.replace(/\.[^.]+$/, ''), // strip extension as default name
+      name: uploadFilename.replace(/\.[^.]+$/, ''),
       filename: uploadFilename,
       uploadDate: new Date().toISOString(),
       effectiveDate: uploadMonth + '-01',
       rates: uploadRates,
     }
-    saveStipendMapping(mapping)
-    refreshMappings()
+    await saveStipendMapping(mapping)
     setUploadRates(null); setUploadFilename(''); setUploadError(null)
   }
 

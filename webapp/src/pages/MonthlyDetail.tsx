@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { getReport, saveReport, deleteReport, getSchedules, getSettings, getStipendMappings } from '../utils/storage'
+import { useData } from '../context/DataContext'
 import { computeMonthlyStats, getApplicableMapping } from '../utils/calculations'
 import {
   formatMonthYear, formatDateFull, formatHours, formatCurrency, formatCurrencyFull,
@@ -23,8 +23,10 @@ export default function MonthlyDetail() {
   // Case filter
   const [caseFilter, setCaseFilter] = useState('')
 
+  const { reports, schedules: allSchedules, settings, stipendMappings: allMappings, saveReport, deleteReport } = useData()
+
   if (!id) return null
-  const liveReport = getReport(id)
+  const liveReport = reports.find((r) => r.id === id)
   if (!liveReport) {
     return (
       <div className="p-8 text-gray-500">
@@ -37,26 +39,23 @@ export default function MonthlyDetail() {
   // Suppress unused warning on refreshKey
   void refreshKey
 
-  const allSchedules = getSchedules()
-  const settings = getSettings()
-  const allMappings = getStipendMappings()
   const liveStats = computeMonthlyStats(liveReport, allSchedules, settings, allMappings)
   const autoMapping = getApplicableMapping(liveReport.year, liveReport.month, allMappings)
 
   const calendarYearMonth = `${liveReport.year}-${String(liveReport.month).padStart(2, '0')}`
 
   // ── $/unit ───────────────────────────────────────────────────────────────
-  const saveUnitValue = () => {
+  const saveUnitValue = async () => {
     const val = parseFloat(unitValueInput)
     if (isNaN(val) || val <= 0) return
-    saveReport({ ...liveReport, unitDollarValue: val })
+    await saveReport({ ...liveReport, unitDollarValue: val })
     setEditingUnitValue(false)
     refresh()
   }
 
-  const handleDelete = () => {
+  const handleDelete = async () => {
     if (!confirm(`Delete ${formatMonthYear(liveReport.year, liveReport.month)} report? This cannot be undone.`)) return
-    deleteReport(liveReport.id)
+    await deleteReport(liveReport.id)
     navigate('/')
   }
 

@@ -1,11 +1,11 @@
 import { useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { parseXlsx, detectMonthYear } from '../utils/xlsxParser'
-import { saveReport, getReport, getSettings, getSchedules, saveSchedule, deleteSchedule, getStipendMappings, saveStipendMapping, deleteStipendMapping } from '../utils/storage'
 import { parseICS } from '../utils/icsParser'
 import { parseStipendMapping } from '../utils/stipendMappingParser'
 import { parseShiftSummary } from '../utils/shiftUtils'
 import { formatMonthYear, formatDateFull } from '../utils/dateUtils'
+import { useData } from '../context/DataContext'
 import type { LineItem, ShiftEntry, Schedule, StipendMapping } from '../types'
 
 const MONTH_NAMES = [
@@ -19,7 +19,7 @@ function genId() { return `sched-${Date.now()}-${Math.random().toString(36).slic
 
 function PcrUploadTab() {
   const navigate = useNavigate()
-  const settings = getSettings()
+  const { reports, settings, saveReport } = useData()
 
   const [dragging, setDragging] = useState(false)
   const [file, setFile] = useState<File | null>(null)
@@ -55,7 +55,7 @@ function PcrUploadTab() {
   }, [handleFile])
 
   const reportId = `${year}-${String(month).padStart(2, '0')}`
-  const existing = getReport(reportId)
+  const existing = reports.find((r) => r.id === reportId)
 
   const totalUnits = parsed ? parsed.reduce((s, li) => s + li.totalDistributableUnits, 0) : 0
   const uniqueTickets = parsed ? new Set(parsed.map((li) => li.ticketNum)).size : 0
@@ -83,7 +83,7 @@ function PcrUploadTab() {
       dayStipends: existing?.dayStipends ?? {},
       stipends: existing?.stipends ?? [],
     }
-    saveReport(report)
+    await saveReport(report)
     setSaving(false)
     navigate(`/month/${reportId}`)
   }
@@ -229,6 +229,7 @@ interface ConflictEntry {
 }
 
 function ScheduleUploadTab() {
+  const { schedules, saveSchedule, deleteSchedule } = useData()
   const [dragging, setDragging] = useState(false)
   const [file, setFile] = useState<File | null>(null)
   const [parsedEvents, setParsedEvents] = useState<Array<{ date: string; summary: string }> | null>(null)
@@ -290,9 +291,8 @@ function ScheduleUploadTab() {
     const newEntries: ShiftEntry[] = [...byDate.entries()].map(([date, shiftTypes]) => ({ date, shiftTypes }))
 
     // Check for conflicts with existing schedules
-    const existing = getSchedules()
     const existingMap = new Map<string, string[]>()
-    const sortedExisting = [...existing].sort((a, b) => a.uploadDate.localeCompare(b.uploadDate))
+    const sortedExisting = [...schedules].sort((a, b) => a.uploadDate.localeCompare(b.uploadDate))
     for (const sched of sortedExisting) {
       for (const entry of sched.entries) {
         existingMap.set(entry.date, entry.shiftTypes)
@@ -324,7 +324,7 @@ function ScheduleUploadTab() {
     }
   }
 
-  const doSave = (entries: ShiftEntry[], rejectedDates: string[]) => {
+  const doSave = async (entries: ShiftEntry[], rejectedDates: string[]) => {
     const finalEntries = entries.filter((e) => !rejectedDates.includes(e.date))
     const schedule: Schedule = {
       id: genId(),
@@ -332,19 +332,19 @@ function ScheduleUploadTab() {
       uploadDate: new Date().toISOString(),
       entries: finalEntries,
     }
-    saveSchedule(schedule)
+    await saveSchedule(schedule)
     setSaved(true)
     setShowConflictModal(false)
     setParsedEvents(null)
     setFile(null)
   }
 
-  const handleApplyConflicts = () => {
+  const handleApplyConflicts = async () => {
     const rejected = conflicts.filter((c) => !c.accept).map((c) => c.date)
-    doSave(pendingEntries, rejected)
+    await doSave(pendingEntries, rejected)
   }
 
-  const existingSchedules = getSchedules()
+  const existingSchedules = schedules.filter((s) => s.id !== 'manual_shifts')
 
   return (
     <div>
@@ -426,10 +426,9 @@ function ScheduleUploadTab() {
                   <td className="px-4 py-3 text-gray-400">{s.entries.length}</td>
                   <td className="px-4 py-3 text-right">
                     <button
-                      onClick={() => {
+                      onClick={async () => {
                         if (!confirm('Remove this schedule? Shift data will be lost.')) return
-                        deleteSchedule(s.id)
-                        setSaved((v) => !v) // force re-render
+                        await deleteSchedule(s.id)
                       }}
                       className="text-gray-700 hover:text-red-400 text-xs"
                     >
@@ -576,6 +575,7 @@ function ScheduleUploadTab() {
 // ─── Stipend Rates Upload ─────────────────────────────────────────────────────
 
 function StipendRatesTab() {
+  const { stipendMappings: existingMappings, saveStipendMapping, deleteStipendMapping } = useData()
   const today = new Date()
   const defaultEffective = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-01`
 
@@ -585,7 +585,6 @@ function StipendRatesTab() {
   const [parseError, setParseError] = useState<string | null>(null)
   const [effectiveDate, setEffectiveDate] = useState(defaultEffective)
   const [saved, setSaved] = useState(false)
-  const [tick, setTick] = useState(0)
 
   const handleFile = useCallback(async (f: File) => {
     setFile(f); setRates(null); setParseError(null); setSaved(false)
@@ -606,7 +605,7 @@ function StipendRatesTab() {
     const f = e.dataTransfer.files[0]; if (f) handleFile(f)
   }, [handleFile])
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!rates || !file) return
     const mapping: StipendMapping = {
       id: genId(),
@@ -616,11 +615,9 @@ function StipendRatesTab() {
       effectiveDate,
       rates,
     }
-    saveStipendMapping(mapping)
+    await saveStipendMapping(mapping)
     setSaved(true); setFile(null); setRates(null)
   }
-
-  const existingMappings = getStipendMappings()
 
   return (
     <div>
@@ -726,7 +723,7 @@ function StipendRatesTab() {
                   <td className="px-4 py-3 text-gray-400">{m.rates.length}</td>
                   <td className="px-4 py-3 text-right">
                     <button
-                      onClick={() => { deleteStipendMapping(m.id); setTick((v) => v + 1) }}
+                      onClick={() => { deleteStipendMapping(m.id) }}
                       className="text-gray-700 hover:text-red-400 text-xs"
                     >
                       Remove
@@ -738,7 +735,6 @@ function StipendRatesTab() {
           </table>
         </div>
       )}
-      <span className="hidden">{tick}</span>
     </div>
   )
 }

@@ -1,0 +1,11 @@
+services:
+  bpt:
+    image: ghcr.io/giveyouup/bpt:latest
+    ports:
+      - "3001:3001"
+    volumes:
+      - /opt/stacks/BPT:/opt/stacks/BPT
+    environment:
+      - DATA_DIR=/opt/stacks/BPT
+      - PORT=3001
+    restart: unless-stopped
