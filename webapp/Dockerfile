@@ -3,7 +3,20 @@ FROM node:20-alpine AS prod-deps
 WORKDIR /app
 RUN apk add --no-cache python3 make g++
 COPY package*.json ./
-RUN npm ci --omit=dev
+RUN npm ci --omit=dev \
+  # Strip better-sqlite3 build artifacts not needed at runtime
+  && rm -rf node_modules/better-sqlite3/src \
+             node_modules/better-sqlite3/deps \
+             node_modules/better-sqlite3/prebuilds \
+  # Strip docs, tests, type source, and source maps from all packages
+  && find node_modules -maxdepth 2 \( \
+       -name "*.md" -o -name "*.markdown" -o -name "CHANGELOG*" \
+       -o -name "LICENSE*" -o -name "NOTICE*" -o -name "README*" \
+       -o -name "*.map" \
+     \) -delete \
+  && find node_modules -maxdepth 3 -type d \( \
+       -name "test" -o -name "tests" -o -name "__tests__" -o -name "docs" \
+     \) -exec rm -rf {} + 2>/dev/null || true
 
 # Stage 2: Build frontend + server
 FROM node:20-alpine AS build

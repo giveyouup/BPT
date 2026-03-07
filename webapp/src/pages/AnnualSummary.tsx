@@ -50,7 +50,7 @@ export default function AnnualSummary() {
 
   if (!year || years.length === 0) {
     return (
-      <div className="p-8 text-gray-500">
+      <div className="p-4 md:p-8 text-gray-500">
         No reports uploaded yet.{' '}
         <button onClick={() => navigate('/upload')} className="text-indigo-400">Upload one</button>
       </div>
@@ -119,7 +119,7 @@ export default function AnnualSummary() {
   }))
 
   return (
-    <div className="p-8">
+    <div className="p-4 md:p-8">
       {/* Header + year selector */}
       <div className="flex items-center gap-4 mb-6">
         <h2 className="text-2xl font-bold text-gray-100">{year} Annual Summary</h2>
@@ -138,7 +138,7 @@ export default function AnnualSummary() {
       </div>
 
       {/* YTD Stats */}
-      <div className="grid grid-cols-4 gap-4 mb-8">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
         <StatCard label="YTD Total Pay" value={formatCurrency(ytdTotal)} color="green"
           sub={`${formatCurrency(ytdUnitPay)} unit · ${formatCurrency(ytdStipends)} stipends`} private />
         <StatCard label="YTD Hours" value={formatHours(ytdHours)}

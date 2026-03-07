@@ -1,28 +1,68 @@
 import { useState } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
-import { getReports } from '../utils/storage'
+import { useData } from '../context/DataContext'
 import { formatMonthYear } from '../utils/dateUtils'
 
 export default function Layout({ children }: { children: React.ReactNode }) {
-  const reports = getReports()
+  const { reports } = useData()
   const navigate = useNavigate()
 
   const years = [...new Set(reports.map((r) => r.year))].sort((a, b) => b - a)
   const [selectedYear, setSelectedYear] = useState<number>(years[0] ?? new Date().getFullYear())
+  const [sidebarOpen, setSidebarOpen] = useState(false)
 
   return (
     <div className="flex h-screen bg-gray-950">
+      {/* Mobile top bar */}
+      <div className="md:hidden fixed top-0 left-0 right-0 z-30 flex items-center gap-3 px-4 h-12 bg-gray-900 border-b border-gray-800">
+        <button
+          onClick={() => setSidebarOpen(true)}
+          className="text-gray-400 hover:text-gray-100 transition-colors"
+          aria-label="Open menu"
+        >
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+          </svg>
+        </button>
+        <span className="text-sm font-bold text-indigo-400 tracking-tight">BPT</span>
+      </div>
+
+      {/* Backdrop overlay (mobile) */}
+      {sidebarOpen && (
+        <div
+          className="md:hidden fixed inset-0 z-30 bg-black/60"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+
       {/* Sidebar */}
-      <aside className="w-56 flex-shrink-0 bg-gray-900 border-r border-gray-800 flex flex-col">
-        <div className="px-4 py-5 border-b border-gray-800">
-          <h1 className="text-lg font-bold text-indigo-400 tracking-tight">BPT</h1>
-          <p className="text-xs text-gray-500 mt-0.5">Bijan's PCR Tracker</p>
+      <aside className={`
+        fixed md:relative z-40 md:z-auto
+        w-56 h-full flex-shrink-0 bg-gray-900 border-r border-gray-800 flex flex-col
+        transition-transform duration-200
+        ${sidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
+      `}>
+        <div className="px-4 py-5 border-b border-gray-800 flex items-center justify-between">
+          <div>
+            <h1 className="text-lg font-bold text-indigo-400 tracking-tight">BPT</h1>
+            <p className="text-xs text-gray-500 mt-0.5">Bijan's PCR Tracker</p>
+          </div>
+          <button
+            onClick={() => setSidebarOpen(false)}
+            className="md:hidden text-gray-600 hover:text-gray-400 transition-colors"
+            aria-label="Close menu"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
         </div>
 
         <nav className="flex-1 px-2 py-4 space-y-0.5 overflow-y-auto flex flex-col">
           <NavLink
             to="/"
             end
+            onClick={() => setSidebarOpen(false)}
             className={({ isActive }) =>
               `flex items-center gap-2.5 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
                 isActive
@@ -41,6 +81,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           {reports.length > 0 && (
             <NavLink
               to={`/annual/${years[0]}`}
+              onClick={() => setSidebarOpen(false)}
               className={({ isActive }) =>
                 `flex items-center gap-2.5 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
                   isActive
@@ -59,6 +100,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
 
           <NavLink
             to="/upload"
+            onClick={() => setSidebarOpen(false)}
             className={({ isActive }) =>
               `flex items-center gap-2.5 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
                 isActive
@@ -76,6 +118,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
 
           <NavLink
             to="/settings"
+            onClick={() => setSidebarOpen(false)}
             className={({ isActive }) =>
               `flex items-center gap-2.5 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
                 isActive
@@ -116,7 +159,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                   .map((r) => (
                     <button
                       key={r.id}
-                      onClick={() => navigate(`/month/${r.id}`)}
+                      onClick={() => { navigate(`/month/${r.id}`); setSidebarOpen(false) }}
                       className="w-full text-left flex items-center gap-2 px-3 py-1.5 rounded-md text-xs text-gray-500 hover:bg-gray-800 hover:text-gray-200 transition-colors"
                     >
                       <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 flex-shrink-0" />
@@ -130,7 +173,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       </aside>
 
       {/* Main content */}
-      <main className="flex-1 overflow-y-auto">
+      <main className="flex-1 overflow-y-auto pt-12 md:pt-0">
         {children}
       </main>
     </div>

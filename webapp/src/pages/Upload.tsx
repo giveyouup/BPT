@@ -991,7 +991,7 @@ export default function Upload() {
     }`
 
   return (
-    <div className="p-8 max-w-2xl">
+    <div className="p-4 md:p-8 max-w-2xl">
       <h2 className="text-2xl font-bold text-gray-100 mb-6">Upload Data</h2>
 
       <div className="flex border-b border-gray-800 mb-6">

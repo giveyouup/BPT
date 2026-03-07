@@ -34,7 +34,7 @@ export default function CalendarMonthDetail() {
 
   if (!stats) {
     return (
-      <div className="p-8 text-gray-500">
+      <div className="p-4 md:p-8 text-gray-500">
         No data found for {formatMonthYear(calYear, calMonth)}.{' '}
         <button onClick={() => navigate('/')} className="text-indigo-400">Go home</button>
       </div>
@@ -100,7 +100,7 @@ export default function CalendarMonthDetail() {
     : `${calYear}-${String(calMonth + 1).padStart(2, '0')}`
 
   return (
-    <div className="p-8">
+    <div className="p-4 md:p-8">
       {/* Header */}
       <div className="flex items-start justify-between mb-6">
         <div>
@@ -166,7 +166,7 @@ export default function CalendarMonthDetail() {
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-5 gap-4 mb-8">
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-4 mb-8">
         <StatCard label="Cases" value={String(stats.totalCases)} />
         <StatCard label="Total Units" value={stats.totalDistributableUnits.toFixed(2)} color="indigo" />
         <StatCard label="Unit Pay" value={formatCurrency(stats.unitCompensation)} color="green"

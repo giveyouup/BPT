@@ -227,7 +227,7 @@ export default function Settings() {
   }
 
   return (
-    <div className="p-8 max-w-2xl">
+    <div className="p-4 md:p-8 max-w-2xl">
       <h2 className="text-2xl font-bold text-gray-100 mb-6">Settings</h2>
 
       {/* Shift Hours */}

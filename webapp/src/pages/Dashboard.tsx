@@ -131,7 +131,7 @@ export default function Dashboard() {
 
 
   return (
-    <div className="p-8">
+    <div className="p-4 md:p-8">
       <div className="flex items-center gap-4 mb-6">
         <div>
           <h2 className="text-2xl font-bold text-gray-100">{selectedYear} Overview</h2>
@@ -154,13 +154,13 @@ export default function Dashboard() {
       </div>
 
       {/* YTD pulse strip */}
-      <div className="flex items-stretch bg-gray-900 rounded-xl border border-gray-800 divide-x divide-gray-800 mb-6">
+      <div className="grid grid-cols-1 sm:grid-cols-3 bg-gray-900 rounded-xl border border-gray-800 divide-y sm:divide-y-0 sm:divide-x divide-gray-800 mb-6">
         <div className="px-6 py-4">
           <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">YTD Units</p>
           <p className="text-xl font-bold text-indigo-400 mt-1">{ytdUnits.toFixed(1)}</p>
           <p className="text-xs text-gray-600 mt-0.5">{yearStats.length} months</p>
         </div>
-        <div className="px-6 py-4 flex-1">
+        <div className="px-6 py-4 sm:flex-1">
           <div className="flex items-center justify-between">
             <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">YTD Compensation</p>
             <button onClick={() => setHideCompensation((h) => !h)} className="text-gray-600 hover:text-gray-400 transition-colors" aria-label={hideCompensation ? 'Show' : 'Hide'}>
@@ -211,7 +211,7 @@ export default function Dashboard() {
         </div>
 
         {/* Selected month summary */}
-        <div className="grid grid-cols-6 divide-x divide-gray-800 border-b border-gray-800">
+        <div className="grid grid-cols-3 sm:grid-cols-6 divide-x divide-gray-800 border-b border-gray-800">
           {[
             { label: 'Cases', value: String(selStats.totalCases) },
             { label: 'Units', value: selStats.totalDistributableUnits.toFixed(2) },

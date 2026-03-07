@@ -29,7 +29,7 @@ export default function MonthlyDetail() {
   const liveReport = reports.find((r) => r.id === id)
   if (!liveReport) {
     return (
-      <div className="p-8 text-gray-500">
+      <div className="p-4 md:p-8 text-gray-500">
         Report not found.{' '}
         <button onClick={() => navigate('/')} className="text-indigo-400">Go home</button>
       </div>
@@ -73,7 +73,7 @@ export default function MonthlyDetail() {
 
 
   return (
-    <div className="p-8">
+    <div className="p-4 md:p-8">
       {/* Raw data notice */}
       <div className="flex items-center gap-2 mb-5 px-3 py-2 bg-amber-900/20 border border-amber-800/40 rounded-lg w-fit">
         <svg className="w-3.5 h-3.5 text-amber-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -140,7 +140,7 @@ export default function MonthlyDetail() {
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-5 gap-4 mb-8">
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-4 mb-8">
         <StatCard label="Cases" value={String(liveStats.totalCases)} />
         <StatCard label="Total Units" value={liveStats.totalDistributableUnits.toFixed(2)} color="indigo" />
         <StatCard label="Unit Pay" value={formatCurrency(liveStats.unitCompensation)} color="green" />
