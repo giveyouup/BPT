@@ -257,11 +257,12 @@ export default function AnnualSummary() {
         <div className="px-5 py-4 border-b border-gray-800">
           <h3 className="text-sm font-semibold text-gray-300">Month-by-Month Breakdown</h3>
         </div>
-        <table className="w-full text-sm">
+        <div className="overflow-x-auto">
+        <table className="w-full text-sm min-w-max">
           <thead>
             <tr className="border-b border-gray-800">
-              {['Month', 'Cases', 'Units', '$/Unit', 'Unit Pay', 'Stipends', 'Total Pay', 'Hours', '$/hr', 'Days'].map((h) => (
-                <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">{h}</th>
+              {['Month', 'Cases', 'Units', '$/Unit', 'Unit Pay', 'Stipends', 'Total Pay', 'Hours', '$/hr', 'Days'].map((h, i) => (
+                <th key={h} className={`px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider${i === 0 ? ' sticky left-0 z-10 bg-gray-900' : ''}`}>{h}</th>
               ))}
             </tr>
           </thead>
@@ -273,8 +274,8 @@ export default function AnnualSummary() {
               const dollarPerHr = s.totalHours > 0 ? s.totalCompensation / s.totalHours : null
               return (
                 <tr key={s.id} onClick={() => navigate(`/calendar/${s.year}-${String(s.month).padStart(2, '0')}`)}
-                  className="border-b border-gray-800 hover:bg-gray-800 cursor-pointer transition-colors">
-                  <td className="px-4 py-3 font-medium text-gray-200">{formatMonthYear(s.year, s.month)}</td>
+                  className="group border-b border-gray-800 hover:bg-gray-800 cursor-pointer transition-colors">
+                  <td className="px-4 py-3 font-medium text-gray-200 sticky left-0 z-10 bg-gray-900 group-hover:bg-gray-800">{formatMonthYear(s.year, s.month)}</td>
                   <td className="px-4 py-3 text-gray-400">{s.totalCases}</td>
                   <td className="px-4 py-3 text-gray-300 font-medium">{s.totalDistributableUnits.toFixed(2)}</td>
                   <td className="px-4 py-3 text-amber-400">{avgRate != null ? `$${avgRate.toFixed(2)}` : '—'}</td>
@@ -290,7 +291,7 @@ export default function AnnualSummary() {
           </tbody>
           <tfoot>
             <tr className="bg-gray-800 border-t border-gray-700 font-semibold">
-              <td className="px-4 py-3 text-gray-300">Year Total</td>
+              <td className="px-4 py-3 text-gray-300 sticky left-0 z-10 bg-gray-800">Year Total</td>
               <td className="px-4 py-3 text-gray-300">{ytdCases}</td>
               <td className="px-4 py-3 text-indigo-400">{ytdUnits.toFixed(2)}</td>
               <td className="px-4 py-3 text-amber-400">
@@ -305,6 +306,7 @@ export default function AnnualSummary() {
             </tr>
           </tfoot>
         </table>
+        </div>
       </div>
     </div>
   )

@@ -191,11 +191,12 @@ export default function CalendarMonthDetail() {
       <section className="mb-8">
         <h3 className="text-sm font-semibold text-gray-300 mb-3">Working Days</h3>
         <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
-          <table className="w-full text-sm">
+          <div className="overflow-x-auto">
+          <table className="w-full text-sm min-w-max">
             <thead>
               <tr className="border-b border-gray-800">
-                {['Date', 'Shift', 'Cases', 'Units', 'Unit Pay', 'Stipend', 'Add\'l', 'Total', 'Hours'].map((h) => (
-                  <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">{h}</th>
+                {['Date', 'Shift', 'Cases', 'Units', 'Unit Pay', 'Stipend', 'Add\'l', 'Total', 'Hours'].map((h, i) => (
+                  <th key={h} className={`px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider${i === 0 ? ' sticky left-0 z-10 bg-gray-900' : i === 1 ? ' sticky left-[148px] z-10 bg-gray-900' : ''}`}>{h}</th>
                 ))}
               </tr>
             </thead>
@@ -204,25 +205,27 @@ export default function CalendarMonthDetail() {
                 const isGap = day.shiftTypes.length === 0 || day.shiftTypes.every(isOffDayShift)
                 const outlier = unitOutlier(day.totalUnits)
                 const isEditingShift = editingShiftDate === day.date
+                const isSelected = selectedDay === day.date
+                const stickyBg = isSelected ? 'bg-indigo-950' : 'bg-gray-900 group-hover:bg-gray-800'
                 return (
                   <tr
                     key={day.date}
-                    onClick={() => !isEditingShift && setSelectedDay(selectedDay === day.date ? null : day.date)}
-                    className={`border-b border-gray-800 cursor-pointer transition-colors ${
+                    onClick={() => !isEditingShift && setSelectedDay(isSelected ? null : day.date)}
+                    className={`group border-b border-gray-800 cursor-pointer transition-colors ${
                       isGap ? 'border-l-2 border-l-amber-600/40' : ''
                     } ${
-                      selectedDay === day.date
+                      isSelected
                         ? 'bg-indigo-950/60 hover:bg-indigo-950/80'
                         : 'hover:bg-gray-800'
                     }`}
                   >
-                    <td className="px-4 py-3 font-medium">
+                    <td className={`px-4 py-3 font-medium min-w-[148px] sticky left-0 z-10 ${stickyBg}`}>
                       <div className="flex items-center gap-1.5">
                         <span className={isGap ? 'text-amber-300/80' : 'text-gray-200'}>{formatDateFull(day.date)}</span>
                         {isGap && <span className="text-xs px-1.5 py-0.5 bg-amber-900/30 text-amber-500 rounded">no shift</span>}
                       </div>
                     </td>
-                    <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                    <td className={`px-4 py-3 min-w-[130px] sticky left-[148px] z-10 ${stickyBg}`} onClick={(e) => e.stopPropagation()}>
                       {isEditingShift ? (
                         <div className="space-y-2 py-1">
                           <div className="flex flex-wrap gap-1">
@@ -322,7 +325,8 @@ export default function CalendarMonthDetail() {
             </tbody>
             <tfoot>
               <tr className="bg-gray-800 border-t border-gray-700">
-                <td className="px-4 py-3 text-xs font-semibold text-gray-500" colSpan={4}>Total</td>
+                <td className="px-4 py-3 text-xs font-semibold text-gray-500 sticky left-0 z-10 bg-gray-800" colSpan={2}>Total</td>
+                <td className="px-4 py-3 text-xs font-semibold text-gray-500" colSpan={2}></td>
                 <td className="px-4 py-3 font-semibold text-emerald-400">{formatCurrencyFull(stats.unitCompensation)}</td>
                 <td className="px-4 py-3 font-semibold text-gray-300">{formatCurrencyFull(stats.shiftStipends)}</td>
                 <td className="px-4 py-3 font-semibold text-gray-300">{formatCurrencyFull(stats.additionalStipends)}</td>
@@ -331,6 +335,7 @@ export default function CalendarMonthDetail() {
               </tr>
             </tfoot>
           </table>
+          </div>
         </div>
       </section>
 
@@ -400,19 +405,20 @@ export default function CalendarMonthDetail() {
           )}
         </h3>
         <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
-          <table className="w-full text-sm">
+          <div className="overflow-x-auto">
+          <table className="w-full text-sm min-w-max">
             <thead>
               <tr className="border-b border-gray-800">
-                {['Ticket', 'Date', 'Start', 'End', 'Procedure', 'Type', 'Modifier', 'Base Units', 'Time Units', 'Add-ons', 'Total Units', 'Split'].map((h) => (
-                  <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">{h}</th>
+                {['Ticket', 'Date', 'Start', 'End', 'Procedure', 'Type', 'Modifier', 'Base Units', 'Time Units', 'Add-ons', 'Total Units', 'Split'].map((h, i) => (
+                  <th key={h} className={`px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider${i === 0 ? ' sticky left-0 z-10 bg-gray-900' : i === 1 ? ' sticky left-[104px] z-10 bg-gray-900' : ''}`}>{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {visibleCases.map((c) => (
-                <tr key={c.ticketNum} className="border-b border-gray-800 hover:bg-gray-800">
-                  <td className="px-4 py-3 font-mono text-xs text-gray-300">{c.ticketNum}</td>
-                  <td className="px-4 py-3 text-gray-400 whitespace-nowrap">{formatDateFull(c.serviceDate)}</td>
+                <tr key={c.ticketNum} className="group border-b border-gray-800 hover:bg-gray-800">
+                  <td className="px-4 py-3 font-mono text-xs text-gray-300 min-w-[104px] sticky left-0 z-10 bg-gray-900 group-hover:bg-gray-800">{c.ticketNum}</td>
+                  <td className="px-4 py-3 text-gray-400 whitespace-nowrap min-w-[120px] sticky left-[104px] z-10 bg-gray-900 group-hover:bg-gray-800">{formatDateFull(c.serviceDate)}</td>
                   <td className="px-4 py-3 font-mono text-xs text-gray-400 whitespace-nowrap">{c.startTime ?? '—'}</td>
                   <td className="px-4 py-3 font-mono text-xs text-gray-400 whitespace-nowrap">{c.endTime ?? '—'}</td>
                   <td className="px-4 py-3 font-mono text-xs text-gray-400">{c.primaryCptAsa}</td>
@@ -434,13 +440,15 @@ export default function CalendarMonthDetail() {
             </tbody>
             <tfoot>
               <tr className="bg-gray-800 border-t border-gray-700">
-                <td className="px-4 py-3 text-xs font-semibold text-gray-500" colSpan={9}>Total</td>
+                <td className="px-4 py-3 text-xs font-semibold text-gray-500 sticky left-0 z-10 bg-gray-800" colSpan={2}>Total</td>
+                <td className="px-4 py-3 text-xs font-semibold text-gray-500" colSpan={7}></td>
                 <td className="px-4 py-3 font-semibold text-indigo-400" colSpan={3}>
                   {visibleUnits.toFixed(2)}
                 </td>
               </tr>
             </tfoot>
           </table>
+          </div>
         </div>
       </section>
     </div>

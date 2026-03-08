@@ -180,11 +180,12 @@ export default function MonthlyDetail() {
           </div>
         </div>
         <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
-          <table className="w-full text-sm">
+          <div className="overflow-x-auto">
+          <table className="w-full text-sm min-w-max">
             <thead>
               <tr className="border-b border-gray-800">
-                {['Ticket', 'Date', 'Start', 'End', 'Procedure', 'Type', 'Modifier', 'Base Units', 'Time Units', 'Add-ons', 'Total Units', 'Split'].map((h) => (
-                  <th key={h} className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">{h}</th>
+                {['Ticket', 'Date', 'Start', 'End', 'Procedure', 'Type', 'Modifier', 'Base Units', 'Time Units', 'Add-ons', 'Total Units', 'Split'].map((h, i) => (
+                  <th key={h} className={`px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider${i === 0 ? ' sticky left-0 z-10 bg-gray-900' : i === 1 ? ' sticky left-[104px] z-10 bg-gray-900' : ''}`}>{h}</th>
                 ))}
               </tr>
             </thead>
@@ -196,9 +197,9 @@ export default function MonthlyDetail() {
                   </td>
                 </tr>
               ) : filteredCases.map((c) => (
-                <tr key={c.ticketNum} className="border-b border-gray-800 hover:bg-gray-800">
-                  <td className="px-4 py-3 font-mono text-xs text-gray-300">{c.ticketNum}</td>
-                  <td className="px-4 py-3 text-gray-400 whitespace-nowrap">{formatDateFull(c.serviceDate)}</td>
+                <tr key={c.ticketNum} className="group border-b border-gray-800 hover:bg-gray-800">
+                  <td className="px-4 py-3 font-mono text-xs text-gray-300 min-w-[104px] sticky left-0 z-10 bg-gray-900 group-hover:bg-gray-800">{c.ticketNum}</td>
+                  <td className="px-4 py-3 text-gray-400 whitespace-nowrap min-w-[120px] sticky left-[104px] z-10 bg-gray-900 group-hover:bg-gray-800">{formatDateFull(c.serviceDate)}</td>
                   <td className="px-4 py-3 font-mono text-xs text-gray-400 whitespace-nowrap">{c.startTime ?? '—'}</td>
                   <td className="px-4 py-3 font-mono text-xs text-gray-400 whitespace-nowrap">{c.endTime ?? '—'}</td>
                   <td className="px-4 py-3 font-mono text-xs text-gray-400">{c.primaryCptAsa}</td>
@@ -223,13 +224,15 @@ export default function MonthlyDetail() {
             </tbody>
             <tfoot>
               <tr className="bg-gray-800 border-t border-gray-700">
-                <td className="px-4 py-3 text-xs font-semibold text-gray-500" colSpan={9}>
+                <td className="px-4 py-3 text-xs font-semibold text-gray-500 sticky left-0 z-10 bg-gray-800" colSpan={2}>
                   {caseFilter.trim() ? 'Filtered Total' : 'Total'}
                 </td>
+                <td className="px-4 py-3 text-xs font-semibold text-gray-500" colSpan={7}></td>
                 <td className="px-4 py-3 font-semibold text-indigo-400" colSpan={3}>{filteredTotal.toFixed(2)}</td>
               </tr>
             </tfoot>
           </table>
+          </div>
         </div>
       </section>
 
