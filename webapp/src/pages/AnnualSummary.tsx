@@ -1,7 +1,7 @@
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   BarChart, Bar, Cell, LineChart, Line, XAxis, YAxis, CartesianGrid,
-  Tooltip, Legend, ResponsiveContainer,
+  Tooltip, Legend, ResponsiveContainer, ReferenceLine,
 } from 'recharts'
 import { useData } from '../context/DataContext'
 import { computeCalendarYearStats } from '../utils/calculations'
@@ -232,7 +232,7 @@ export default function AnnualSummary() {
         <div className="bg-gray-900 rounded-xl border border-gray-800 p-5 mb-8">
           <h3 className="text-sm font-semibold text-gray-300 mb-4">Avg Hours by Shift Type</h3>
           <ResponsiveContainer width="100%" height={180}>
-            <BarChart data={shiftHoursData} margin={{ top: 0, right: 8, bottom: 0, left: -10 }}>
+            <BarChart data={shiftHoursData} margin={{ top: 0, right: 32, bottom: 0, left: -10 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
               <XAxis dataKey="shift" {...AXIS_PROPS} />
               <YAxis {...AXIS_PROPS} tickFormatter={(v) => `${v}h`} />
@@ -242,6 +242,10 @@ export default function AnnualSummary() {
                   [`${v}h avg · ${entry.payload?.count ?? 0} days`, 'Shift length']}
                 {...CHART_STYLE}
               />
+              {[8, 10, 12].map((h) => (
+                <ReferenceLine key={h} y={h} stroke="#374151" strokeDasharray="4 4"
+                  label={{ value: `${h}h`, position: 'right', fill: '#6b7280', fontSize: 10 }} />
+              ))}
               <Bar dataKey="avgHours" radius={[4, 4, 0, 0]}>
                 {shiftHoursData.map((entry) => (
                   <Cell key={entry.shift} fill={shiftBarColor(entry.shift)} />

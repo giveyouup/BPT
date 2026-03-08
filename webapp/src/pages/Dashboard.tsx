@@ -291,8 +291,8 @@ export default function Dashboard() {
               {monthDays.some((d) => d.shiftTypes.length > 0) && (
                 <div className="mt-4 pt-4 border-t border-gray-800 overflow-x-auto">
                   <div className="flex items-center gap-2 text-xs font-semibold text-gray-600 uppercase tracking-wider mb-1 min-w-max">
-                    <span className="w-20 flex-shrink-0 sticky left-0 bg-gray-900 z-10">Date</span>
-                    <span className="w-14 flex-shrink-0 sticky left-[88px] bg-gray-900 z-10">Shift</span>
+                    <span className="w-20 flex-shrink-0 sticky left-0 bg-gray-900 z-10 pr-2 -mr-2">Date</span>
+                    <span className="w-14 flex-shrink-0 sticky left-[88px] bg-gray-900 z-10 pr-2 -mr-2">Shift</span>
                     <span className="w-12 flex-shrink-0">Start</span>
                     <span className="w-12 flex-shrink-0">End</span>
                     <span className="w-14 flex-shrink-0">Cases</span>
@@ -314,8 +314,8 @@ export default function Dashboard() {
                           key={day.date}
                           className={`flex items-center gap-2 py-1 text-xs ${!day.hasProduction ? 'opacity-50' : ''}`}
                         >
-                          <span className="text-gray-500 w-20 flex-shrink-0 sticky left-0 bg-gray-900 z-10">{formatDateShort(day.date)}</span>
-                          <span className="w-14 flex-shrink-0 flex flex-wrap gap-0.5 sticky left-[88px] bg-gray-900 z-10">
+                          <span className="text-gray-500 w-20 flex-shrink-0 sticky left-0 bg-gray-900 z-10 pr-2 -mr-2">{formatDateShort(day.date)}</span>
+                          <span className="w-14 flex-shrink-0 flex flex-wrap gap-0.5 sticky left-[88px] bg-gray-900 z-10 pr-2 -mr-2">
                             {day.shiftTypes.map((st) => (
                               <span key={st} className={`font-mono px-1.5 py-0.5 rounded ${shiftBadgeClass(st)}`}>
                                 {st}
