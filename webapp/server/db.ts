@@ -37,7 +37,8 @@ db.exec(`
 const DEFAULT_SETTINGS: Settings = {
   defaultPaddingMinutes: 30,
   defaultNoTimeHours: 4,
-  shiftHours: { APS: 10, BR: 9, NIR: 10 },
+  clinicalDayStart: '06:30',
+  shiftHours: { APS: 10, APS_weekend: 10, BR: 9, NIR: 10 },
   holidays: {},
 }
 
