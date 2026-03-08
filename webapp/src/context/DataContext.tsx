@@ -6,7 +6,8 @@ import { parseShiftSummary } from '../utils/shiftUtils'
 const DEFAULT_SETTINGS: Settings = {
   defaultPaddingMinutes: 30,
   defaultNoTimeHours: 4,
-  shiftHours: { APS: 10, BR: 9, NIR: 10 },
+  clinicalDayStart: '06:30',
+  shiftHours: { APS: 10, APS_weekend: 10, BR: 9, NIR: 10 },
   holidays: {},
 }
 
@@ -75,7 +76,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
       setRawReports(rpts)
       setRawSchedules(scheds)
       setManualShifts(manual)
-      setSettings(setts)
+      setSettings({ ...DEFAULT_SETTINGS, ...setts, shiftHours: { ...DEFAULT_SETTINGS.shiftHours, ...setts.shiftHours } })
       setRawStipendMappings(mappings)
       setLoading(false)
     }).catch((err) => {

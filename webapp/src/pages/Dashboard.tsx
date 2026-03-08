@@ -264,12 +264,20 @@ export default function Dashboard() {
                       isSelected ? 'bg-sky-950/60 ring-1 ring-sky-500/40' : 'hover:bg-gray-800/50'
                     } ${isDimmed ? 'opacity-40' : ''}`}
                   >
-                    <span className={`text-xs w-32 flex-shrink-0 ${isSelected ? 'text-sky-300 font-medium' : 'text-gray-500'}`}>{w.label}</span>
-                    <div className="flex-1 bg-gray-800 rounded-full h-4 overflow-hidden">
+                    {/* Date label: desktop always visible, mobile hidden */}
+                    <span className={`hidden sm:block text-xs w-32 flex-shrink-0 ${isSelected ? 'text-sky-300 font-medium' : 'text-gray-500'}`}>{w.label}</span>
+                    {/* Bar: layered so date can overlay on mobile when selected */}
+                    <div className="flex-1 relative h-4">
+                      <div className="absolute inset-0 bg-gray-800 rounded-full" />
                       <div
-                        className={`h-4 rounded-full transition-all ${isSelected ? 'bg-sky-400' : 'bg-sky-500'}`}
+                        className={`absolute inset-y-0 left-0 rounded-full transition-all ${isSelected ? 'bg-sky-400' : 'bg-sky-500'}`}
                         style={{ width: `${(w.hours / maxWeekHours) * 100}%` }}
                       />
+                      {isSelected && (
+                        <span className="sm:hidden absolute inset-0 flex items-center pl-2 text-xs font-medium text-white/90 whitespace-nowrap">
+                          {w.label}
+                        </span>
+                      )}
                     </div>
                     <span className={`text-xs font-semibold w-14 text-right flex-shrink-0 ${isSelected ? 'text-sky-300' : 'text-gray-200'}`}>
                       {formatHours(w.hours)}
@@ -279,7 +287,7 @@ export default function Dashboard() {
                 )
               })}
               <div className="flex items-center gap-3 pt-2 border-t border-gray-800">
-                <span className="text-xs font-semibold text-gray-500 w-32 flex-shrink-0">Total</span>
+                <span className="text-xs font-semibold text-gray-500 sm:w-32 flex-shrink-0">Total</span>
                 <div className="flex-1" />
                 <span className="text-xs font-bold text-gray-100 w-14 text-right flex-shrink-0">
                   {formatHours(monthHours)}
@@ -290,56 +298,47 @@ export default function Dashboard() {
               {/* Day-by-day shift detail */}
               {monthDays.some((d) => d.shiftTypes.length > 0) && (
                 <div className="mt-4 pt-4 border-t border-gray-800 overflow-x-auto">
-                  <div className="flex items-center gap-2 text-xs font-semibold text-gray-600 uppercase tracking-wider mb-1 min-w-max">
-                    <span className="w-20 flex-shrink-0 sticky left-0 bg-gray-900 z-10 pr-2 -mr-2">Date</span>
-                    <span className="w-14 flex-shrink-0 sticky left-[88px] bg-gray-900 z-10 pr-2 -mr-2">Shift</span>
-                    <span className="w-12 flex-shrink-0">Start</span>
-                    <span className="w-12 flex-shrink-0">End</span>
-                    <span className="w-14 flex-shrink-0">Cases</span>
-                    <span className="w-12 text-right flex-shrink-0">Units</span>
-                    <span className="w-14 text-right flex-shrink-0">Units/hr</span>
-                    <span className="w-16 text-right flex-shrink-0">Unit Pay</span>
-                    <span className="w-16 text-right flex-shrink-0">Stipend</span>
-                    <span className="w-20 text-right flex-shrink-0">Add'l</span>
-                    <span className="w-12 text-right flex-shrink-0">$/hr</span>
-                    <span className="w-16 text-right flex-shrink-0">Total</span>
-                    <span className="w-12 text-right flex-shrink-0 ml-auto">Hours</span>
-                  </div>
-                  <div className="space-y-0.5 min-w-max">
+                  <table className="text-xs min-w-max w-full">
+                    <thead>
+                      <tr>
+                        {[['Date','w-20 text-left'],['Shift','w-16 text-left'],['Start','w-12 text-left'],['End','w-12 text-left'],['Cases','w-14 text-left'],['Units','w-12 text-right'],['Units/hr','w-14 text-right'],['Unit Pay','w-16 text-right'],['Stipend','w-16 text-right'],["Add'l",'w-20 text-right'],['$/hr','w-12 text-right'],['Total','w-16 text-right'],['Hours','w-14 text-right']].map(([label, cls], i) => (
+                          <th key={label} className={`pb-1 font-semibold text-gray-600 uppercase tracking-wider ${cls}${i === 0 ? ' sticky left-0 bg-gray-900' : i === 1 ? ' sticky left-20 bg-gray-900' : ''}`}>{label}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
                     {monthDays.filter((d) => !selectedWeek || weekStart(d.date) === selectedWeek).map((day) => {
                       const unitsPerHr = day.hours > 0 && day.totalUnits > 0 ? day.totalUnits / day.hours : null
                       const dollarPerHr = day.hours > 0 && day.totalDayPay > 0 ? day.totalDayPay / day.hours : null
+                      const rowBg = !day.hasProduction ? 'opacity-50' : ''
                       return (
-                        <div
-                          key={day.date}
-                          className={`flex items-center gap-2 py-1 text-xs ${!day.hasProduction ? 'opacity-50' : ''}`}
-                        >
-                          <span className="text-gray-500 w-20 flex-shrink-0 sticky left-0 bg-gray-900 z-10 pr-2 -mr-2">{formatDateShort(day.date)}</span>
-                          <span className="w-14 flex-shrink-0 flex flex-wrap gap-0.5 sticky left-[88px] bg-gray-900 z-10 pr-2 -mr-2">
-                            {day.shiftTypes.map((st) => (
-                              <span key={st} className={`font-mono px-1.5 py-0.5 rounded ${shiftBadgeClass(st)}`}>
-                                {st}
-                              </span>
-                            ))}
-                          </span>
-                          <span className="w-12 text-gray-500 flex-shrink-0">{day.firstStartTime ?? '—'}</span>
-                          <span className="w-12 text-gray-500 flex-shrink-0">{day.lastEndTime ?? '—'}</span>
-                          <span className="w-14 text-gray-500 flex-shrink-0">
+                        <tr key={day.date} className={rowBg}>
+                          <td className="py-1 text-gray-500 sticky left-0 bg-gray-900">{formatDateShort(day.date)}</td>
+                          <td className="py-1 sticky left-20 bg-gray-900">
+                            <div className="flex flex-wrap gap-0.5">
+                              {day.shiftTypes.map((st) => (
+                                <span key={st} className={`font-mono px-1.5 py-0.5 rounded ${shiftBadgeClass(st)}`}>{st}</span>
+                              ))}
+                            </div>
+                          </td>
+                          <td className="py-1 text-gray-500 pr-3">{day.firstStartTime ?? '—'}</td>
+                          <td className="py-1 text-gray-500 pr-3">{day.lastEndTime ?? '—'}</td>
+                          <td className="py-1 text-gray-500 pr-3">
                             {day.caseCount > 0 ? `${day.caseCount} cases` : (!day.hasProduction ? 'no prod.' : '')}
-                          </span>
-                          <span className="w-12 text-right text-indigo-400 flex-shrink-0">
+                          </td>
+                          <td className="py-1 text-right text-indigo-400 pr-3">
                             {day.totalUnits > 0 ? day.totalUnits.toFixed(2) : '—'}
-                          </span>
-                          <span className="w-14 text-right text-indigo-300 flex-shrink-0">
+                          </td>
+                          <td className="py-1 text-right text-indigo-300 pr-3">
                             {unitsPerHr !== null ? unitsPerHr.toFixed(2) : '—'}
-                          </span>
-                          <span className="w-16 text-right text-emerald-400 flex-shrink-0">
+                          </td>
+                          <td className="py-1 text-right text-emerald-400 pr-3">
                             {day.unitPay > 0 ? formatCurrency(day.unitPay) : '—'}
-                          </span>
-                          <span className="w-16 text-right text-emerald-400 flex-shrink-0">
+                          </td>
+                          <td className="py-1 text-right text-emerald-400 pr-3">
                             {day.stipendAmount > 0 ? formatCurrency(day.stipendAmount) : '—'}
-                          </span>
-                          <span className="w-20 text-right flex-shrink-0">
+                          </td>
+                          <td className="py-1 text-right pr-3">
                             {editingDayDate === day.date ? (
                               <span className="flex items-center justify-end gap-1">
                                 <input
@@ -366,14 +365,14 @@ export default function Dashboard() {
                                   : <span className="text-gray-700">+</span>}
                               </button>
                             )}
-                          </span>
-                          <span className="w-12 text-right text-emerald-300 flex-shrink-0">
+                          </td>
+                          <td className="py-1 text-right text-emerald-300 pr-3">
                             {dollarPerHr !== null ? `$${dollarPerHr.toFixed(0)}` : '—'}
-                          </span>
-                          <span className="w-16 text-right font-medium text-gray-200 flex-shrink-0">
+                          </td>
+                          <td className="py-1 text-right font-medium text-gray-200 pr-3">
                             {day.totalDayPay > 0 ? formatCurrency(day.totalDayPay) : '—'}
-                          </span>
-                          <span className="w-12 text-right flex-shrink-0 ml-auto">
+                          </td>
+                          <td className="py-1 text-right">
                             {editingHoursDate === day.date ? (
                               <span className="flex items-center justify-end gap-1">
                                 <input
@@ -398,11 +397,12 @@ export default function Dashboard() {
                                 {day.hours > 0 ? formatHours(day.hours) : '—'}
                               </button>
                             )}
-                          </span>
-                        </div>
+                          </td>
+                        </tr>
                       )
                     })}
-                  </div>
+                    </tbody>
+                  </table>
                 </div>
               )}
             </div>

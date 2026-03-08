@@ -236,10 +236,15 @@ export default function Settings() {
         <p className="text-xs text-gray-600 mb-4">
           APS, BR, and NIR shifts use these hours regardless of case times. Override per day via the pencil icon.
         </p>
-        <div className="grid grid-cols-3 gap-4">
-          {(['APS', 'BR', 'NIR'] as const).map((key) => (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+          {([
+            { key: 'APS', label: 'APS Weekday' },
+            { key: 'APS_weekend', label: 'APS Wknd/Holiday' },
+            { key: 'BR', label: 'BR' },
+            { key: 'NIR', label: 'NIR' },
+          ] as const).map(({ key, label }) => (
             <div key={key}>
-              <label className="block text-xs font-semibold text-gray-400 mb-1.5">{key} (hours)</label>
+              <label className="block text-xs font-semibold text-gray-400 mb-1.5">{label} (hours)</label>
               <input
                 type="number"
                 step="0.5"
@@ -289,6 +294,20 @@ export default function Settings() {
               className={inputCls}
             />
             <p className="text-xs text-gray-600 mt-1">For variable-shift days with no case times</p>
+          </div>
+          <div>
+            <label className="block text-xs font-semibold text-gray-400 mb-1.5">
+              Clinical Day Start
+            </label>
+            <input
+              type="time"
+              value={settings.clinicalDayStart}
+              onChange={(e) =>
+                setSettings((s) => ({ ...s, clinicalDayStart: e.target.value || '06:30' }))
+              }
+              className={inputCls}
+            />
+            <p className="text-xs text-gray-600 mt-1">After-midnight cases before this time are attributed to the prior call date</p>
           </div>
         </div>
       </section>

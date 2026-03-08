@@ -13,6 +13,7 @@ import { timeToMinutes, durationMinutes } from './dateUtils'
 import {
   getFixedShiftKey,
   isCallShift,
+  isOffDayShift,
   isWeekendOrHoliday,
   computeFederalHolidays,
   resolveShiftAlias,
@@ -78,12 +79,24 @@ export function getStipendForDay(
 
 // ─── Time helpers ─────────────────────────────────────────────────────────────
 
-function getMinMaxMinutes(timedItems: LineItem[]): { minStart: number; maxEnd: number } {
+/**
+ * Normalize a time (in minutes since midnight) to the clinical day.
+ * Times before clinicalDayStartMins are treated as belonging to the tail
+ * of the previous calendar day, so +1440 is added to push them past midnight.
+ */
+function normalizeMins(mins: number, clinicalDayStartMins: number): number {
+  return mins < clinicalDayStartMins ? mins + 1440 : mins
+}
+
+function getMinMaxMinutes(
+  timedItems: LineItem[],
+  clinicalDayStartMins: number
+): { minStart: number; maxEnd: number } {
   let minStart = Infinity
   let maxEnd = -Infinity
   for (const li of timedItems) {
-    const start = timeToMinutes(li.startTime!)
-    let end = timeToMinutes(li.endTime!)
+    const start = normalizeMins(timeToMinutes(li.startTime!), clinicalDayStartMins)
+    let end = normalizeMins(timeToMinutes(li.endTime!), clinicalDayStartMins)
     if (end <= start) end += 1440
     if (start < minStart) minStart = start
     if (end > maxEnd) maxEnd = end
@@ -91,7 +104,10 @@ function getMinMaxMinutes(timedItems: LineItem[]): { minStart: number; maxEnd: n
   return { minStart, maxEnd }
 }
 
-function getStartEndTimes(timedItems: LineItem[]): {
+function getStartEndTimes(
+  timedItems: LineItem[],
+  clinicalDayStartMins: number
+): {
   firstStartTime: string | null
   lastEndTime: string | null
 } {
@@ -100,8 +116,8 @@ function getStartEndTimes(timedItems: LineItem[]): {
   let firstStartTime: string | null = null
   let lastEndTime: string | null = null
   for (const li of timedItems) {
-    const start = timeToMinutes(li.startTime!)
-    let end = timeToMinutes(li.endTime!)
+    const start = normalizeMins(timeToMinutes(li.startTime!), clinicalDayStartMins)
+    let end = normalizeMins(timeToMinutes(li.endTime!), clinicalDayStartMins)
     if (end <= start) end += 1440
     if (start < minStart) { minStart = start; firstStartTime = li.startTime! }
     if (end > maxEnd) { maxEnd = end; lastEndTime = li.endTime! }
@@ -117,11 +133,12 @@ function computeWorkingDays(
   defaultNoTimeHours: number,
   overrides: Record<string, number>,
   shiftMap?: Map<string, ShiftEntry>,
-  shiftHours?: { APS: number; BR: number; NIR: number },
+  shiftHours?: { APS: number; APS_weekend: number; BR: number; NIR: number },
   holidayList?: string[],
   unitDollarValue?: number,
   stipendMapping?: StipendMapping | null,
-  dayStipends?: Record<string, number>
+  dayStipends?: Record<string, number>,
+  clinicalDayStartMins = 390 // 06:30 default
 ): WorkingDayStats[] {
   const byDate = new Map<string, LineItem[]>()
   for (const li of lineItems) {
@@ -142,7 +159,7 @@ function computeWorkingDays(
     const fixedKey = shiftTypes.reduce<ReturnType<typeof getFixedShiftKey>>(
       (k, s) => k ?? getFixedShiftKey(s), null
     )
-    const callShift = shiftTypes.some(isCallShift)
+    const hasVariableShift = shiftTypes.some((s) => !isOffDayShift(s) && !getFixedShiftKey(resolveShiftAlias(s.toUpperCase())))
     const isCallWeekend = shiftTypes.length > 0 && !!holidayList && isWeekendOrHoliday(date, holidayList)
 
     let firstStartTime: string | null = null
@@ -151,13 +168,13 @@ function computeWorkingDays(
 
     if (isOverridden) {
       hours = overrides[date]
-      if (hasTimes) ({ firstStartTime, lastEndTime } = getStartEndTimes(timedItems))
-    } else if (fixedKey && shiftHours) {
-      hours = shiftHours[fixedKey]
-      if (hasTimes) ({ firstStartTime, lastEndTime } = getStartEndTimes(timedItems))
+      if (hasTimes) ({ firstStartTime, lastEndTime } = getStartEndTimes(timedItems, clinicalDayStartMins))
+    } else if (fixedKey && shiftHours && !hasVariableShift) {
+      hours = fixedKey === 'APS' && isCallWeekend ? shiftHours.APS_weekend : shiftHours[fixedKey]
+      if (hasTimes) ({ firstStartTime, lastEndTime } = getStartEndTimes(timedItems, clinicalDayStartMins))
     } else if (hasTimes) {
-      ;({ firstStartTime, lastEndTime } = getStartEndTimes(timedItems))
-      const { minStart, maxEnd } = getMinMaxMinutes(timedItems)
+      ;({ firstStartTime, lastEndTime } = getStartEndTimes(timedItems, clinicalDayStartMins))
+      const { minStart, maxEnd } = getMinMaxMinutes(timedItems, clinicalDayStartMins)
       hours = (maxEnd - minStart + paddingMinutes) / 60
     } else {
       hours = defaultNoTimeHours
@@ -248,8 +265,6 @@ function buildShiftMap(allSchedules: Schedule[]): Map<string, ShiftEntry> {
 }
 
 // ─── Midnight attribution ─────────────────────────────────────────────────────
-// Cases starting before this time on a call day are attributed to the prior date.
-const MIDNIGHT_CUTOFF = '06:30'
 
 function getPrevDate(date: string): string {
   const d = new Date(date + 'T12:00:00')
@@ -258,11 +273,15 @@ function getPrevDate(date: string): string {
 }
 
 /**
- * If a line item starts before MIDNIGHT_CUTOFF and the preceding calendar date
- * has a call shift (G1/G2) in the schedule, reassign it to that prior date.
+ * If a line item starts before clinicalDayStart and the preceding calendar date
+ * has a call shift in the schedule, reassign it to that prior date.
  */
-function effectiveServiceDate(li: LineItem, shiftMap: Map<string, ShiftEntry>): string {
-  if (li.startTime && li.startTime < MIDNIGHT_CUTOFF) {
+function effectiveServiceDate(
+  li: LineItem,
+  shiftMap: Map<string, ShiftEntry>,
+  clinicalDayStart: string
+): string {
+  if (li.startTime && li.startTime < clinicalDayStart) {
     const prev = getPrevDate(li.serviceDate)
     const prevEntry = shiftMap.get(prev)
     if (prevEntry && prevEntry.shiftTypes.some((st) => isCallShift(resolveShiftAlias(st)))) {
@@ -279,13 +298,14 @@ function effectiveServiceDate(li: LineItem, shiftMap: Map<string, ShiftEntry>): 
  */
 function buildTicketReassignmentMap(
   allReports: MonthlyReport[],
-  shiftMap: Map<string, ShiftEntry>
+  shiftMap: Map<string, ShiftEntry>,
+  clinicalDayStart: string
 ): Map<string, string> {
   const map = new Map<string, string>()
   for (const report of allReports) {
     for (const li of report.lineItems) {
       if (li.startTime) {
-        const eff = effectiveServiceDate(li, shiftMap)
+        const eff = effectiveServiceDate(li, shiftMap, clinicalDayStart)
         if (eff !== li.serviceDate) {
           map.set(li.ticketNum, eff)
         }
@@ -326,10 +346,11 @@ export function computeMonthlyStats(
     ? getApplicableMapping(report.year, report.month, allMappings)
     : null
 
+  const clinicalDayStartMins = settings ? timeToMinutes(settings.clinicalDayStart) : 390
   const workingDays = computeWorkingDays(
     lineItems, paddingMinutes, defaultNoTimeHours, workingDayOverrides,
     shiftMap, settings?.shiftHours, holidayList,
-    unitDollarValue, applicableMapping, dayStipends
+    unitDollarValue, applicableMapping, dayStipends, clinicalDayStartMins
   )
 
   const totalHours = workingDays.reduce((s, d) => s + d.hours, 0)
@@ -379,20 +400,22 @@ export function computeCalendarMonthWorkingDays(
 ): WorkingDayStats[] {
   const monthPrefix = `${calYear}-${String(calMonth).padStart(2, '0')}`
 
+  const clinicalDayStart = settings.clinicalDayStart
+  const clinicalDayStartMins = timeToMinutes(clinicalDayStart)
+
   // Build shift map first — needed for midnight attribution before item collection
   const shiftMap = buildShiftMap(allSchedules)
   // Ticket-level reassignment: add-on lines (no startTime) follow their ticket's primary line
-  const ticketReassign = buildTicketReassignmentMap(allReports, shiftMap)
+  const ticketReassign = buildTicketReassignmentMap(allReports, shiftMap, clinicalDayStart)
 
   // Collect line items and compute per-date unit totals (each item uses its source report's $/unit)
-  // Midnight attribution: cases starting before 06:30 on a G1/G2 day move to the prior date.
   const allItems: LineItem[] = []
   const dailyUnits = new Map<string, number>()
   const dailyUnitPay = new Map<string, number>()
 
   for (const report of allReports) {
     for (const li of report.lineItems) {
-      const effDate = ticketReassign.get(li.ticketNum) ?? effectiveServiceDate(li, shiftMap)
+      const effDate = ticketReassign.get(li.ticketNum) ?? effectiveServiceDate(li, shiftMap, clinicalDayStart)
       if (effDate.startsWith(monthPrefix)) {
         const adjustedLi = effDate === li.serviceDate ? li : { ...li, serviceDate: effDate }
         allItems.push(adjustedLi)
@@ -425,7 +448,7 @@ export function computeCalendarMonthWorkingDays(
   const pcrDays = computeWorkingDays(
     allItems, paddingMinutes, defaultNoTimeHours, mergedOverrides,
     shiftMap, settings.shiftHours, holidayList,
-    undefined, applicableMapping
+    undefined, applicableMapping, undefined, clinicalDayStartMins
   )
 
   const labeledDayStipends = labeledReport?.dayStipends ?? {}
@@ -450,6 +473,7 @@ export function computeCalendarMonthWorkingDays(
     const fixedKey = shiftTypes.reduce<ReturnType<typeof getFixedShiftKey>>(
       (k, s) => k ?? getFixedShiftKey(s), null
     )
+    const hasVariableShift = shiftTypes.some((s) => !isOffDayShift(s) && !getFixedShiftKey(resolveShiftAlias(s.toUpperCase())))
     const isCallWeekend = shiftTypes.length > 0 && isWeekendOrHoliday(date, holidayList)
     const stipendAmount = getStipendForDay(shiftTypes, isCallWeekend, applicableMapping)
     const additionalStipend = labeledDayStipends[date] ?? 0
@@ -463,8 +487,10 @@ export function computeCalendarMonthWorkingDays(
     } else if (shiftEntry.hoursOverride !== undefined) {
       hours = shiftEntry.hoursOverride
       isOverridden = true
-    } else if (fixedKey) {
-      hours = settings.shiftHours[fixedKey]
+    } else if (fixedKey && !hasVariableShift) {
+      hours = fixedKey === 'APS' && isCallWeekend ? settings.shiftHours.APS_weekend : settings.shiftHours[fixedKey]
+    } else {
+      hours = settings.defaultNoTimeHours
     }
 
     result.push({
@@ -504,9 +530,11 @@ export function computeCalendarMonthStats(
 ): MonthlyStats | null {
   const monthPrefix = `${calYear}-${String(calMonth).padStart(2, '0')}`
 
+  const clinicalDayStart = settings.clinicalDayStart
+
   // Build shift map early for midnight attribution
   const shiftMap = buildShiftMap(allSchedules)
-  const ticketReassign = buildTicketReassignmentMap(allReports, shiftMap)
+  const ticketReassign = buildTicketReassignmentMap(allReports, shiftMap, clinicalDayStart)
 
   // Collect all line items whose effective service date falls in this calendar month
   const allItems: LineItem[] = []
@@ -514,7 +542,7 @@ export function computeCalendarMonthStats(
   let unitCompensation = 0
   for (const report of allReports) {
     for (const li of report.lineItems) {
-      const effDate = ticketReassign.get(li.ticketNum) ?? effectiveServiceDate(li, shiftMap)
+      const effDate = ticketReassign.get(li.ticketNum) ?? effectiveServiceDate(li, shiftMap, clinicalDayStart)
       if (effDate.startsWith(monthPrefix)) {
         const adjustedLi = effDate === li.serviceDate ? li : { ...li, serviceDate: effDate }
         allItems.push(adjustedLi)
