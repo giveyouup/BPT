@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import React, { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useData } from '../context/DataContext'
 import { computeCalendarMonthWorkingDays, computeCalendarYearStats } from '../utils/calculations'
@@ -54,6 +54,7 @@ export default function Dashboard() {
   const [hoursInput, setHoursInput] = useState('')
   const [hideCompensation, setHideCompensation] = useState(true)
   const [selectedWeek, setSelectedWeek] = useState<string | null>(null)
+  const [selectedDayDate, setSelectedDayDate] = useState<string | null>(null)
 
   const saveDayStipend = async (date: string) => {
     if (!selStats) return
@@ -198,7 +199,7 @@ export default function Dashboard() {
             .map((s) => (
               <button
                 key={s.id}
-                onClick={() => { setSelectedId(s.id); setSelectedWeek(null) }}
+                onClick={() => { setSelectedId(s.id); setSelectedWeek(null); setSelectedDayDate(null) }}
                 className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
                   s.id === selStats.id
                     ? 'bg-indigo-600 text-white'
@@ -311,10 +312,16 @@ export default function Dashboard() {
                       const unitsPerHr = day.hours > 0 && day.totalUnits > 0 ? day.totalUnits / day.hours : null
                       const dollarPerHr = day.hours > 0 && day.totalDayPay > 0 ? day.totalDayPay / day.hours : null
                       const rowBg = !day.hasProduction ? 'opacity-50' : ''
+                      const isExpanded = selectedDayDate === day.date
+                      const dayCases = selStats.cases.filter((c) => c.serviceDate === day.date)
                       return (
-                        <tr key={day.date} className={rowBg}>
-                          <td className="py-1 text-gray-500 sticky left-0 bg-gray-900">{formatDateShort(day.date)}</td>
-                          <td className="py-1 sticky left-20 bg-gray-900">
+                        <React.Fragment key={day.date}>
+                        <tr
+                          className={`${rowBg} cursor-pointer ${isExpanded ? 'bg-indigo-950/30' : 'hover:bg-gray-800/40'} transition-colors`}
+                          onClick={() => setSelectedDayDate(isExpanded ? null : day.date)}
+                        >
+                          <td className={`py-1 text-gray-500 sticky left-0 ${isExpanded ? 'bg-indigo-950/60' : 'bg-gray-900'}`}>{formatDateShort(day.date)}</td>
+                          <td className={`py-1 sticky left-20 ${isExpanded ? 'bg-indigo-950/60' : 'bg-gray-900'}`}>
                             <div className="flex flex-wrap gap-0.5">
                               {day.shiftTypes.map((st) => (
                                 <span key={st} className={`font-mono px-1.5 py-0.5 rounded ${shiftBadgeClass(st)}`}>{st}</span>
@@ -338,7 +345,7 @@ export default function Dashboard() {
                           <td className="py-1 text-right text-emerald-400 pr-3">
                             {day.stipendAmount > 0 ? formatCurrency(day.stipendAmount) : '—'}
                           </td>
-                          <td className="py-1 text-right pr-3">
+                          <td className="py-1 text-right pr-3" onClick={(e) => e.stopPropagation()}>
                             {editingDayDate === day.date ? (
                               <span className="flex items-center justify-end gap-1">
                                 <input
@@ -372,7 +379,7 @@ export default function Dashboard() {
                           <td className="py-1 text-right font-medium text-gray-200 pr-3">
                             {day.totalDayPay > 0 ? formatCurrency(day.totalDayPay) : '—'}
                           </td>
-                          <td className="py-1 text-right">
+                          <td className="py-1 text-right" onClick={(e) => e.stopPropagation()}>
                             {editingHoursDate === day.date ? (
                               <span className="flex items-center justify-end gap-1">
                                 <input
@@ -399,6 +406,49 @@ export default function Dashboard() {
                             )}
                           </td>
                         </tr>
+                        {isExpanded && (
+                          <tr className="bg-indigo-950/20">
+                            <td colSpan={13} className="pb-3 pt-1 px-2">
+                              {dayCases.length === 0 ? (
+                                <p className="text-gray-600 italic">No case details available.</p>
+                              ) : (
+                                <div className="overflow-x-auto">
+                                  <table className="text-xs min-w-max">
+                                    <thead>
+                                      <tr className="text-gray-600 uppercase tracking-wider">
+                                        <th className="pr-3 pb-1 font-semibold text-left">Ticket</th>
+                                        <th className="pr-3 pb-1 font-semibold text-left">CPT/ASA</th>
+                                        <th className="pr-3 pb-1 font-semibold text-left">Mod</th>
+                                        <th className="pr-3 pb-1 font-semibold text-left">Start</th>
+                                        <th className="pr-3 pb-1 font-semibold text-left">End</th>
+                                        <th className="pr-3 pb-1 font-semibold text-right">Base U</th>
+                                        <th className="pr-3 pb-1 font-semibold text-right">Time U</th>
+                                        <th className="pr-3 pb-1 font-semibold text-right">Add-on U</th>
+                                        <th className="pb-1 font-semibold text-right">Total U</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {dayCases.map((c) => (
+                                        <tr key={c.ticketNum} className="border-t border-gray-800/50">
+                                          <td className="pr-3 py-0.5 text-gray-400 font-mono">{c.ticketNum}{c.isSplit && <span className="ml-1 text-amber-500 text-[10px]">split</span>}</td>
+                                          <td className="pr-3 py-0.5 text-gray-300">{c.primaryCptAsa || '—'}</td>
+                                          <td className="pr-3 py-0.5 text-gray-500">{c.primaryModifier || '—'}</td>
+                                          <td className="pr-3 py-0.5 text-gray-500">{c.startTime ?? '—'}</td>
+                                          <td className="pr-3 py-0.5 text-gray-500">{c.endTime ?? '—'}</td>
+                                          <td className="pr-3 py-0.5 text-right text-indigo-400">{c.primaryDistributionValue.toFixed(1)}</td>
+                                          <td className="pr-3 py-0.5 text-right text-indigo-400">{c.primaryTimeUnits.toFixed(1)}</td>
+                                          <td className="pr-3 py-0.5 text-right text-indigo-300">{c.addOnUnits > 0 ? c.addOnUnits.toFixed(1) : '—'}</td>
+                                          <td className="py-0.5 text-right font-semibold text-indigo-300">{c.totalUnits.toFixed(2)}</td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </div>
+                              )}
+                            </td>
+                          </tr>
+                        )}
+                        </React.Fragment>
                       )
                     })}
                     </tbody>
