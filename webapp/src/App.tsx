@@ -8,6 +8,7 @@ import CalendarMonthDetail from './pages/CalendarMonthDetail'
 import AnnualSummary from './pages/AnnualSummary'
 import StipendCalculator from './pages/StipendCalculator'
 import ScheduleCalendar from './pages/ScheduleCalendar'
+import Audits from './pages/Audits'
 import Settings from './pages/Settings'
 
 function AppContent() {
@@ -30,6 +31,7 @@ function AppContent() {
         <Route path="/annual" element={<AnnualSummary />} />
         <Route path="/stipends" element={<StipendCalculator />} />
         <Route path="/schedule" element={<ScheduleCalendar />} />
+        <Route path="/audits" element={<Audits />} />
         <Route path="/settings" element={<Settings />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

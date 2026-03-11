@@ -25,6 +25,7 @@ export const api = {
     list: () => req<Record<string, string[]>>('GET', '/manual-shifts'),
     upsert: (date: string, shiftTypes: string[]) =>
       req<void>('PUT', `/manual-shifts/${date}`, { shiftTypes }),
+    delete: (date: string) => req<void>('DELETE', `/manual-shifts/${date}`),
   },
   settings: {
     get: () => req<Settings>('GET', '/settings'),

@@ -88,11 +88,11 @@ export function getManualShifts(): Record<string, string[]> {
 }
 
 export function upsertManualShift(date: string, shiftTypes: string[]): void {
-  if (shiftTypes.length === 0) {
-    db.prepare('DELETE FROM manual_shifts WHERE date = ?').run(date)
-  } else {
-    db.prepare('INSERT OR REPLACE INTO manual_shifts (date, shift_types) VALUES (?, ?)').run(date, JSON.stringify(shiftTypes))
-  }
+  db.prepare('INSERT OR REPLACE INTO manual_shifts (date, shift_types) VALUES (?, ?)').run(date, JSON.stringify(shiftTypes))
+}
+
+export function deleteManualShift(date: string): void {
+  db.prepare('DELETE FROM manual_shifts WHERE date = ?').run(date)
 }
 
 // ─── Settings ─────────────────────────────────────────────────────────────────

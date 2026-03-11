@@ -67,6 +67,7 @@ export default function Settings() {
 
   const [settings, setSettings] = useState(apiSettings)
   const [saved, setSaved] = useState(false)
+  const hasUnsavedChanges = JSON.stringify(settings) !== JSON.stringify(apiSettings)
   const [holidayYear, setHolidayYear] = useState(new Date().getFullYear())
   const [customDateInput, setCustomDateInput] = useState('')
 
@@ -228,7 +229,17 @@ export default function Settings() {
 
   return (
     <div className="p-4 md:p-8 max-w-2xl">
-      <h2 className="text-2xl font-bold text-gray-100 mb-6">Settings</h2>
+      <div className="flex items-center justify-between mb-6">
+        <h2 className="text-2xl font-bold text-gray-100">Settings</h2>
+        {hasUnsavedChanges && (
+          <button
+            onClick={handleSave}
+            className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-500 transition-colors"
+          >
+            Save Settings
+          </button>
+        )}
+      </div>
 
       {/* Shift Hours */}
       <section className="bg-gray-900 rounded-xl border border-gray-800 p-6 mb-6">
@@ -635,12 +646,27 @@ export default function Settings() {
         </div>
       </section>
 
-      <button
-        onClick={handleSave}
-        className="px-6 py-2.5 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-500 transition-colors"
-      >
-        {saved ? 'Saved!' : 'Save Settings'}
-      </button>
+      {/* Spacer so sticky bar doesn't overlap content */}
+      {hasUnsavedChanges && <div className="h-16" />}
+
+      {/* Sticky unsaved-changes bar */}
+      {(hasUnsavedChanges || saved) && (
+        <div className="fixed bottom-0 left-0 right-0 z-50 flex items-center justify-between gap-4 px-6 py-3 bg-gray-900 border-t border-gray-700 shadow-2xl">
+          <span className="text-sm text-gray-400">
+            {saved ? (
+              <span className="text-emerald-400 font-medium">✓ Settings saved</span>
+            ) : (
+              'You have unsaved changes'
+            )}
+          </span>
+          <button
+            onClick={handleSave}
+            className="px-5 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-500 transition-colors"
+          >
+            {saved ? 'Saved!' : 'Save Settings'}
+          </button>
+        </div>
+      )}
     </div>
   )
 }

@@ -3,7 +3,7 @@ import path from 'path'
 import {
   getReports, getReport, upsertReport, deleteReport,
   getSchedules, upsertSchedule, deleteSchedule,
-  getManualShifts, upsertManualShift,
+  getManualShifts, upsertManualShift, deleteManualShift,
   getSettings, upsertSettings,
   getStipendMappings, upsertStipendMapping, deleteStipendMapping,
 } from './db'
@@ -52,6 +52,11 @@ app.get('/api/manual-shifts', (_req, res) => res.json(getManualShifts()))
 
 app.put('/api/manual-shifts/:date', (req, res) => {
   upsertManualShift(req.params.date, req.body.shiftTypes ?? [])
+  res.json({ ok: true })
+})
+
+app.delete('/api/manual-shifts/:date', (req, res) => {
+  deleteManualShift(req.params.date)
   res.json({ ok: true })
 })
 

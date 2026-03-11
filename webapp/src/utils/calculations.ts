@@ -176,6 +176,8 @@ function computeWorkingDays(
       ;({ firstStartTime, lastEndTime } = getStartEndTimes(timedItems, clinicalDayStartMins))
       const { minStart, maxEnd } = getMinMaxMinutes(timedItems, clinicalDayStartMins)
       hours = (maxEnd - minStart + paddingMinutes) / 60
+    } else if (shiftTypes.length > 0 && shiftTypes.every(isOffDayShift)) {
+      hours = 0
     } else {
       hours = defaultNoTimeHours
     }
@@ -315,6 +317,51 @@ function buildTicketReassignmentMap(
   return map
 }
 
+/**
+ * For each ticket number, collect the sorted list of scheduled working-day dates
+ * that the ticket's line items fall on (after midnight attribution). Used to
+ * attribute orphaned line items on non-working days to the correct working day.
+ */
+function buildTicketWorkingDayMap(
+  allReports: MonthlyReport[],
+  shiftMap: Map<string, ShiftEntry>,
+  ticketReassign: Map<string, string>,
+  clinicalDayStart: string
+): Map<string, string[]> {
+  const result = new Map<string, string[]>()
+  for (const report of allReports) {
+    for (const li of report.lineItems) {
+      const effDate = ticketReassign.get(li.ticketNum) ?? effectiveServiceDate(li, shiftMap, clinicalDayStart)
+      const entry = shiftMap.get(effDate)
+      if (entry && entry.shiftTypes.length > 0 && !entry.shiftTypes.every(isOffDayShift)) {
+        if (!result.has(li.ticketNum)) result.set(li.ticketNum, [])
+        const days = result.get(li.ticketNum)!
+        if (!days.includes(effDate)) { days.push(effDate); days.sort() }
+      }
+    }
+  }
+  return result
+}
+
+/**
+ * If effDate is not a scheduled working day, redirect to the most recent
+ * scheduled working day for that ticket (on or before effDate), or the
+ * earliest if none precedes it. Returns effDate unchanged if it is already
+ * a working day or the ticket has no known working days.
+ */
+function applyOrphanAttribution(
+  effDate: string,
+  ticketNum: string,
+  shiftMap: Map<string, ShiftEntry>,
+  ticketWorkingDays: Map<string, string[]>
+): string {
+  const entry = shiftMap.get(effDate)
+  const isWorkingDay = entry && entry.shiftTypes.length > 0 && !entry.shiftTypes.every(isOffDayShift)
+  if (isWorkingDay) return effDate
+  const wds = ticketWorkingDays.get(ticketNum) ?? []
+  return [...wds].reverse().find(d => d <= effDate) ?? wds[0] ?? effDate
+}
+
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 export function computeMonthlyStats(
@@ -327,11 +374,11 @@ export function computeMonthlyStats(
     lineItems,
     unitDollarValue,
     paddingMinutes,
-    defaultNoTimeHours,
     workingDayOverrides,
     dayStipends,
     stipends,
   } = report
+  const defaultNoTimeHours = settings?.defaultNoTimeHours ?? report.defaultNoTimeHours
 
   const totalCases = new Set(lineItems.map((li) => li.ticketNum)).size
   const totalDistributableUnits = lineItems.reduce((s, li) => s + li.totalDistributableUnits, 0)
@@ -407,6 +454,8 @@ export function computeCalendarMonthWorkingDays(
   const shiftMap = buildShiftMap(allSchedules)
   // Ticket-level reassignment: add-on lines (no startTime) follow their ticket's primary line
   const ticketReassign = buildTicketReassignmentMap(allReports, shiftMap, clinicalDayStart)
+  // Orphan attribution: line items on non-working days redirected to ticket's most recent working day
+  const ticketWorkingDays = buildTicketWorkingDayMap(allReports, shiftMap, ticketReassign, clinicalDayStart)
 
   // Collect line items and compute per-date unit totals (each item uses its source report's $/unit)
   const allItems: LineItem[] = []
@@ -415,7 +464,10 @@ export function computeCalendarMonthWorkingDays(
 
   for (const report of allReports) {
     for (const li of report.lineItems) {
-      const effDate = ticketReassign.get(li.ticketNum) ?? effectiveServiceDate(li, shiftMap, clinicalDayStart)
+      const effDate = applyOrphanAttribution(
+        ticketReassign.get(li.ticketNum) ?? effectiveServiceDate(li, shiftMap, clinicalDayStart),
+        li.ticketNum, shiftMap, ticketWorkingDays
+      )
       if (effDate.startsWith(monthPrefix)) {
         const adjustedLi = effDate === li.serviceDate ? li : { ...li, serviceDate: effDate }
         allItems.push(adjustedLi)
@@ -436,7 +488,7 @@ export function computeCalendarMonthWorkingDays(
 
   const labeledReport = allReports.find((r) => r.year === calYear && r.month === calMonth)
   const paddingMinutes = labeledReport?.paddingMinutes ?? 30
-  const defaultNoTimeHours = labeledReport?.defaultNoTimeHours ?? 4
+  const defaultNoTimeHours = settings.defaultNoTimeHours
   const holidayList = settings.holidays[calYear] ?? computeFederalHolidays(calYear)
 
   // Auto-select mapping for this calendar month (use labeled report's override if set)
@@ -489,6 +541,8 @@ export function computeCalendarMonthWorkingDays(
       isOverridden = true
     } else if (fixedKey && !hasVariableShift) {
       hours = fixedKey === 'APS' && isCallWeekend ? settings.shiftHours.APS_weekend : settings.shiftHours[fixedKey]
+    } else if (shiftTypes.every(isOffDayShift)) {
+      hours = 0
     } else {
       hours = settings.defaultNoTimeHours
     }
@@ -535,6 +589,7 @@ export function computeCalendarMonthStats(
   // Build shift map early for midnight attribution
   const shiftMap = buildShiftMap(allSchedules)
   const ticketReassign = buildTicketReassignmentMap(allReports, shiftMap, clinicalDayStart)
+  const ticketWorkingDays = buildTicketWorkingDayMap(allReports, shiftMap, ticketReassign, clinicalDayStart)
 
   // Collect all line items whose effective service date falls in this calendar month
   const allItems: LineItem[] = []
@@ -542,7 +597,10 @@ export function computeCalendarMonthStats(
   let unitCompensation = 0
   for (const report of allReports) {
     for (const li of report.lineItems) {
-      const effDate = ticketReassign.get(li.ticketNum) ?? effectiveServiceDate(li, shiftMap, clinicalDayStart)
+      const effDate = applyOrphanAttribution(
+        ticketReassign.get(li.ticketNum) ?? effectiveServiceDate(li, shiftMap, clinicalDayStart),
+        li.ticketNum, shiftMap, ticketWorkingDays
+      )
       if (effDate.startsWith(monthPrefix)) {
         const adjustedLi = effDate === li.serviceDate ? li : { ...li, serviceDate: effDate }
         allItems.push(adjustedLi)

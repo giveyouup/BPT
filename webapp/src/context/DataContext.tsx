@@ -44,6 +44,7 @@ interface DataContextValue {
   saveSchedule: (s: Schedule) => Promise<void>
   deleteSchedule: (id: string) => Promise<void>
   saveManualShift: (date: string, shiftTypes: string[]) => Promise<void>
+  deleteManualShift: (date: string) => Promise<void>
   saveSettings: (s: Settings) => Promise<void>
   saveStipendMapping: (m: StipendMapping) => Promise<void>
   deleteStipendMapping: (id: string) => Promise<void>
@@ -157,10 +158,14 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
 
   const saveManualShift = async (date: string, shiftTypes: string[]) => {
     await api.manualShifts.upsert(date, shiftTypes)
+    setManualShifts((prev) => ({ ...prev, [date]: shiftTypes }))
+  }
+
+  const deleteManualShift = async (date: string) => {
+    await api.manualShifts.delete(date)
     setManualShifts((prev) => {
       const next = { ...prev }
-      if (shiftTypes.length === 0) delete next[date]
-      else next[date] = shiftTypes
+      delete next[date]
       return next
     })
   }
@@ -192,7 +197,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
     <DataContext.Provider value={{
       reports, schedules, settings, stipendMappings, loading,
       saveReport, deleteReport,
-      saveSchedule, deleteSchedule, saveManualShift,
+      saveSchedule, deleteSchedule, saveManualShift, deleteManualShift,
       saveSettings,
       saveStipendMapping, deleteStipendMapping,
     }}>
