@@ -40,6 +40,7 @@ interface DataContextValue {
   stipendMappings: StipendMapping[]
   cptRanges: CptRange[]
   loading: boolean
+  loadError: string | null
   saveReport: (r: MonthlyReport) => Promise<void>
   deleteReport: (id: string) => Promise<void>
   saveSchedule: (s: Schedule) => Promise<void>
@@ -64,6 +65,7 @@ export function useData(): DataContextValue {
 
 export function DataProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [rawReports, setRawReports] = useState<MonthlyReport[]>([])
   const [rawSchedules, setRawSchedules] = useState<Schedule[]>([])
   const [manualShifts, setManualShifts] = useState<Record<string, string[]>>({})
@@ -89,6 +91,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
       setLoading(false)
     }).catch((err) => {
       console.error('Failed to load data:', err)
+      setLoadError('Could not reach the server. Make sure the BPT server is running.')
       setLoading(false)
     })
   }, [])
@@ -221,7 +224,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <DataContext.Provider value={{
-      reports, schedules, settings, stipendMappings, cptRanges, loading,
+      reports, schedules, settings, stipendMappings, cptRanges, loading, loadError,
       saveReport, deleteReport,
       saveSchedule, deleteSchedule, saveManualShift, deleteManualShift,
       saveSettings,

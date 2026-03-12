@@ -87,20 +87,28 @@ function PcrUploadTab() {
   const [paddingMins, setPaddingMins] = useState(String(settings.defaultPaddingMinutes))
   const [noTimeHours, setNoTimeHours] = useState(String(settings.defaultNoTimeHours))
   const [saving, setSaving] = useState(false)
+  const [showConflict, setShowConflict] = useState(false)
 
   const handleFile = useCallback(async (f: File) => {
     setFile(f)
     setParseError(null)
     setParsed(null)
+    setShowConflict(false)
     const detected = detectMonthYear(f.name)
-    if (detected) { setMonth(detected.month); setYear(detected.year) }
+    if (detected) {
+      setMonth(detected.month)
+      setYear(detected.year)
+      const existingId = `${detected.year}-${String(detected.month).padStart(2, '0')}`
+      const existingReport = reports.find((r) => r.id === existingId)
+      if (existingReport) setUnitValue(existingReport.unitDollarValue.toFixed(2))
+    }
     try {
       const items = parseXlsx(await f.arrayBuffer())
       setParsed(items)
     } catch (e) {
       setParseError(e instanceof Error ? e.message : 'Failed to parse file')
     }
-  }, [])
+  }, [reports])
 
   const onDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault()
@@ -123,7 +131,12 @@ function PcrUploadTab() {
 
   const handleSave = async () => {
     if (!parsed) return
+    if (existing && !showConflict) {
+      setShowConflict(true)
+      return
+    }
     setSaving(true)
+    setShowConflict(false)
     const report = {
       id: reportId,
       year,
@@ -133,6 +146,7 @@ function PcrUploadTab() {
       unitDollarValue: parseFloat(unitValue) || 32,
       paddingMinutes: parseInt(paddingMins) || 30,
       defaultNoTimeHours: parseFloat(noTimeHours) || 4,
+      unitCorrection: existing?.unitCorrection,
       lineItems: parsed,
       workingDayOverrides: existing?.workingDayOverrides ?? {},
       dayStipends: existing?.dayStipends ?? {},
@@ -264,20 +278,108 @@ function PcrUploadTab() {
           </div>
         </div>
 
-        {existing && (
-          <div className="bg-amber-900/20 border border-amber-800 rounded-lg px-4 py-3 text-sm text-amber-400">
-            A report for {formatMonthYear(year, month)} already exists. Saving will replace it
-            (stipends and hour overrides will be preserved).
+        {/* Conflict modal */}
+        {showConflict && existing && parsed && (
+          <div className="bg-gray-800 border border-amber-700/60 rounded-xl p-5 space-y-4">
+            <div className="flex items-center gap-2">
+              <svg className="w-4 h-4 text-amber-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <p className="text-sm font-semibold text-amber-300">
+                A report for {formatMonthYear(year, month)} already exists
+              </p>
+            </div>
+
+            {/* Line item comparison */}
+            <div className="grid grid-cols-3 gap-2 text-xs">
+              <div />
+              <div className="text-center font-semibold text-gray-500 uppercase tracking-wider">Current</div>
+              <div className="text-center font-semibold text-gray-500 uppercase tracking-wider">New</div>
+              {(() => {
+                const oldCases = new Set(existing.lineItems.map(li => li.ticketNum)).size
+                const newCases = new Set(parsed.map(li => li.ticketNum)).size
+                const oldUnits = existing.lineItems.reduce((s, li) => s + li.totalDistributableUnits, 0)
+                const newUnits = parsed.reduce((s, li) => s + li.totalDistributableUnits, 0)
+                const oldDates = existing.lineItems.map(li => li.serviceDate).sort()
+                const newDates = parsed.map(li => li.serviceDate).sort()
+                const oldRange = oldDates.length ? `${formatDateFull(oldDates[0])} – ${formatDateFull(oldDates[oldDates.length - 1])}` : '—'
+                const newRange = newDates.length ? `${formatDateFull(newDates[0])} – ${formatDateFull(newDates[newDates.length - 1])}` : '—'
+                const rows = [
+                  { label: 'Cases', old: String(oldCases), new_: String(newCases), changed: oldCases !== newCases },
+                  { label: 'Line items', old: String(existing.lineItems.length), new_: String(parsed.length), changed: existing.lineItems.length !== parsed.length },
+                  { label: 'Total units', old: oldUnits.toFixed(2), new_: newUnits.toFixed(2), changed: Math.abs(oldUnits - newUnits) > 0.001 },
+                  { label: 'Date range', old: oldRange, new_: newRange, changed: oldRange !== newRange },
+                ]
+                return rows.map(r => (
+                  <>
+                    <div key={`${r.label}-l`} className="text-gray-500 flex items-center">{r.label}</div>
+                    <div key={`${r.label}-o`} className={`text-center ${r.changed ? 'text-gray-400' : 'text-gray-600'}`}>{r.old}</div>
+                    <div key={`${r.label}-n`} className={`text-center font-medium ${r.changed ? 'text-amber-300' : 'text-gray-600'}`}>{r.new_}</div>
+                  </>
+                ))
+              })()}
+            </div>
+
+            {/* Manual adjustments that will be preserved */}
+            {(() => {
+              const overrideCount = Object.keys(existing.workingDayOverrides ?? {}).length
+              const stipendCount = Object.keys(existing.dayStipends ?? {}).length
+              const hasCorrection = !!existing.unitCorrection
+              const hasLegacyStipends = (existing.stipends ?? []).length > 0
+              const items = [
+                overrideCount > 0 && `${overrideCount} day hour override${overrideCount !== 1 ? 's' : ''}`,
+                stipendCount > 0 && `${stipendCount} day stipend${stipendCount !== 1 ? 's' : ''}`,
+                hasCorrection && `unit correction (${existing.unitCorrection! > 0 ? '+' : ''}${existing.unitCorrection})`,
+                hasLegacyStipends && `${existing.stipends.length} additional stipend${existing.stipends.length !== 1 ? 's' : ''}`,
+              ].filter(Boolean) as string[]
+              if (items.length === 0) return null
+              return (
+                <div className="space-y-1">
+                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Preserved from existing report</p>
+                  {items.map(item => (
+                    <div key={item} className="flex items-center gap-2 text-xs text-emerald-400">
+                      <svg className="w-3 h-3 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                      </svg>
+                      {item}
+                    </div>
+                  ))}
+                </div>
+              )
+            })()}
+
+            {/* $/unit warning if form value differs from existing */}
+            {Math.abs((parseFloat(unitValue) || 32) - existing.unitDollarValue) > 0.001 && (
+              <div className="flex items-center gap-2 text-xs text-amber-500">
+                <svg className="w-3 h-3 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                $/unit will change from ${existing.unitDollarValue.toFixed(2)} → ${(parseFloat(unitValue) || 32).toFixed(2)}
+              </div>
+            )}
+
+            <div className="flex gap-3 pt-1">
+              <button onClick={handleSave} disabled={saving}
+                className="flex-1 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-40">
+                {saving ? 'Saving…' : 'Replace Line Items'}
+              </button>
+              <button onClick={() => setShowConflict(false)}
+                className="px-4 py-2 text-sm text-gray-400 hover:text-gray-200 border border-gray-700 rounded-lg transition-colors">
+                Cancel
+              </button>
+            </div>
           </div>
         )}
 
-        <button
-          onClick={handleSave}
-          disabled={!parsed || saving}
-          className="w-full py-2.5 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-500 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-        >
-          {saving ? 'Saving…' : `Save ${formatMonthYear(year, month)} Report`}
-        </button>
+        {!showConflict && (
+          <button
+            onClick={handleSave}
+            disabled={!parsed || saving}
+            className="w-full py-2.5 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-500 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {saving ? 'Saving…' : `Save ${formatMonthYear(year, month)} Report`}
+          </button>
+        )}
       </div>
     </div>
   )
