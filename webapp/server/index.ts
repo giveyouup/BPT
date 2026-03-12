@@ -144,4 +144,39 @@ const distPath = path.resolve(process.cwd(), 'dist')
 app.use(express.static(distPath))
 app.get('*', (_req, res) => res.sendFile(path.join(distPath, 'index.html')))
 
-app.listen(PORT, () => console.log(`BPT server running on port ${PORT}`))
+app.listen(PORT, () => {
+  console.log(`BPT server running on port ${PORT}`)
+  scheduleMaintenance()
+})
+
+// ─── Scheduled maintenance ────────────────────────────────────────────────────
+
+function scheduleMaintenance() {
+  const intervalHours = parseFloat(process.env.MAINTENANCE_INTERVAL_HOURS ?? '24')
+  if (!isFinite(intervalHours) || intervalHours <= 0) {
+    console.log('Scheduled maintenance disabled (MAINTENANCE_INTERVAL_HOURS <= 0)')
+    return
+  }
+  const intervalMs = intervalHours * 60 * 60 * 1000
+
+  const run = () => {
+    try {
+      const result = runMaintenance()
+      const freed = ((result.dbSizeBefore - result.dbSizeAfter) / 1024).toFixed(1)
+      console.log(
+        `[maintenance] WAL checkpointed=${result.walPagesCheckpointed} remaining=${result.walPagesRemaining}` +
+        ` db=${(result.dbSizeAfter / 1024 / 1024).toFixed(2)}MB freed=${freed}KB`
+      )
+    } catch (err) {
+      console.error('[maintenance] Failed:', err)
+    }
+  }
+
+  // Run once 60 s after startup, then on the regular interval.
+  setTimeout(() => {
+    run()
+    setInterval(run, intervalMs)
+  }, 60_000)
+
+  console.log(`Scheduled maintenance every ${intervalHours}h (first run in 60s)`)
+}
