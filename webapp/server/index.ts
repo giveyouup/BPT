@@ -116,12 +116,13 @@ app.get('/api/export', (_req, res) => {
 app.post('/api/import', (req, res) => {
   try {
     const data = req.body
-    if (!data.version || !Array.isArray(data.reports) || !Array.isArray(data.schedules)) {
+    if (!data || !data.version || !Array.isArray(data.reports)) {
       return res.status(400).json({ error: 'Invalid backup file — missing required fields.' })
     }
     importDatabase(data)
     res.json({ ok: true })
   } catch (err) {
+    console.error('Import failed:', err)
     res.status(500).json({ error: String(err) })
   }
 })

@@ -204,13 +204,13 @@ export function importDatabase(data: DatabaseExport): void {
     db.prepare('DELETE FROM stipend_mappings').run()
     db.prepare('DELETE FROM cpt_ranges').run()
 
-    for (const report of data.reports) upsertReport(report)
-    for (const schedule of data.schedules) upsertSchedule(schedule)
-    for (const [date, shiftTypes] of Object.entries(data.manualShifts)) {
+    for (const report of data.reports ?? []) upsertReport(report)
+    for (const schedule of data.schedules ?? []) upsertSchedule(schedule)
+    for (const [date, shiftTypes] of Object.entries(data.manualShifts ?? {})) {
       upsertManualShift(date, shiftTypes)
     }
-    upsertSettings(data.settings)
-    for (const mapping of data.stipendMappings) upsertStipendMapping(mapping)
+    if (data.settings) upsertSettings(data.settings)
+    for (const mapping of data.stipendMappings ?? []) upsertStipendMapping(mapping)
     for (const range of data.cptRanges ?? []) upsertCptRange(range)
   })
   run()

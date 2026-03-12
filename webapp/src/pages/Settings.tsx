@@ -79,12 +79,23 @@ export default function Settings() {
 
   function handleImportFile(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
-    e.target.value = ''
     if (!file) return
+    e.target.value = ''
+    if (file.size === 0) {
+      setImportError('The selected file is empty (0 bytes). Please choose a valid backup file.')
+      setImportState('error')
+      return
+    }
     const reader = new FileReader()
     reader.onload = (ev) => {
+      const raw = ev.target?.result
+      if (!raw || typeof raw !== 'string' || raw.trim() === '') {
+        setImportError('File could not be read or is empty.')
+        setImportState('error')
+        return
+      }
       try {
-        const data = JSON.parse(ev.target?.result as string)
+        const data = JSON.parse(raw)
         if (!data.version || !Array.isArray(data.reports)) {
           setImportError('Invalid backup file — missing required fields.')
           setImportState('error')
@@ -92,10 +103,14 @@ export default function Settings() {
         }
         setPendingImport(data)
         setImportState('confirm')
-      } catch {
-        setImportError('Could not parse file as JSON.')
+      } catch (err) {
+        setImportError(`Could not parse file as JSON: ${String(err)}`)
         setImportState('error')
       }
+    }
+    reader.onerror = () => {
+      setImportError('FileReader error — could not read the file.')
+      setImportState('error')
     }
     reader.readAsText(file)
   }
