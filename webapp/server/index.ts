@@ -128,7 +128,6 @@ app.post('/api/import', (req, res) => {
 
 // ─── Serve static frontend ────────────────────────────────────────────────────
 
-const __dirname = path.dirname(new URL(import.meta.url).pathname)
 const distPath = path.resolve(__dirname, '../../dist')
 app.use(express.static(distPath))
 app.get('*', (_req, res) => res.sendFile(path.join(distPath, 'index.html')))
