@@ -7,7 +7,7 @@ import {
   getSettings, upsertSettings,
   getStipendMappings, upsertStipendMapping, deleteStipendMapping,
   getCptRanges, upsertCptRange, deleteCptRange as deleteCptRangeDb, resetCptRanges,
-  exportDatabase, importDatabase,
+  exportDatabase, importDatabase, runMaintenance,
 } from './db'
 
 const app = express()
@@ -101,6 +101,17 @@ app.delete('/api/cpt-ranges/:id', (req, res) => {
 app.post('/api/cpt-ranges/reset', (_req, res) => {
   resetCptRanges()
   res.json(getCptRanges())
+})
+
+// ─── DB Maintenance ───────────────────────────────────────────────────────────
+
+app.post('/api/db/maintenance', (_req, res) => {
+  try {
+    res.json(runMaintenance())
+  } catch (err) {
+    console.error('Maintenance failed:', err)
+    res.status(500).json({ error: String(err) })
+  }
 })
 
 // ─── Export / Import ──────────────────────────────────────────────────────────

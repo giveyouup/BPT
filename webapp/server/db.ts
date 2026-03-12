@@ -196,6 +196,12 @@ export function exportDatabase(): DatabaseExport {
 }
 
 export function importDatabase(data: DatabaseExport): void {
+  // Checkpoint WAL and create a backup before wiping — stays in the same
+  // DATA_DIR volume mount so it survives container restarts.
+  db.pragma('wal_checkpoint(TRUNCATE)')
+  const backupPath = DB_PATH + '.bak'
+  if (fs.existsSync(DB_PATH)) fs.copyFileSync(DB_PATH, backupPath)
+
   const run = db.transaction(() => {
     db.prepare('DELETE FROM reports').run()
     db.prepare('DELETE FROM schedules').run()
@@ -214,4 +220,37 @@ export function importDatabase(data: DatabaseExport): void {
     for (const range of data.cptRanges ?? []) upsertCptRange(range)
   })
   run()
+}
+
+// ─── Maintenance ──────────────────────────────────────────────────────────────
+
+export interface MaintenanceResult {
+  walPagesCheckpointed: number
+  walPagesRemaining: number
+  dbSizeBefore: number
+  dbSizeAfter: number
+  backupExists: boolean
+}
+
+export function runMaintenance(): MaintenanceResult {
+  const dbSizeBefore = fs.existsSync(DB_PATH) ? fs.statSync(DB_PATH).size : 0
+
+  // Checkpoint: moves WAL pages into the main DB file and truncates the WAL.
+  type CheckpointRow = { busy: number; log: number; checkpointed: number }
+  const cpRows = db.pragma('wal_checkpoint(TRUNCATE)') as CheckpointRow[]
+  const cp = cpRows[0] ?? { busy: 0, log: 0, checkpointed: 0 }
+
+  // VACUUM: rebuilds the DB file in-place, reclaiming free pages.
+  db.exec('VACUUM')
+
+  const dbSizeAfter = fs.existsSync(DB_PATH) ? fs.statSync(DB_PATH).size : 0
+  const backupExists = fs.existsSync(DB_PATH + '.bak')
+
+  return {
+    walPagesCheckpointed: cp.checkpointed,
+    walPagesRemaining: Math.max(0, cp.log - cp.checkpointed),
+    dbSizeBefore,
+    dbSizeAfter,
+    backupExists,
+  }
 }

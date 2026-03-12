@@ -1,5 +1,13 @@
 import type { MonthlyReport, Schedule, Settings, StipendMapping, CptRange } from './types'
 
+export interface MaintenanceResult {
+  walPagesCheckpointed: number
+  walPagesRemaining: number
+  dbSizeBefore: number
+  dbSizeAfter: number
+  backupExists: boolean
+}
+
 async function req<T>(method: string, url: string, body?: unknown): Promise<T> {
   const res = await fetch('/api' + url, {
     method,
@@ -41,5 +49,8 @@ export const api = {
     upsert: (r: CptRange) => req<void>('PUT', `/cpt-ranges/${r.id}`, r),
     delete: (id: string) => req<void>('DELETE', `/cpt-ranges/${id}`),
     reset: () => req<CptRange[]>('POST', '/cpt-ranges/reset'),
+  },
+  db: {
+    maintenance: () => req<MaintenanceResult>('POST', '/db/maintenance'),
   },
 }

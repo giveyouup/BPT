@@ -1,4 +1,5 @@
 import { useState, useRef } from 'react'
+import { api, type MaintenanceResult } from '../api'
 import { useNavigate } from 'react-router-dom'
 import { useData } from '../context/DataContext'
 import { computeFederalHolidays, getFederalHolidayLabels } from '../utils/shiftUtils'
@@ -70,6 +71,25 @@ export default function Settings() {
 
   const [settings, setSettings] = useState(apiSettings)
   const [saved, setSaved] = useState(false)
+
+  // ── Maintenance ────────────────────────────────────────────────────────────
+  const [maintState, setMaintState] = useState<'idle' | 'running' | 'done' | 'error'>('idle')
+  const [maintResult, setMaintResult] = useState<MaintenanceResult | null>(null)
+  const [maintError, setMaintError] = useState<string | null>(null)
+
+  const runMaintenance = async () => {
+    setMaintState('running')
+    setMaintResult(null)
+    setMaintError(null)
+    try {
+      const result = await api.db.maintenance()
+      setMaintResult(result)
+      setMaintState('done')
+    } catch (err) {
+      setMaintError(String(err))
+      setMaintState('error')
+    }
+  }
 
   // ── Export / Import ────────────────────────────────────────────────────────
   const importInputRef = useRef<HTMLInputElement>(null)
@@ -795,6 +815,80 @@ export default function Settings() {
         {importState === 'done' && (
           <p className="mt-3 text-xs text-emerald-400">Import successful — reloading…</p>
         )}
+
+        {/* ── Maintenance ─────────────────────────────────────────────── */}
+        <div className="border-t border-gray-800 mt-5 pt-5">
+          <p className="text-xs text-gray-500 font-semibold uppercase tracking-wider mb-1">Database Maintenance</p>
+          <p className="text-xs text-gray-600 mb-3">
+            Checkpoints the WAL file and runs VACUUM to compact the database.
+            A backup copy (<span className="font-mono">bpt.db.bak</span>) is created automatically before every import.
+          </p>
+          <button
+            onClick={runMaintenance}
+            disabled={maintState === 'running'}
+            className="inline-flex items-center gap-2 px-4 py-2 bg-gray-800 border border-gray-700 text-gray-200 text-sm rounded-lg hover:bg-gray-700 hover:border-gray-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {maintState === 'running' ? (
+              <>
+                <svg className="w-4 h-4 animate-spin text-indigo-400" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+                </svg>
+                Running…
+              </>
+            ) : (
+              <>
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                    d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+                Run Maintenance
+              </>
+            )}
+          </button>
+
+          {maintState === 'error' && maintError && (
+            <p className="mt-2 text-xs text-red-400">{maintError}</p>
+          )}
+          {maintState === 'done' && maintResult && (
+            <div className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-3">
+              {[
+                {
+                  label: 'WAL checkpointed',
+                  value: `${maintResult.walPagesCheckpointed} pages`,
+                  ok: maintResult.walPagesRemaining === 0,
+                },
+                {
+                  label: 'WAL remaining',
+                  value: `${maintResult.walPagesRemaining} pages`,
+                  ok: maintResult.walPagesRemaining === 0,
+                },
+                {
+                  label: 'Size before',
+                  value: `${(maintResult.dbSizeBefore / 1024 / 1024).toFixed(2)} MB`,
+                  ok: true,
+                },
+                {
+                  label: 'Size after',
+                  value: `${(maintResult.dbSizeAfter / 1024 / 1024).toFixed(2)} MB`,
+                  ok: maintResult.dbSizeAfter <= maintResult.dbSizeBefore,
+                },
+              ].map(({ label, value, ok }) => (
+                <div key={label} className="bg-gray-800/60 rounded-lg px-3 py-2">
+                  <p className="text-xs text-gray-500 mb-0.5">{label}</p>
+                  <p className={`text-sm font-medium ${ok ? 'text-emerald-400' : 'text-amber-400'}`}>{value}</p>
+                </div>
+              ))}
+            </div>
+          )}
+          {maintState === 'done' && maintResult && (
+            <p className="mt-2 text-xs text-gray-600">
+              {maintResult.backupExists
+                ? 'A pre-import backup (bpt.db.bak) exists in the data directory.'
+                : 'No backup file found — run an import first to create one.'}
+            </p>
+          )}
+        </div>
       </section>
 
       {/* Spacer so sticky bar doesn't overlap content */}
