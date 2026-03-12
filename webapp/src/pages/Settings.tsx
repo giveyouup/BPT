@@ -125,8 +125,12 @@ export default function Settings() {
         body: JSON.stringify(pendingImport),
       })
       if (!res.ok) {
-        const err = await res.json()
-        throw new Error(err.error ?? 'Import failed')
+        let errorMsg = `Server error ${res.status} ${res.statusText}`
+        try {
+          const err = await res.json()
+          if (err.error) errorMsg = err.error
+        } catch { /* response body wasn't JSON, keep the status message */ }
+        throw new Error(errorMsg)
       }
       setImportState('done')
       setTimeout(() => window.location.reload(), 1200)
