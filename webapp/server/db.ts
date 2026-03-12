@@ -1,7 +1,9 @@
 import Database from 'better-sqlite3'
 import path from 'path'
 import fs from 'fs'
-import type { MonthlyReport, Schedule, Settings, StipendMapping } from '../src/types'
+import { randomUUID } from 'crypto'
+import type { MonthlyReport, Schedule, Settings, StipendMapping, CptRange } from '../src/types'
+import { DEFAULT_CPT_RANGES } from '../src/utils/cptLookup'
 
 const DATA_DIR = process.env.DATA_DIR ?? '/opt/stacks/BPT'
 const DB_PATH = path.join(DATA_DIR, 'bpt.db')
@@ -32,7 +34,23 @@ db.exec(`
     id TEXT PRIMARY KEY,
     data TEXT NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS cpt_ranges (
+    id TEXT PRIMARY KEY,
+    lo INTEGER NOT NULL,
+    hi INTEGER NOT NULL,
+    label TEXT NOT NULL
+  );
 `)
+
+function seedCptRanges() {
+  const { count } = db.prepare('SELECT COUNT(*) as count FROM cpt_ranges').get() as { count: number }
+  if (count > 0) return
+  const insert = db.prepare('INSERT INTO cpt_ranges (id, lo, hi, label) VALUES (?, ?, ?, ?)')
+  for (const r of DEFAULT_CPT_RANGES) {
+    insert.run(randomUUID(), r.lo, r.hi, r.label)
+  }
+}
+seedCptRanges()
 
 const DEFAULT_SETTINGS: Settings = {
   defaultPaddingMinutes: 30,
@@ -127,4 +145,73 @@ export function upsertStipendMapping(mapping: StipendMapping): void {
 
 export function deleteStipendMapping(id: string): void {
   db.prepare('DELETE FROM stipend_mappings WHERE id = ?').run(id)
+}
+
+// ─── CPT Ranges ───────────────────────────────────────────────────────────────
+
+export function getCptRanges(): CptRange[] {
+  return (db.prepare('SELECT id, lo, hi, label FROM cpt_ranges ORDER BY lo').all() as CptRange[])
+}
+
+export function upsertCptRange(range: CptRange): void {
+  db.prepare('INSERT OR REPLACE INTO cpt_ranges (id, lo, hi, label) VALUES (?, ?, ?, ?)').run(range.id, range.lo, range.hi, range.label)
+}
+
+export function deleteCptRange(id: string): void {
+  db.prepare('DELETE FROM cpt_ranges WHERE id = ?').run(id)
+}
+
+export function resetCptRanges(): void {
+  db.prepare('DELETE FROM cpt_ranges').run()
+  const insert = db.prepare('INSERT INTO cpt_ranges (id, lo, hi, label) VALUES (?, ?, ?, ?)')
+  for (const r of DEFAULT_CPT_RANGES) {
+    insert.run(randomUUID(), r.lo, r.hi, r.label)
+  }
+}
+
+// ─── Export / Import ──────────────────────────────────────────────────────────
+
+export interface DatabaseExport {
+  version: number
+  exportedAt: string
+  reports: MonthlyReport[]
+  schedules: Schedule[]
+  manualShifts: Record<string, string[]>
+  settings: Settings
+  stipendMappings: StipendMapping[]
+  cptRanges: CptRange[]
+}
+
+export function exportDatabase(): DatabaseExport {
+  return {
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    reports: getReports(),
+    schedules: getSchedules(),
+    manualShifts: getManualShifts(),
+    settings: getSettings(),
+    stipendMappings: getStipendMappings(),
+    cptRanges: getCptRanges(),
+  }
+}
+
+export function importDatabase(data: DatabaseExport): void {
+  const run = db.transaction(() => {
+    db.prepare('DELETE FROM reports').run()
+    db.prepare('DELETE FROM schedules').run()
+    db.prepare('DELETE FROM manual_shifts').run()
+    db.prepare('DELETE FROM settings').run()
+    db.prepare('DELETE FROM stipend_mappings').run()
+    db.prepare('DELETE FROM cpt_ranges').run()
+
+    for (const report of data.reports) upsertReport(report)
+    for (const schedule of data.schedules) upsertSchedule(schedule)
+    for (const [date, shiftTypes] of Object.entries(data.manualShifts)) {
+      upsertManualShift(date, shiftTypes)
+    }
+    upsertSettings(data.settings)
+    for (const mapping of data.stipendMappings) upsertStipendMapping(mapping)
+    for (const range of data.cptRanges ?? []) upsertCptRange(range)
+  })
+  run()
 }

@@ -1,11 +1,13 @@
-import React, { useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import React, { useState, useMemo, useEffect, useRef } from 'react'
+import { createPortal } from 'react-dom'
+import { useNavigate, useLocation } from 'react-router-dom'
 import { useData } from '../context/DataContext'
 import { computeCalendarMonthWorkingDays, computeCalendarYearStats } from '../utils/calculations'
 import {
   formatCurrency, formatHours, formatMonthYear, formatDateShort, getMonthName,
 } from '../utils/dateUtils'
 import { shiftBadgeClass } from '../utils/shiftUtils'
+import { getCptCategory } from '../utils/cptLookup'
 import type { WorkingDayStats } from '../types'
 
 
@@ -43,10 +45,21 @@ function groupByWeek(workingDays: WorkingDayStats[]): WeekBucket[] {
 
 export default function Dashboard() {
   const navigate = useNavigate()
-  const { reports, schedules: allSchedules, settings, stipendMappings: allMappings, saveReport } = useData()
+  const location = useLocation()
+  const { reports, schedules: allSchedules, settings, stipendMappings: allMappings, cptRanges, saveReport, saveManualShift, deleteManualShift } = useData()
+
+  const incomingDate = (location.state as { date?: string } | null)?.date ?? null
 
   const years = [...new Set(reports.map((r) => r.year))].sort((a, b) => b - a)
-  const [selectedYear, setSelectedYear] = useState<number>(years[0] ?? new Date().getFullYear())
+  const [selectedYear, setSelectedYear] = useState<number>(() => {
+    if (incomingDate) return parseInt(incomingDate.slice(0, 4))
+    return years[0] ?? new Date().getFullYear()
+  })
+
+  const yearStats = useMemo(
+    () => computeCalendarYearStats(selectedYear, reports, allSchedules, settings, allMappings),
+    [selectedYear, reports, allSchedules, settings, allMappings]
+  )
   const [selectedId, setSelectedId] = useState<string>('')
   const [editingDayDate, setEditingDayDate] = useState<string | null>(null)
   const [dayStipendInput, setDayStipendInput] = useState('')
@@ -54,7 +67,27 @@ export default function Dashboard() {
   const [hoursInput, setHoursInput] = useState('')
   const [hideCompensation, setHideCompensation] = useState(true)
   const [selectedWeek, setSelectedWeek] = useState<string | null>(null)
-  const [selectedDayDate, setSelectedDayDate] = useState<string | null>(null)
+  const [selectedDayDate, setSelectedDayDate] = useState<string | null>(incomingDate)
+  const [shiftPopover, setShiftPopover] = useState<{ date: string; input: string; x: number; y: number } | null>(null)
+  const shiftInputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    if (shiftPopover) setTimeout(() => shiftInputRef.current?.focus(), 0)
+  }, [shiftPopover?.date])
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') setShiftPopover(null) }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [])
+
+  // When navigating here with a pre-selected date, pick the correct month tab
+  useEffect(() => {
+    if (!incomingDate || yearStats.length === 0) return
+    const month = parseInt(incomingDate.slice(5, 7))
+    const match = yearStats.find(s => s.month === month)
+    if (match) setSelectedId(match.id)
+  }, [yearStats, incomingDate])
 
   const saveDayStipend = async (date: string) => {
     if (!selStats) return
@@ -85,6 +118,24 @@ export default function Dashboard() {
     setEditingHoursDate(null)
   }
 
+  const handleShiftSave = async (date: string) => {
+    if (!shiftPopover) return
+    const shiftTypes = shiftPopover.input.trim().split(/[\s,/]+/).map(s => s.trim()).filter(Boolean)
+    await saveManualShift(date, shiftTypes)
+    setShiftPopover(null)
+  }
+
+  const handleShiftRevert = async (date: string) => {
+    await deleteManualShift(date)
+    setShiftPopover(null)
+  }
+
+  // Set of dates that have a manual shift override
+  const manualOverrideDates = useMemo(() => {
+    const manual = allSchedules.find(s => s.id === 'manual_shifts')
+    return manual ? new Set(manual.entries.map(e => e.date)) : new Set<string>()
+  }, [allSchedules])
+
   if (reports.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center h-full text-center px-8">
@@ -108,8 +159,6 @@ export default function Dashboard() {
     )
   }
 
-  const yearStats = computeCalendarYearStats(selectedYear, reports, allSchedules, settings, allMappings)
-
   const ytdUnits = yearStats.reduce((s, m) => s + m.totalDistributableUnits, 0)
   const ytdCompensation = yearStats.reduce((s, m) => s + m.totalCompensation, 0)
   const ytdHours = yearStats.reduce((s, m) => s + m.totalHours, 0)
@@ -132,6 +181,7 @@ export default function Dashboard() {
 
 
   return (
+    <>
     <div className="p-4 md:p-8">
       <div className="flex items-center gap-4 mb-6">
         <div>
@@ -321,12 +371,27 @@ export default function Dashboard() {
                           onClick={() => setSelectedDayDate(isExpanded ? null : day.date)}
                         >
                           <td className={`py-1 text-gray-500 sticky left-0 ${isExpanded ? 'bg-indigo-950/60' : 'bg-gray-900'}`}>{formatDateShort(day.date)}</td>
-                          <td className={`py-1 sticky left-20 ${isExpanded ? 'bg-indigo-950/60' : 'bg-gray-900'}`}>
-                            <div className="flex flex-wrap gap-0.5">
-                              {day.shiftTypes.map((st) => (
-                                <span key={st} className={`font-mono px-1.5 py-0.5 rounded ${shiftBadgeClass(st)}`}>{st}</span>
-                              ))}
-                            </div>
+                          <td
+                            className={`py-1 sticky left-20 z-10 ${isExpanded ? 'bg-indigo-950/60' : 'bg-gray-900'}`}
+                            onClick={e => e.stopPropagation()}
+                          >
+                            <button
+                              className="flex flex-wrap items-center gap-0.5 hover:opacity-75 transition-opacity"
+                              onClick={e => {
+                                const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+                                setShiftPopover({ date: day.date, input: day.shiftTypes.join(' '), x: rect.left, y: rect.bottom + 4 })
+                              }}
+                            >
+                              {day.shiftTypes.length > 0
+                                ? day.shiftTypes.map((st) => (
+                                    <span key={st} className={`font-mono px-1.5 py-0.5 rounded ${shiftBadgeClass(st)}`}>{st}</span>
+                                  ))
+                                : <span className="text-gray-700 text-[10px] px-1">+</span>
+                              }
+                              {manualOverrideDates.has(day.date) && (
+                                <span className="w-1.5 h-1.5 rounded-full bg-amber-500 flex-shrink-0" title="Manual override" />
+                              )}
+                            </button>
                           </td>
                           <td className="py-1 text-gray-500 pr-3">{day.firstStartTime ?? '—'}</td>
                           <td className="py-1 text-gray-500 pr-3">{day.lastEndTime ?? '—'}</td>
@@ -399,9 +464,12 @@ export default function Dashboard() {
                             ) : (
                               <button
                                 onClick={() => { setEditingHoursDate(day.date); setHoursInput(day.hours > 0 ? day.hours.toFixed(1) : '') }}
-                                className={`hover:text-indigo-400 transition-colors ${day.isOverridden ? 'text-amber-400' : 'text-gray-400'}`}
+                                className={`group/hrs inline-flex items-center gap-1 hover:text-indigo-400 transition-colors ${day.isOverridden ? 'text-amber-400' : 'text-gray-400'}`}
                               >
                                 {day.hours > 0 ? formatHours(day.hours) : '—'}
+                                <svg className="w-2.5 h-2.5 opacity-0 group-hover/hrs:opacity-50 transition-opacity flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                                </svg>
                               </button>
                             )}
                           </td>
@@ -417,8 +485,8 @@ export default function Dashboard() {
                                     <thead>
                                       <tr className="text-gray-600 uppercase tracking-wider">
                                         <th className="pr-3 pb-1 font-semibold text-left">Ticket</th>
-                                        <th className="pr-3 pb-1 font-semibold text-left">CPT/ASA</th>
-                                        <th className="pr-3 pb-1 font-semibold text-left">Mod</th>
+                                        <th className="pr-3 pb-1 font-semibold text-left">Procedure</th>
+                                        <th className="pr-3 pb-1 font-semibold text-left">Add-ons</th>
                                         <th className="pr-3 pb-1 font-semibold text-left">Start</th>
                                         <th className="pr-3 pb-1 font-semibold text-left">End</th>
                                         <th className="pr-3 pb-1 font-semibold text-right">Base U</th>
@@ -431,8 +499,26 @@ export default function Dashboard() {
                                       {dayCases.map((c) => (
                                         <tr key={c.ticketNum} className="border-t border-gray-800/50">
                                           <td className="pr-3 py-0.5 text-gray-400 font-mono">{c.ticketNum}{c.isSplit && <span className="ml-1 text-amber-500 text-[10px]">split</span>}</td>
-                                          <td className="pr-3 py-0.5 text-gray-300">{c.primaryCptAsa || '—'}</td>
-                                          <td className="pr-3 py-0.5 text-gray-500">{c.primaryModifier || '—'}</td>
+                                          <td className="pr-3 py-0.5 text-gray-300 max-w-[180px]">{getCptCategory(c.primaryCptAsa, cptRanges) ?? (c.primaryCptAsa || '—')}</td>
+                                          <td className="pr-3 py-0.5">
+                                            {c.addOnTags.length > 0 ? (
+                                              <span className="flex flex-wrap gap-0.5">
+                                                {c.addOnTags.map((tag) => (
+                                                  <span key={tag} className={`text-[10px] px-1 py-0.5 rounded font-semibold ${
+                                                    tag === 'E'   ? 'bg-red-900/40 text-red-400' :
+                                                    tag === 'F/U' ? 'bg-amber-900/40 text-amber-400' :
+                                                    tag === 'N'   ? 'bg-blue-900/40 text-blue-400' :
+                                                    tag === 'A'   ? 'bg-red-900/40 text-red-400' :
+                                                    tag === 'Epi' ? 'bg-emerald-900/40 text-emerald-400' :
+                                                    tag === 'U'   ? 'bg-indigo-900/40 text-indigo-400' :
+                                                    'bg-gray-800 text-gray-400'
+                                                  }`}>{tag}</span>
+                                                ))}
+                                              </span>
+                                            ) : (
+                                              <span className="text-gray-700">—</span>
+                                            )}
+                                          </td>
                                           <td className="pr-3 py-0.5 text-gray-500">{c.startTime ?? '—'}</td>
                                           <td className="pr-3 py-0.5 text-gray-500">{c.endTime ?? '—'}</td>
                                           <td className="pr-3 py-0.5 text-right text-indigo-400">{c.primaryDistributionValue.toFixed(1)}</td>
@@ -462,5 +548,48 @@ export default function Dashboard() {
       )} {/* end selStats && selReport */}
 
     </div>
+
+    {/* Shift edit popover — portal-rendered to escape overflow:hidden/auto containers */}
+    {shiftPopover && createPortal(
+      <div
+        style={{ position: 'fixed', top: shiftPopover.y, left: shiftPopover.x, zIndex: 9999 }}
+        className="w-56 bg-gray-800 border border-gray-700 rounded-lg shadow-2xl p-3"
+        onClick={e => e.stopPropagation()}
+      >
+        <p className="text-xs font-semibold text-gray-200 mb-2.5">{shiftPopover.date}</p>
+        <input
+          ref={shiftInputRef}
+          type="text"
+          value={shiftPopover.input}
+          onChange={e => setShiftPopover(p => p ? { ...p, input: e.target.value } : null)}
+          onKeyDown={e => {
+            e.stopPropagation()
+            if (e.key === 'Enter') handleShiftSave(shiftPopover.date)
+            if (e.key === 'Escape') setShiftPopover(null)
+          }}
+          placeholder="e.g. G1 BR (space-separated)"
+          className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-xs text-gray-100 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-indigo-500 mb-2.5"
+        />
+        <div className="flex items-center gap-1.5">
+          <button
+            onClick={() => handleShiftSave(shiftPopover.date)}
+            className="flex-1 px-2 py-1.5 bg-indigo-600 text-white text-xs rounded-md hover:bg-indigo-500 transition-colors font-medium"
+          >Save</button>
+          {manualOverrideDates.has(shiftPopover.date) && (
+            <button
+              onClick={() => handleShiftRevert(shiftPopover.date)}
+              className="px-2 py-1.5 text-xs text-amber-400 hover:text-amber-300 border border-gray-700 rounded-md transition-colors"
+              title="Remove override and restore uploaded schedule"
+            >Revert</button>
+          )}
+          <button
+            onClick={() => setShiftPopover(null)}
+            className="px-2 py-1.5 text-xs text-gray-500 hover:text-gray-300 transition-colors"
+          >Cancel</button>
+        </div>
+      </div>,
+      document.body
+    )}
+    </>
   )
 }

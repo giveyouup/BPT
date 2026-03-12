@@ -69,6 +69,7 @@ export interface CaseSummary {
   primaryDistributionValue: number
   primaryTimeUnits: number
   addOnUnits: number
+  addOnTags: string[]   // e.g. ['N', 'A'], derived from non-primary CPT codes
   totalUnits: number
   startTime: string | null
   endTime: string | null
@@ -91,6 +92,7 @@ export interface MonthlyReport {
   unitDollarValue: number
   paddingMinutes: number
   defaultNoTimeHours: number
+  unitCorrection?: number    // manual unit adjustment (positive or negative)
   lineItems: LineItem[]
   workingDayOverrides: Record<string, number> // date -> hours
   dayStipends: Record<string, number>        // date -> additional per-day stipend
@@ -122,4 +124,11 @@ export interface Settings {
   clinicalDayStart: string // "HH:MM" — attribution cutoff & duration normalization boundary
   shiftHours: { APS: number; APS_weekend: number; BR: number; NIR: number }
   holidays: Record<number, string[]> // year -> ["YYYY-MM-DD", ...]
+}
+
+export interface CptRange {
+  id: string
+  lo: number
+  hi: number
+  label: string
 }

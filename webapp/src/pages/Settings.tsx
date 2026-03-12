@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useState, useRef } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useData } from '../context/DataContext'
 import { computeFederalHolidays, getFederalHolidayLabels } from '../utils/shiftUtils'
 import { formatDateFull, formatMonthYear } from '../utils/dateUtils'
@@ -57,16 +58,68 @@ function MonthPicker({ value, onChange, placeholder = 'Select' }: {
 }
 
 export default function Settings() {
+  const navigate = useNavigate()
   const {
     settings: apiSettings,
     saveSettings: contextSaveSettings,
     stipendMappings: ctxMappings,
     saveStipendMapping,
     deleteStipendMapping,
+    cptRanges,
   } = useData()
 
   const [settings, setSettings] = useState(apiSettings)
   const [saved, setSaved] = useState(false)
+
+  // ── Export / Import ────────────────────────────────────────────────────────
+  const importInputRef = useRef<HTMLInputElement>(null)
+  const [importState, setImportState] = useState<'idle' | 'confirm' | 'importing' | 'done' | 'error'>('idle')
+  const [importError, setImportError] = useState<string | null>(null)
+  const [pendingImport, setPendingImport] = useState<unknown>(null)
+
+  function handleImportFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = (ev) => {
+      try {
+        const data = JSON.parse(ev.target?.result as string)
+        if (!data.version || !Array.isArray(data.reports)) {
+          setImportError('Invalid backup file — missing required fields.')
+          setImportState('error')
+          return
+        }
+        setPendingImport(data)
+        setImportState('confirm')
+      } catch {
+        setImportError('Could not parse file as JSON.')
+        setImportState('error')
+      }
+    }
+    reader.readAsText(file)
+  }
+
+  async function confirmImport() {
+    if (!pendingImport) return
+    setImportState('importing')
+    try {
+      const res = await fetch('/api/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(pendingImport),
+      })
+      if (!res.ok) {
+        const err = await res.json()
+        throw new Error(err.error ?? 'Import failed')
+      }
+      setImportState('done')
+      setTimeout(() => window.location.reload(), 1200)
+    } catch (err) {
+      setImportError(String(err))
+      setImportState('error')
+    }
+  }
   const hasUnsavedChanges = JSON.stringify(settings) !== JSON.stringify(apiSettings)
   const [holidayYear, setHolidayYear] = useState(new Date().getFullYear())
   const [customDateInput, setCustomDateInput] = useState('')
@@ -644,6 +697,85 @@ export default function Settings() {
             )
           })}
         </div>
+      </section>
+
+      {/* Code Reference */}
+      <section className="mb-6">
+        <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Code Reference</h3>
+        <button
+          onClick={() => navigate('/settings/cpt-ranges')}
+          className="flex items-center justify-between w-full px-4 py-3 bg-gray-900 border border-gray-800 rounded-xl hover:border-gray-700 transition-colors group"
+        >
+          <div className="text-left">
+            <p className="text-sm font-medium text-gray-200">CPT Code Ranges</p>
+            <p className="text-xs text-gray-600 mt-0.5">{cptRanges.length} ranges configured</p>
+          </div>
+          <svg className="w-4 h-4 text-gray-600 group-hover:text-gray-400 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+          </svg>
+        </button>
+      </section>
+
+      {/* ── Backup & Restore ───────────────────────────────────────────── */}
+      <section className="mb-6">
+        <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Backup & Restore</h3>
+        <p className="text-xs text-gray-600 mb-4">
+          Export all data — reports, schedules, settings, stipend mappings, and CPT ranges — into a single JSON file.
+          Importing will <span className="text-amber-400">replace all existing data</span>.
+        </p>
+        <div className="flex items-center gap-3 flex-wrap">
+          {/* Export */}
+          <a
+            href="/api/export"
+            download
+            className="inline-flex items-center gap-2 px-4 py-2 bg-gray-800 border border-gray-700 text-gray-200 text-sm rounded-lg hover:bg-gray-700 hover:border-gray-600 transition-colors"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+            </svg>
+            Export Backup
+          </a>
+
+          {/* Import trigger */}
+          {importState === 'idle' || importState === 'error' ? (
+            <button
+              onClick={() => { setImportState('idle'); setImportError(null); importInputRef.current?.click() }}
+              className="inline-flex items-center gap-2 px-4 py-2 bg-gray-800 border border-gray-700 text-gray-200 text-sm rounded-lg hover:bg-gray-700 hover:border-gray-600 transition-colors"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l4-4m0 0l4 4m-4-4v12" />
+              </svg>
+              Import Backup
+            </button>
+          ) : null}
+
+          <input ref={importInputRef} type="file" accept=".json" className="hidden" onChange={handleImportFile} />
+        </div>
+
+        {/* Error */}
+        {importState === 'error' && importError && (
+          <p className="mt-3 text-xs text-red-400">{importError}</p>
+        )}
+
+        {/* Confirm */}
+        {importState === 'confirm' && (
+          <div className="mt-3 flex items-center gap-3 p-3 bg-amber-900/20 border border-amber-700/40 rounded-lg">
+            <svg className="w-4 h-4 text-amber-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <span className="text-xs text-amber-300 flex-1">This will replace all existing data. Are you sure?</span>
+            <button onClick={confirmImport} className="px-3 py-1 text-xs bg-amber-600 text-white rounded hover:bg-amber-500 font-medium">Yes, Import</button>
+            <button onClick={() => { setImportState('idle'); setPendingImport(null) }} className="px-3 py-1 text-xs text-gray-500 hover:text-gray-300">Cancel</button>
+          </div>
+        )}
+
+        {/* Importing / Done */}
+        {importState === 'importing' && (
+          <p className="mt-3 text-xs text-gray-400">Importing…</p>
+        )}
+        {importState === 'done' && (
+          <p className="mt-3 text-xs text-emerald-400">Import successful — reloading…</p>
+        )}
       </section>
 
       {/* Spacer so sticky bar doesn't overlap content */}

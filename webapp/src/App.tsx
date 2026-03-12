@@ -10,6 +10,7 @@ import StipendCalculator from './pages/StipendCalculator'
 import ScheduleCalendar from './pages/ScheduleCalendar'
 import Audits from './pages/Audits'
 import Settings from './pages/Settings'
+import CptRangesPage from './pages/CptRangesPage'
 
 function AppContent() {
   const { loading } = useData()
@@ -33,6 +34,7 @@ function AppContent() {
         <Route path="/schedule" element={<ScheduleCalendar />} />
         <Route path="/audits" element={<Audits />} />
         <Route path="/settings" element={<Settings />} />
+        <Route path="/settings/cpt-ranges" element={<CptRangesPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </Layout>

@@ -1,4 +1,4 @@
-import type { MonthlyReport, Schedule, Settings, StipendMapping } from './types'
+import type { MonthlyReport, Schedule, Settings, StipendMapping, CptRange } from './types'
 
 async function req<T>(method: string, url: string, body?: unknown): Promise<T> {
   const res = await fetch('/api' + url, {
@@ -35,5 +35,11 @@ export const api = {
     list: () => req<StipendMapping[]>('GET', '/stipend-mappings'),
     upsert: (m: StipendMapping) => req<void>('PUT', `/stipend-mappings/${m.id}`, m),
     delete: (id: string) => req<void>('DELETE', `/stipend-mappings/${id}`),
+  },
+  cptRanges: {
+    list: () => req<CptRange[]>('GET', '/cpt-ranges'),
+    upsert: (r: CptRange) => req<void>('PUT', `/cpt-ranges/${r.id}`, r),
+    delete: (id: string) => req<void>('DELETE', `/cpt-ranges/${id}`),
+    reset: () => req<CptRange[]>('POST', '/cpt-ranges/reset'),
   },
 }

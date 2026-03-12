@@ -6,6 +6,8 @@ import {
   getManualShifts, upsertManualShift, deleteManualShift,
   getSettings, upsertSettings,
   getStipendMappings, upsertStipendMapping, deleteStipendMapping,
+  getCptRanges, upsertCptRange, deleteCptRange as deleteCptRangeDb, resetCptRanges,
+  exportDatabase, importDatabase,
 } from './db'
 
 const app = express()
@@ -83,8 +85,50 @@ app.delete('/api/stipend-mappings/:id', (req, res) => {
   res.json({ ok: true })
 })
 
+// ─── CPT Ranges ───────────────────────────────────────────────────────────────
+app.get('/api/cpt-ranges', (_req, res) => res.json(getCptRanges()))
+
+app.put('/api/cpt-ranges/:id', (req, res) => {
+  upsertCptRange(req.body)
+  res.json({ ok: true })
+})
+
+app.delete('/api/cpt-ranges/:id', (req, res) => {
+  deleteCptRangeDb(req.params.id)
+  res.json({ ok: true })
+})
+
+app.post('/api/cpt-ranges/reset', (_req, res) => {
+  resetCptRanges()
+  res.json(getCptRanges())
+})
+
+// ─── Export / Import ──────────────────────────────────────────────────────────
+
+app.get('/api/export', (_req, res) => {
+  const data = exportDatabase()
+  const date = new Date().toISOString().slice(0, 10)
+  res.setHeader('Content-Disposition', `attachment; filename="bpt-backup-${date}.json"`)
+  res.setHeader('Content-Type', 'application/json')
+  res.send(JSON.stringify(data, null, 2))
+})
+
+app.post('/api/import', (req, res) => {
+  try {
+    const data = req.body
+    if (!data.version || !Array.isArray(data.reports) || !Array.isArray(data.schedules)) {
+      return res.status(400).json({ error: 'Invalid backup file — missing required fields.' })
+    }
+    importDatabase(data)
+    res.json({ ok: true })
+  } catch (err) {
+    res.status(500).json({ error: String(err) })
+  }
+})
+
 // ─── Serve static frontend ────────────────────────────────────────────────────
 
+const __dirname = path.dirname(new URL(import.meta.url).pathname)
 const distPath = path.resolve(__dirname, '../../dist')
 app.use(express.static(distPath))
 app.get('*', (_req, res) => res.sendFile(path.join(distPath, 'index.html')))

@@ -20,10 +20,14 @@ export default function MonthlyDetail() {
   const [editingUnitValue, setEditingUnitValue] = useState(false)
   const [unitValueInput, setUnitValueInput] = useState('')
 
+  // Unit correction edit
+  const [editingCorrection, setEditingCorrection] = useState(false)
+  const [correctionInput, setCorrectionInput] = useState('')
+
   // Case filter
   const [caseFilter, setCaseFilter] = useState('')
 
-  const { reports, schedules: allSchedules, settings, stipendMappings: allMappings, saveReport, deleteReport } = useData()
+  const { reports, schedules: allSchedules, settings, stipendMappings: allMappings, cptRanges, saveReport, deleteReport } = useData()
 
   if (!id) return null
   const liveReport = reports.find((r) => r.id === id)
@@ -53,6 +57,14 @@ export default function MonthlyDetail() {
     refresh()
   }
 
+  const saveCorrection = async () => {
+    const val = parseFloat(correctionInput)
+    if (isNaN(val)) return
+    await saveReport({ ...liveReport, unitCorrection: val === 0 ? undefined : val })
+    setEditingCorrection(false)
+    refresh()
+  }
+
   const handleDelete = async () => {
     if (!confirm(`Delete ${formatMonthYear(liveReport.year, liveReport.month)} report? This cannot be undone.`)) return
     await deleteReport(liveReport.id)
@@ -69,7 +81,10 @@ export default function MonthlyDetail() {
       formatDateFull(c.serviceDate).toLowerCase().includes(q)
     )
   })
-  const filteredTotal = filteredCases.reduce((s, c) => s + c.totalUnits, 0)
+  const filteredTotal       = filteredCases.reduce((s, c) => s + c.totalUnits, 0)
+  const filteredBaseUnits   = filteredCases.reduce((s, c) => s + c.primaryDistributionValue, 0)
+  const filteredTimeUnits   = filteredCases.reduce((s, c) => s + c.primaryTimeUnits, 0)
+  const filteredAddOnUnits  = filteredCases.reduce((s, c) => s + c.addOnUnits, 0)
 
 
   return (
@@ -131,6 +146,37 @@ export default function MonthlyDetail() {
             )}
             <span>&middot;</span>
             <span>{liveReport.paddingMinutes}min padding</span>
+            <span>&middot;</span>
+            {editingCorrection ? (
+              <span className="inline-flex items-center gap-1.5">
+                <span>Correction:</span>
+                <input type="number" step="0.01" value={correctionInput}
+                  onChange={(e) => setCorrectionInput(e.target.value)}
+                  className={`${inputCls} w-24 px-1.5 py-0.5 text-xs`}
+                  autoFocus
+                  onKeyDown={(e) => { if (e.key === 'Enter') saveCorrection(); if (e.key === 'Escape') setEditingCorrection(false) }}
+                />
+                <span>units</span>
+                <button onClick={saveCorrection} className="text-xs text-indigo-400 font-medium hover:text-indigo-300">Save</button>
+                <button onClick={() => setEditingCorrection(false)} className="text-xs text-gray-600 hover:text-gray-400">Cancel</button>
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1">
+                <span className={liveReport.unitCorrection ? (liveReport.unitCorrection > 0 ? 'text-emerald-500' : 'text-red-500') : ''}>
+                  {liveReport.unitCorrection
+                    ? `${liveReport.unitCorrection > 0 ? '+' : ''}${liveReport.unitCorrection} unit correction`
+                    : 'no unit correction'}
+                </span>
+                <button
+                  onClick={() => { setCorrectionInput(String(liveReport.unitCorrection ?? 0)); setEditingCorrection(true) }}
+                  className="text-gray-700 hover:text-indigo-400 transition-colors" title="Edit unit correction">
+                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                      d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                  </svg>
+                </button>
+              </span>
+            )}
           </div>
         </div>
         <button onClick={handleDelete}
@@ -184,7 +230,7 @@ export default function MonthlyDetail() {
           <table className="w-full text-sm min-w-max">
             <thead>
               <tr className="border-b border-gray-800">
-                {['Ticket', 'Date', 'Start', 'End', 'Procedure', 'Type', 'Modifier', 'Base Units', 'Time Units', 'Add-ons', 'Total Units', 'Split'].map((h, i) => (
+                {['Ticket', 'Date', 'Start', 'End', 'Procedure', 'Type', 'Base Units', 'Time Units', 'Add-ons', '+Units', 'Total Units', 'Split'].map((h, i) => (
                   <th key={h} className={`px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider${i === 0 ? ' sticky left-0 z-10 bg-gray-900' : i === 1 ? ' sticky left-[104px] z-10 bg-gray-900' : ''}`}>{h}</th>
                 ))}
               </tr>
@@ -203,14 +249,28 @@ export default function MonthlyDetail() {
                   <td className="px-4 py-3 font-mono text-xs text-gray-400 whitespace-nowrap">{c.startTime ?? '—'}</td>
                   <td className="px-4 py-3 font-mono text-xs text-gray-400 whitespace-nowrap">{c.endTime ?? '—'}</td>
                   <td className="px-4 py-3 font-mono text-xs text-gray-400">{c.primaryCptAsa}</td>
-                  <td className="px-4 py-3 text-xs text-gray-500 max-w-[160px]">{getCptCategory(c.primaryCptAsa) ?? '—'}</td>
-                  <td className="px-4 py-3">
-                    {c.primaryModifier
-                      ? <span className="bg-gray-800 text-gray-400 text-xs px-1.5 py-0.5 rounded font-mono">{c.primaryModifier}</span>
-                      : '—'}
-                  </td>
+                  <td className="px-4 py-3 text-xs text-gray-500 max-w-[160px]">{getCptCategory(c.primaryCptAsa, cptRanges) ?? '—'}</td>
                   <td className="px-4 py-3 text-gray-400">{c.primaryDistributionValue.toFixed(2)}</td>
                   <td className="px-4 py-3 text-gray-400">{c.primaryTimeUnits.toFixed(2)}</td>
+                  <td className="px-4 py-3">
+                    {c.addOnTags.length > 0 ? (
+                      <span className="flex flex-wrap gap-1">
+                        {c.addOnTags.map((tag) => (
+                          <span key={tag} className={`text-xs px-1.5 py-0.5 rounded font-semibold ${
+                            tag === 'E'   ? 'bg-red-900/40 text-red-400' :
+                            tag === 'F/U' ? 'bg-amber-900/40 text-amber-400' :
+                            tag === 'N'   ? 'bg-blue-900/40 text-blue-400' :
+                            tag === 'A'   ? 'bg-red-900/40 text-red-400' :
+                            tag === 'Epi' ? 'bg-emerald-900/40 text-emerald-400' :
+                            tag === 'U'   ? 'bg-indigo-900/40 text-indigo-400' :
+                            'bg-gray-800 text-gray-400'
+                          }`}>{tag}</span>
+                        ))}
+                      </span>
+                    ) : (
+                      <span className="text-gray-700">—</span>
+                    )}
+                  </td>
                   <td className="px-4 py-3 text-gray-500">{c.addOnUnits > 0 ? `+${c.addOnUnits.toFixed(2)}` : '—'}</td>
                   <td className="px-4 py-3 font-semibold text-indigo-400">{c.totalUnits.toFixed(2)}</td>
                   <td className="px-4 py-3 flex items-center gap-1 flex-wrap">
@@ -227,8 +287,13 @@ export default function MonthlyDetail() {
                 <td className="px-4 py-3 text-xs font-semibold text-gray-500 sticky left-0 z-10 bg-gray-800" colSpan={2}>
                   {caseFilter.trim() ? 'Filtered Total' : 'Total'}
                 </td>
-                <td className="px-4 py-3 text-xs font-semibold text-gray-500" colSpan={7}></td>
-                <td className="px-4 py-3 font-semibold text-indigo-400" colSpan={3}>{filteredTotal.toFixed(2)}</td>
+                <td colSpan={4}></td>
+                <td className="px-4 py-3 font-semibold text-gray-400">{filteredBaseUnits.toFixed(2)}</td>
+                <td className="px-4 py-3 font-semibold text-gray-400">{filteredTimeUnits.toFixed(2)}</td>
+                <td></td>
+                <td className="px-4 py-3 font-semibold text-gray-400">{filteredAddOnUnits > 0 ? `+${filteredAddOnUnits.toFixed(2)}` : '—'}</td>
+                <td className="px-4 py-3 font-semibold text-indigo-400">{filteredTotal.toFixed(2)}</td>
+                <td></td>
               </tr>
             </tfoot>
           </table>
@@ -245,6 +310,11 @@ export default function MonthlyDetail() {
               <p className="text-sm text-gray-300">Unit-Based Compensation</p>
               <p className="text-xs text-gray-600 mt-0.5">
                 {liveStats.totalDistributableUnits.toFixed(2)} units × ${liveReport.unitDollarValue.toFixed(2)}/unit
+                {liveReport.unitCorrection ? (
+                  <span className={`ml-1 ${liveReport.unitCorrection > 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                    (incl. {liveReport.unitCorrection > 0 ? '+' : ''}{liveReport.unitCorrection} correction)
+                  </span>
+                ) : null}
               </p>
             </div>
             <p className="text-base font-semibold text-gray-100">{formatCurrencyFull(liveStats.unitCompensation)}</p>

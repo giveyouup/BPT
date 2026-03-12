@@ -211,6 +211,24 @@ function computeWorkingDays(
   return days.sort((a, b) => a.date.localeCompare(b.date))
 }
 
+/** Classify a CPT/ASA string into an add-on badge tag, or null if not a known add-on. */
+function classifyAddOnCpt(cptAsa: string): string | null {
+  const primary = cptAsa.split('/')[0].trim()
+  const digits = primary.replace(/\D/g, '')
+  if (!digits) return null
+  const code = parseInt(digits, 10)
+  if (isNaN(code)) return null
+
+  // Epi checked before N because 62324/62325 fall inside the N range
+  if (code === 1996 || code === 62324 || code === 62325) return 'Epi'
+  if ([99100, 99116, 99135, 99140].includes(code)) return 'E'
+  if (code >= 99221 && code <= 99239) return 'F/U'
+  if ((code >= 64400 && code <= 64999) || (code >= 62310 && code <= 62350)) return 'N'
+  if (code === 36620 || (code >= 36625 && code <= 36660)) return 'A'
+  if (code === 76937 || code === 76942) return 'U'
+  return null
+}
+
 function computeCaseSummaries(lineItems: LineItem[]): CaseSummary[] {
   const byTicket = new Map<string, LineItem[]>()
   for (const li of lineItems) {
@@ -222,9 +240,16 @@ function computeCaseSummaries(lineItems: LineItem[]): CaseSummary[] {
   for (const [ticketNum, lines] of byTicket) {
     const primaryLine = lines.find((l) => l.startTime && l.endTime) ?? lines[0]
     const totalUnits = lines.reduce((s, l) => s + l.totalDistributableUnits, 0)
-    const addOnUnits = lines
-      .filter((l) => l !== primaryLine)
-      .reduce((s, l) => s + l.totalDistributableUnits, 0)
+    const addOnLines = lines.filter((l) => l !== primaryLine)
+    const addOnUnits = addOnLines.reduce((s, l) => s + l.totalDistributableUnits, 0)
+
+    // Deduplicate add-on tags, preserving order of first occurrence
+    const seen = new Set<string>()
+    const addOnTags: string[] = []
+    for (const l of addOnLines) {
+      const tag = classifyAddOnCpt(l.cptAsa)
+      if (tag && !seen.has(tag)) { seen.add(tag); addOnTags.push(tag) }
+    }
 
     let dur: number | null = null
     if (primaryLine.startTime && primaryLine.endTime) {
@@ -240,6 +265,7 @@ function computeCaseSummaries(lineItems: LineItem[]): CaseSummary[] {
       primaryDistributionValue: primaryLine.distributionValue,
       primaryTimeUnits: primaryLine.timeUnits,
       addOnUnits,
+      addOnTags,
       totalUnits,
       startTime: primaryLine.startTime,
       endTime: primaryLine.endTime,
@@ -381,7 +407,9 @@ export function computeMonthlyStats(
   const defaultNoTimeHours = settings?.defaultNoTimeHours ?? report.defaultNoTimeHours
 
   const totalCases = new Set(lineItems.map((li) => li.ticketNum)).size
-  const totalDistributableUnits = lineItems.reduce((s, li) => s + li.totalDistributableUnits, 0)
+  const rawUnits = lineItems.reduce((s, li) => s + li.totalDistributableUnits, 0)
+  const unitCorrection = report.unitCorrection ?? 0
+  const totalDistributableUnits = rawUnits + unitCorrection
   const unitCompensation = totalDistributableUnits * unitDollarValue
 
   const shiftMap = allSchedules?.length ? buildShiftMap(allSchedules) : undefined
@@ -497,7 +525,7 @@ export function computeCalendarMonthWorkingDays(
     : null
 
   // Compute PCR-based working days (unitDollarValue=undefined, we'll annotate after)
-  const pcrDays = computeWorkingDays(
+  const rawPcrDays = computeWorkingDays(
     allItems, paddingMinutes, defaultNoTimeHours, mergedOverrides,
     shiftMap, settings.shiftHours, holidayList,
     undefined, applicableMapping, undefined, clinicalDayStartMins
@@ -505,13 +533,13 @@ export function computeCalendarMonthWorkingDays(
 
   const labeledDayStipends = labeledReport?.dayStipends ?? {}
 
-  // Annotate with correct per-report unit pay and per-day additional stipend
-  for (const day of pcrDays) {
-    day.totalUnits = dailyUnits.get(day.date) ?? 0
-    day.unitPay = dailyUnitPay.get(day.date) ?? 0
-    day.additionalStipend = labeledDayStipends[day.date] ?? 0
-    day.totalDayPay = day.unitPay + day.stipendAmount + day.additionalStipend
-  }
+  // Annotate with correct per-report unit pay and per-day additional stipend (immutably)
+  const pcrDays = rawPcrDays.map(day => {
+    const totalUnits      = dailyUnits.get(day.date) ?? 0
+    const unitPay         = dailyUnitPay.get(day.date) ?? 0
+    const additionalStipend = labeledDayStipends[day.date] ?? 0
+    return { ...day, totalUnits, unitPay, additionalStipend, totalDayPay: unitPay + day.stipendAmount + additionalStipend }
+  })
 
   const pcrDayMap = new Map(pcrDays.map((d) => [d.date, d]))
   const result: WorkingDayStats[] = [...pcrDays]
@@ -607,6 +635,11 @@ export function computeCalendarMonthStats(
         totalDistributableUnits += li.totalDistributableUnits
         unitCompensation += li.totalDistributableUnits * report.unitDollarValue
       }
+    }
+    // Apply manual unit correction from any report whose billing label matches this calendar month
+    if (report.year === calYear && report.month === calMonth && report.unitCorrection) {
+      totalDistributableUnits += report.unitCorrection
+      unitCompensation += report.unitCorrection * report.unitDollarValue
     }
   }
 

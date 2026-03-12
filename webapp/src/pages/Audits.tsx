@@ -110,9 +110,8 @@ export default function Audits() {
     [allDays]
   )
 
-  function goToSchedule(date: string) {
-    const [y, m] = date.split('-').map(Number)
-    navigate('/schedule', { state: { year: y, month: m } })
+  function goToDashboard(date: string) {
+    navigate('/', { state: { date } })
   }
 
   async function handleReassign() {
@@ -236,9 +235,9 @@ export default function Audits() {
                         return (
                           <Fragment key={day.date}>
                             <tr className={`border-b border-gray-800 ${isOpen ? 'bg-indigo-950/30' : 'hover:bg-gray-800/40'}`}>
-                              <td onClick={() => goToSchedule(day.date)} className="px-4 py-3 text-gray-200 whitespace-nowrap cursor-pointer hover:text-indigo-400 transition-colors">{formatDateFull(day.date)}</td>
-                              <td onClick={() => goToSchedule(day.date)} className="px-4 py-3 text-gray-500 whitespace-nowrap cursor-pointer hover:text-indigo-400 transition-colors">{getDow(day.date)}</td>
-                              <td onClick={() => goToSchedule(day.date)} className="px-4 py-3 cursor-pointer group">
+                              <td onClick={() => goToDashboard(day.date)} className="px-4 py-3 text-gray-200 whitespace-nowrap cursor-pointer hover:text-indigo-400 transition-colors">{formatDateFull(day.date)}</td>
+                              <td onClick={() => goToDashboard(day.date)} className="px-4 py-3 text-gray-500 whitespace-nowrap cursor-pointer hover:text-indigo-400 transition-colors">{getDow(day.date)}</td>
+                              <td onClick={() => goToDashboard(day.date)} className="px-4 py-3 cursor-pointer group">
                                 {day.shiftTypes.length === 0 ? (
                                   <span className="text-xs text-gray-600 italic group-hover:text-indigo-400 transition-colors">Unscheduled</span>
                                 ) : (

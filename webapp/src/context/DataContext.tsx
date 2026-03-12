@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState, useMemo } from 'react'
-import type { MonthlyReport, Schedule, Settings, StipendMapping } from '../types'
+import type { MonthlyReport, Schedule, Settings, StipendMapping, CptRange } from '../types'
 import { api } from '../api'
 import { parseShiftSummary } from '../utils/shiftUtils'
 
@@ -38,6 +38,7 @@ interface DataContextValue {
   schedules: Schedule[]
   settings: Settings
   stipendMappings: StipendMapping[]
+  cptRanges: CptRange[]
   loading: boolean
   saveReport: (r: MonthlyReport) => Promise<void>
   deleteReport: (id: string) => Promise<void>
@@ -48,6 +49,9 @@ interface DataContextValue {
   saveSettings: (s: Settings) => Promise<void>
   saveStipendMapping: (m: StipendMapping) => Promise<void>
   deleteStipendMapping: (id: string) => Promise<void>
+  saveCptRange: (r: CptRange) => Promise<void>
+  deleteCptRange: (id: string) => Promise<void>
+  resetCptRanges: () => Promise<void>
 }
 
 const DataContext = createContext<DataContextValue | null>(null)
@@ -65,6 +69,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
   const [manualShifts, setManualShifts] = useState<Record<string, string[]>>({})
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS)
   const [rawStipendMappings, setRawStipendMappings] = useState<StipendMapping[]>([])
+  const [cptRanges, setCptRanges] = useState<CptRange[]>([])
 
   useEffect(() => {
     Promise.all([
@@ -73,12 +78,14 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
       api.manualShifts.list(),
       api.settings.get(),
       api.stipendMappings.list(),
-    ]).then(([rpts, scheds, manual, setts, mappings]) => {
+      api.cptRanges.list(),
+    ]).then(([rpts, scheds, manual, setts, mappings, cptRangesData]) => {
       setRawReports(rpts)
       setRawSchedules(scheds)
       setManualShifts(manual)
       setSettings({ ...DEFAULT_SETTINGS, ...setts, shiftHours: { ...DEFAULT_SETTINGS.shiftHours, ...setts.shiftHours } })
       setRawStipendMappings(mappings)
+      setCptRanges(cptRangesData)
       setLoading(false)
     }).catch((err) => {
       console.error('Failed to load data:', err)
@@ -193,13 +200,33 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
     setRawStipendMappings((prev) => prev.filter((m) => m.id !== id))
   }
 
+  const saveCptRange = async (range: CptRange) => {
+    await api.cptRanges.upsert(range)
+    setCptRanges(prev => {
+      const idx = prev.findIndex(r => r.id === range.id)
+      if (idx >= 0) { const next = [...prev]; next[idx] = range; return next }
+      return [...prev, range].sort((a, b) => a.lo - b.lo)
+    })
+  }
+
+  const deleteCptRange = async (id: string) => {
+    await api.cptRanges.delete(id)
+    setCptRanges(prev => prev.filter(r => r.id !== id))
+  }
+
+  const resetCptRanges = async () => {
+    const fresh = await api.cptRanges.reset()
+    setCptRanges(fresh)
+  }
+
   return (
     <DataContext.Provider value={{
-      reports, schedules, settings, stipendMappings, loading,
+      reports, schedules, settings, stipendMappings, cptRanges, loading,
       saveReport, deleteReport,
       saveSchedule, deleteSchedule, saveManualShift, deleteManualShift,
       saveSettings,
       saveStipendMapping, deleteStipendMapping,
+      saveCptRange, deleteCptRange, resetCptRanges,
     }}>
       {children}
     </DataContext.Provider>

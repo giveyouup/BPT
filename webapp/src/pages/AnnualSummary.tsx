@@ -1,17 +1,17 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   BarChart, Bar, Cell, LineChart, Line, XAxis, YAxis, CartesianGrid,
   Tooltip, Legend, ResponsiveContainer, ReferenceLine,
 } from 'recharts'
 import { useData } from '../context/DataContext'
-import { computeCalendarYearStats } from '../utils/calculations'
+import { computeCalendarYearStats, getStipendForDay, getApplicableMapping } from '../utils/calculations'
 import {
   formatCurrency, formatCurrencyFull, formatDateFull, formatHours, formatMonthYear, getMonthName,
 } from '../utils/dateUtils'
 import StatCard from '../components/StatCard'
 import { isOffDayShift, getFixedShiftKey, isCallShift, resolveShiftAlias } from '../utils/shiftUtils'
-import type { MonthlyStats } from '../types'
+import type { MonthlyStats, StipendMapping } from '../types'
 
 function shiftSortKey(shift: string): string {
   const u = shift.toUpperCase()
@@ -53,34 +53,83 @@ type ShiftRow = {
   isFixed: boolean
 }
 
-function buildShiftStats(stats: MonthlyStats[], cutoff: string | null): ShiftRow[] {
+function buildShiftStats(stats: MonthlyStats[], cutoff: string | null, allMappings: StipendMapping[], unitRateOverride: number | null = null): ShiftRow[] {
   type Entry = { hours: number; days: number; units: number; pay: number }
   const map = new Map<string, Entry>()
+
+  function entry(key: string): Entry {
+    if (!map.has(key)) map.set(key, { hours: 0, days: 0, units: 0, pay: 0 })
+    return map.get(key)!
+  }
+
+  function shiftKey(canonical: string, isCallWeekend: boolean): string {
+    const isFixed = !!getFixedShiftKey(canonical)
+    return (!isFixed && isCallShift(canonical))
+      ? `${canonical} ${isCallWeekend ? 'WE' : 'WD'}`
+      : canonical
+  }
+
   for (const month of stats) {
+    // Find the applicable stipend mapping for this month (same logic as computeCalendarMonthStats)
+    const applicableMapping = getApplicableMapping(month.year, month.month, allMappings)
+
     for (const day of month.workingDays) {
       if (day.shiftTypes.length === 0) continue
       if (cutoff && day.date > cutoff) continue
-      for (const rawSt of day.shiftTypes) {
-        if (isOffDayShift(rawSt)) continue
-        const canonical = resolveShiftAlias(rawSt.toUpperCase())
-        const isFixed = !!getFixedShiftKey(canonical)
-        const key = (!isFixed && isCallShift(canonical))
-          ? `${canonical} ${day.isCallWeekend ? 'WE' : 'WD'}`
-          : canonical
-        if (!map.has(key)) map.set(key, { hours: 0, days: 0, units: 0, pay: 0 })
-        const entry = map.get(key)!
-        entry.hours += day.hours
-        entry.days++
-        entry.units += day.totalUnits
-        entry.pay += day.totalDayPay
+
+      // When a unit rate override is active, scale unit pay accordingly
+      const effectiveUnitPay = unitRateOverride != null
+        ? day.totalUnits * unitRateOverride
+        : day.unitPay
+      const effectiveTotalDayPay = effectiveUnitPay + day.stipendAmount + day.additionalStipend
+
+      const fixedShifts   = day.shiftTypes.filter(s => !isOffDayShift(s) && !!getFixedShiftKey(resolveShiftAlias(s.toUpperCase())))
+      const primaryShifts = day.shiftTypes.filter(s => !isOffDayShift(s) && !getFixedShiftKey(resolveShiftAlias(s.toUpperCase())))
+      const isSharedDay   = fixedShifts.length > 0 && primaryShifts.length > 0
+
+      if (isSharedDay) {
+        // Total stipend belonging to fixed shifts only
+        const fixedStipendTotal = getStipendForDay(fixedShifts, day.isCallWeekend, applicableMapping)
+        // Primary pay = effectiveTotalDayPay minus fixed stipends, split evenly if multiple primaries
+        const primaryPayEach = (effectiveTotalDayPay - fixedStipendTotal) / primaryShifts.length
+        const primaryUnitsEach = day.totalUnits / primaryShifts.length
+
+        // Primary shifts: full hours + days credit, units and pay minus fixed stipends
+        for (const rawSt of primaryShifts) {
+          const canonical = resolveShiftAlias(rawSt.toUpperCase())
+          const e = entry(shiftKey(canonical, day.isCallWeekend))
+          e.days++
+          e.hours += day.hours
+          e.units += primaryUnitsEach
+          e.pay   += primaryPayEach
+        }
+
+        // Fixed shifts: stipend added to pay only — no days, hours, or units
+        for (const rawSt of fixedShifts) {
+          const canonical = resolveShiftAlias(rawSt.toUpperCase())
+          const e = entry(canonical)
+          e.pay += getStipendForDay([rawSt], day.isCallWeekend, applicableMapping)
+        }
+      } else {
+        // Solo day: attribute everything to each shift
+        for (const rawSt of day.shiftTypes) {
+          if (isOffDayShift(rawSt)) continue
+          const canonical = resolveShiftAlias(rawSt.toUpperCase())
+          const e = entry(shiftKey(canonical, day.isCallWeekend))
+          e.days++
+          e.hours += day.hours
+          e.units += day.totalUnits
+          e.pay   += effectiveTotalDayPay
+        }
       }
     }
   }
+
   return [...map.entries()]
     .map(([shift, { hours, days, units, pay }]) => ({
       shift, days,
-      avgHours: hours > 0 ? Math.round((hours / days) * 10) / 10 : null,
-      avgUnits: Math.round((units / days) * 100) / 100,
+      avgHours: days > 0 && hours > 0 ? Math.round((hours / days) * 10) / 10 : null,
+      avgUnits: days > 0 ? Math.round((units / days) * 100) / 100 : 0,
       avgDollarPerHr: hours > 0 ? Math.round(pay / hours) : null,
       totalPay: pay,
       isFixed: !!getFixedShiftKey(shift),
@@ -94,6 +143,7 @@ function deltaLabel(actual: number, projected: number): string {
 }
 
 export default function AnnualSummary() {
+  const [hoursView, setHoursView] = useState<'month' | 'week'>('month')
   const [shiftTab, setShiftTab] = useState<'hours' | 'dollars'>('hours')
   const [shiftSort, setShiftSort] = useState<{ col: string; dir: 1 | -1 }>({ col: 'shift', dir: 1 })
   const [whatIfMappingId, setWhatIfMappingId] = useState<string | null>(null)
@@ -119,6 +169,25 @@ export default function AnnualSummary() {
   const years = [...new Set(reports.map((r) => r.year))].sort((a, b) => b - a)
   const year = yearParam ? parseInt(yearParam) : years[0]
 
+  // ── Memoized stats (must be before early return to satisfy rules of hooks) ─
+  const yearStats = useMemo(
+    () => year ? computeCalendarYearStats(year, reports, allSchedules, settings, allMappings) : [],
+    [year, reports, allSchedules, settings, allMappings]
+  )
+
+  const whatIfMapping = whatIfMappingId
+    ? allMappings.find(m => m.id === whatIfMappingId) ?? null
+    : null
+
+  // Force the selected mapping to cover all dates by stripping its date bounds
+  const whatIfYearStats = useMemo(() => {
+    if (!year || !whatIfMappingId) return null
+    const mapping = allMappings.find(m => m.id === whatIfMappingId) ?? null
+    if (!mapping) return null
+    return computeCalendarYearStats(year, reports, allSchedules, settings,
+      [{ ...mapping, effectiveDate: '0000-01-01', endDate: undefined }])
+  }, [year, whatIfMappingId, allMappings, reports, allSchedules, settings])
+
   if (!year || years.length === 0) {
     return (
       <div className="p-4 md:p-8 text-gray-500">
@@ -128,26 +197,13 @@ export default function AnnualSummary() {
     )
   }
 
-  // ── Actual stats ──────────────────────────────────────────────────────────
-  const yearStats = computeCalendarYearStats(year, reports, allSchedules, settings, allMappings)
-
+  // ── YTD aggregates ────────────────────────────────────────────────────────
   const ytdUnits    = yearStats.reduce((s, m) => s + m.totalDistributableUnits, 0)
   const ytdUnitPay  = yearStats.reduce((s, m) => s + m.unitCompensation, 0)
   const ytdStipends = yearStats.reduce((s, m) => s + m.totalStipends, 0)
   const ytdTotal    = yearStats.reduce((s, m) => s + m.totalCompensation, 0)
   const ytdHours    = yearStats.reduce((s, m) => s + m.totalHours, 0)
   const ytdCases    = yearStats.reduce((s, m) => s + m.totalCases, 0)
-
-  // ── Projection stats (ephemeral, local only) ─────────────────────────────
-  const whatIfMapping = whatIfMappingId
-    ? allMappings.find(m => m.id === whatIfMappingId) ?? null
-    : null
-
-  // Force the selected mapping to cover all dates by stripping its date bounds
-  const whatIfYearStats = whatIfMapping
-    ? computeCalendarYearStats(year, reports, allSchedules, settings,
-        [{ ...whatIfMapping, effectiveDate: '0000-01-01', endDate: undefined }])
-    : null
 
   const isProjectionActive = whatIfMapping !== null || whatIfUnitRate !== null
 
@@ -201,8 +257,14 @@ export default function AnnualSummary() {
     return max || null
   })()
 
-  const shiftStatsData    = buildShiftStats(yearStats, shiftDataCutoff)
-  const whatIfShiftStats  = whatIfYearStats ? buildShiftStats(whatIfYearStats, shiftDataCutoff) : null
+  const shiftStatsData = buildShiftStats(yearStats, shiftDataCutoff, allMappings)
+  const whatIfMappings = whatIfMapping
+    ? [{ ...whatIfMapping, effectiveDate: '0000-01-01', endDate: undefined }]
+    : allMappings
+  // Compute projected shift stats whenever either lever is active
+  const whatIfShiftStats = isProjectionActive
+    ? buildShiftStats(whatIfYearStats ?? yearStats, shiftDataCutoff, whatIfMappings, whatIfUnitRate)
+    : null
 
   // Merge actual + what-if by shift key for the table
   const shiftTableData = shiftStatsData.map(row => {
@@ -233,6 +295,27 @@ export default function AnnualSummary() {
       projRatePerUnit: whatIfUnitRate != null ? whatIfUnitRate : undefined,
     }
   })
+
+  // ── Weekly hours data ─────────────────────────────────────────────────────
+  const weeklyHoursData = useMemo(() => {
+    const weekMap = new Map<string, number>()
+    for (const month of yearStats) {
+      for (const day of month.workingDays) {
+        const [y, m, d] = day.date.split('-').map(Number)
+        const date = new Date(y, m - 1, d)
+        const dow = date.getDay()
+        date.setDate(date.getDate() + (dow === 0 ? -6 : 1 - dow))
+        const wk = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+        weekMap.set(wk, (weekMap.get(wk) ?? 0) + day.hours)
+      }
+    }
+    return Array.from(weekMap.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([iso, hours]) => {
+        const [, m, d] = iso.split('-').map(Number)
+        return { week: `${getMonthName(m).slice(0, 3)} ${d}`, hours: Math.round(hours * 10) / 10 }
+      })
+  }, [yearStats])
 
   // Dollar/hr chart data for shift analytics — use what-if when active
   const activeShiftStats = whatIfShiftStats ?? shiftStatsData
@@ -482,14 +565,31 @@ export default function AnnualSummary() {
         </div>
 
         <div className="bg-gray-900 rounded-xl border border-gray-800 p-5">
-          <h3 className="text-sm font-semibold text-gray-300 mb-4">Hours Worked per Month</h3>
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-sm font-semibold text-gray-300">Hours Worked</h3>
+            <div className="flex rounded-lg overflow-hidden border border-gray-700 text-xs">
+              {(['month', 'week'] as const).map((v) => (
+                <button key={v} onClick={() => setHoursView(v)}
+                  className={`px-3 py-1 font-medium transition-colors ${hoursView === v ? 'bg-gray-700 text-gray-100' : 'text-gray-500 hover:text-gray-300'}`}>
+                  {v === 'month' ? 'Monthly' : 'Weekly'}
+                </button>
+              ))}
+            </div>
+          </div>
           <ResponsiveContainer width="100%" height={200}>
-            <BarChart data={chartData} margin={{ top: 0, right: 8, bottom: 0, left: -10 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
-              <XAxis dataKey="month" {...AXIS_PROPS} />
+            <BarChart
+              data={hoursView === 'month' ? chartData : weeklyHoursData}
+              margin={{ top: 0, right: 8, bottom: 0, left: -10 }}
+            >
+              <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
+              <XAxis dataKey={hoursView === 'month' ? 'month' : 'week'} {...AXIS_PROPS} interval={hoursView === 'week' ? 3 : 0} />
               <YAxis {...AXIS_PROPS} />
               <Tooltip formatter={(v: number) => [formatHours(v), 'Hours']} {...CHART_STYLE} />
-              <Bar dataKey="hours" fill="#0ea5e9" radius={[4, 4, 0, 0]} />
+              {hoursView === 'week' && (
+                <ReferenceLine y={50} stroke="#f59e0b" strokeDasharray="4 4"
+                  label={{ value: '50h', position: 'right', fill: '#f59e0b', fontSize: 10 }} />
+              )}
+              <Bar dataKey="hours" fill="#0ea5e9" radius={hoursView === 'month' ? [4, 4, 0, 0] : [2, 2, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
         </div>

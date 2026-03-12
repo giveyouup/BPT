@@ -15,7 +15,7 @@ export default function CalendarMonthDetail() {
   const { yearMonth } = useParams<{ yearMonth: string }>()
   const navigate = useNavigate()
 
-  const { reports: allReports, schedules: allSchedules, settings, stipendMappings: allMappings, saveReport, saveManualShift } = useData()
+  const { reports: allReports, schedules: allSchedules, settings, stipendMappings: allMappings, cptRanges, saveReport, saveManualShift } = useData()
 
   if (!yearMonth) return null
   const [yearStr, monthStr] = yearMonth.split('-')
@@ -90,7 +90,10 @@ export default function CalendarMonthDetail() {
   const visibleCases = selectedDay
     ? stats.cases.filter((c) => c.serviceDate === selectedDay)
     : stats.cases
-  const visibleUnits = visibleCases.reduce((s, c) => s + c.totalUnits, 0)
+  const visibleUnits      = visibleCases.reduce((s, c) => s + c.totalUnits, 0)
+  const visibleBaseUnits  = visibleCases.reduce((s, c) => s + c.primaryDistributionValue, 0)
+  const visibleTimeUnits  = visibleCases.reduce((s, c) => s + c.primaryTimeUnits, 0)
+  const visibleAddOnUnits = visibleCases.reduce((s, c) => s + c.addOnUnits, 0)
 
   const prevMonth = calMonth === 1
     ? `${calYear - 1}-12`
@@ -409,7 +412,7 @@ export default function CalendarMonthDetail() {
           <table className="w-full text-sm min-w-max">
             <thead>
               <tr className="border-b border-gray-800">
-                {['Ticket', 'Date', 'Start', 'End', 'Procedure', 'Type', 'Modifier', 'Base Units', 'Time Units', 'Add-ons', 'Total Units', 'Split'].map((h, i) => (
+                {['Ticket', 'Date', 'Start', 'End', 'Procedure', 'Type', 'Base Units', 'Time Units', 'Add-ons', '+Units', 'Total Units', 'Split'].map((h, i) => (
                   <th key={h} className={`px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider${i === 0 ? ' sticky left-0 z-10 bg-gray-900' : i === 1 ? ' sticky left-[104px] z-10 bg-gray-900' : ''}`}>{h}</th>
                 ))}
               </tr>
@@ -422,14 +425,28 @@ export default function CalendarMonthDetail() {
                   <td className="px-4 py-3 font-mono text-xs text-gray-400 whitespace-nowrap">{c.startTime ?? '—'}</td>
                   <td className="px-4 py-3 font-mono text-xs text-gray-400 whitespace-nowrap">{c.endTime ?? '—'}</td>
                   <td className="px-4 py-3 font-mono text-xs text-gray-400">{c.primaryCptAsa}</td>
-                  <td className="px-4 py-3 text-xs text-gray-500 max-w-[160px]">{getCptCategory(c.primaryCptAsa) ?? '—'}</td>
-                  <td className="px-4 py-3">
-                    {c.primaryModifier
-                      ? <span className="bg-gray-800 text-gray-400 text-xs px-1.5 py-0.5 rounded font-mono">{c.primaryModifier}</span>
-                      : '—'}
-                  </td>
+                  <td className="px-4 py-3 text-xs text-gray-500 max-w-[160px]">{getCptCategory(c.primaryCptAsa, cptRanges) ?? '—'}</td>
                   <td className="px-4 py-3 text-gray-400">{c.primaryDistributionValue.toFixed(2)}</td>
                   <td className="px-4 py-3 text-gray-400">{c.primaryTimeUnits.toFixed(2)}</td>
+                  <td className="px-4 py-3">
+                    {c.addOnTags.length > 0 ? (
+                      <span className="flex flex-wrap gap-1">
+                        {c.addOnTags.map((tag) => (
+                          <span key={tag} className={`text-xs px-1.5 py-0.5 rounded font-semibold ${
+                            tag === 'E'   ? 'bg-red-900/40 text-red-400' :
+                            tag === 'F/U' ? 'bg-amber-900/40 text-amber-400' :
+                            tag === 'N'   ? 'bg-blue-900/40 text-blue-400' :
+                            tag === 'A'   ? 'bg-red-900/40 text-red-400' :
+                            tag === 'Epi' ? 'bg-emerald-900/40 text-emerald-400' :
+                            tag === 'U'   ? 'bg-indigo-900/40 text-indigo-400' :
+                            'bg-gray-800 text-gray-400'
+                          }`}>{tag}</span>
+                        ))}
+                      </span>
+                    ) : (
+                      <span className="text-gray-700">—</span>
+                    )}
+                  </td>
                   <td className="px-4 py-3 text-gray-500">{c.addOnUnits > 0 ? `+${c.addOnUnits.toFixed(2)}` : '—'}</td>
                   <td className="px-4 py-3 font-semibold text-indigo-400">{c.totalUnits.toFixed(2)}</td>
                   <td className="px-4 py-3">
@@ -441,10 +458,13 @@ export default function CalendarMonthDetail() {
             <tfoot>
               <tr className="bg-gray-800 border-t border-gray-700">
                 <td className="px-4 py-3 text-xs font-semibold text-gray-500 sticky left-0 z-10 bg-gray-800" colSpan={2}>Total</td>
-                <td className="px-4 py-3 text-xs font-semibold text-gray-500" colSpan={7}></td>
-                <td className="px-4 py-3 font-semibold text-indigo-400" colSpan={3}>
-                  {visibleUnits.toFixed(2)}
-                </td>
+                <td colSpan={4}></td>
+                <td className="px-4 py-3 font-semibold text-gray-400">{visibleBaseUnits.toFixed(2)}</td>
+                <td className="px-4 py-3 font-semibold text-gray-400">{visibleTimeUnits.toFixed(2)}</td>
+                <td></td>
+                <td className="px-4 py-3 font-semibold text-gray-400">{visibleAddOnUnits > 0 ? `+${visibleAddOnUnits.toFixed(2)}` : '—'}</td>
+                <td className="px-4 py-3 font-semibold text-indigo-400">{visibleUnits.toFixed(2)}</td>
+                <td></td>
               </tr>
             </tfoot>
           </table>
