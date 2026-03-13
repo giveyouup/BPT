@@ -408,6 +408,7 @@ function ScheduleUploadTab() {
   const [conflicts, setConflicts] = useState<ConflictEntry[]>([])
   const [showConflictModal, setShowConflictModal] = useState(false)
   const [pendingEntries, setPendingEntries] = useState<ShiftEntry[]>([])
+  const [isDuplicate, setIsDuplicate] = useState(false)
 
   const [saved, setSaved] = useState(false)
 
@@ -481,6 +482,18 @@ function ScheduleUploadTab() {
     }
 
     setPendingEntries(newEntries)
+
+    // Detect pure duplicate: all new entries match existing exactly, nothing new
+    const allMatch = newEntries.length > 0 && newEntries.every((e) => {
+      const current = existingMap.get(e.date)
+      if (!current) return false
+      return [...e.shiftTypes].sort().join(',') === [...current].sort().join(',')
+    })
+    const hasNewDates = newEntries.some((e) => !existingMap.has(e.date))
+    if (allMatch && !hasNewDates && detected.length === 0) {
+      setIsDuplicate(true)
+      return
+    }
 
     if (detected.length > 0) {
       setConflicts(detected)
@@ -567,6 +580,37 @@ function ScheduleUploadTab() {
       {saved && (
         <div className="bg-emerald-900/30 border border-emerald-800 rounded-lg px-4 py-3 mb-6 text-sm text-emerald-400">
           Schedule imported successfully.
+        </div>
+      )}
+
+      {isDuplicate && (
+        <div className="bg-amber-900/20 border border-amber-700/50 rounded-lg px-4 py-4 mb-6">
+          <div className="flex items-start gap-3">
+            <svg className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <div className="flex-1">
+              <p className="text-sm font-medium text-amber-300 mb-1">Duplicate schedule detected</p>
+              <p className="text-xs text-amber-400/80 mb-3">
+                All {pendingEntries.length} entries in this file are identical to shifts already imported.
+                No new or changed dates were found — importing would create a redundant record.
+              </p>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => { setIsDuplicate(false); doSave(pendingEntries, []) }}
+                  className="px-3 py-1.5 bg-amber-700 hover:bg-amber-600 text-white text-xs rounded-md font-medium transition-colors"
+                >
+                  Import Anyway
+                </button>
+                <button
+                  onClick={() => { setIsDuplicate(false); setFile(null); setParsedEvents(null) }}
+                  className="text-xs text-gray-500 hover:text-gray-300"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
 

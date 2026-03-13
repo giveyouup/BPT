@@ -7,6 +7,25 @@ import { formatDateFull, formatMonthYear } from '../utils/dateUtils'
 import { parseStipendMapping } from '../utils/stipendMappingParser'
 import type { StipendMapping, StipendRate } from '../types'
 
+// ─── Stipend overlap helpers ──────────────────────────────────────────────────
+
+function detectStipendOverlaps(candidate: StipendMapping, allMappings: StipendMapping[]): StipendMapping[] {
+  const cStart = candidate.effectiveDate
+  const cEnd = candidate.endDate ?? '9999-12-31'
+  return allMappings.filter((m) => {
+    if (m.id === candidate.id) return false
+    const mEnd = m.endDate ?? '9999-12-31'
+    return cStart <= mEnd && m.effectiveDate <= cEnd
+  })
+}
+
+// Last day of the month BEFORE the given "YYYY-MM-DD" date
+function prevMonthLastDay(yyyyMmDd: string): string {
+  const [y, m] = yyyyMmDd.split('-').map(Number)
+  const d = new Date(y, m - 1, 0) // day 0 of month m = last day of month m-1
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
 const inputCls = 'bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 w-24'
 const selectCls = 'bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500'
 
@@ -211,6 +230,11 @@ export default function Settings() {
   const stipendMappings = [...ctxMappings].sort((a, b) => b.effectiveDate.localeCompare(a.effectiveDate))
   const [expandedStipendId, setExpandedStipendId] = useState<string | null>(null)
   const [stipendDraft, setStipendDraft] = useState<StipendMapping | null>(null)
+  const [overlapWarning, setOverlapWarning] = useState<{
+    overlapping: StipendMapping[]
+    candidate: StipendMapping
+    source: 'edit' | 'upload'
+  } | null>(null)
 
   const expandMapping = (m: StipendMapping) => {
     setExpandedStipendId(m.id)
@@ -224,6 +248,11 @@ export default function Settings() {
 
   const saveStipend = async () => {
     if (!stipendDraft) return
+    const overlapping = detectStipendOverlaps(stipendDraft, ctxMappings)
+    if (overlapping.length > 0) {
+      setOverlapWarning({ overlapping, candidate: stipendDraft, source: 'edit' })
+      return
+    }
     await saveStipendMapping(stipendDraft)
     collapseMapping()
   }
@@ -300,8 +329,38 @@ export default function Settings() {
       effectiveDate: uploadMonth + '-01',
       rates: uploadRates,
     }
+    const overlapping = detectStipendOverlaps(mapping, ctxMappings)
+    if (overlapping.length > 0) {
+      setOverlapWarning({ overlapping, candidate: mapping, source: 'upload' })
+      return
+    }
     await saveStipendMapping(mapping)
     setUploadRates(null); setUploadFilename(''); setUploadError(null)
+  }
+
+  const handleOverlapFixAndSave = async () => {
+    if (!overlapWarning) return
+    const { overlapping, candidate, source } = overlapWarning
+    const fixDate = prevMonthLastDay(candidate.effectiveDate)
+    // Close end dates of earlier-starting overlapping mappings
+    for (const m of overlapping) {
+      if (m.effectiveDate < candidate.effectiveDate) {
+        await saveStipendMapping({ ...m, endDate: fixDate })
+      }
+    }
+    await saveStipendMapping(candidate)
+    setOverlapWarning(null)
+    if (source === 'edit') collapseMapping()
+    else { setUploadRates(null); setUploadFilename(''); setUploadError(null) }
+  }
+
+  const handleOverlapSaveAnyway = async () => {
+    if (!overlapWarning) return
+    const { candidate, source } = overlapWarning
+    await saveStipendMapping(candidate)
+    setOverlapWarning(null)
+    if (source === 'edit') collapseMapping()
+    else { setUploadRates(null); setUploadFilename(''); setUploadError(null) }
   }
 
   // Returns "Mon YYYY – Mon YYYY" or "Mon YYYY – present"
@@ -890,6 +949,82 @@ export default function Settings() {
           )}
         </div>
       </section>
+
+      {/* ── Stipend overlap warning modal ───────────────────────────────── */}
+      {overlapWarning && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+          <div className="bg-gray-900 border border-amber-700/50 rounded-2xl p-6 w-full max-w-lg shadow-2xl">
+            <div className="flex items-start gap-3 mb-4">
+              <svg className="w-5 h-5 text-amber-400 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <div>
+                <h3 className="text-sm font-semibold text-gray-100 mb-1">Overlapping Stipend Schedules</h3>
+                <p className="text-xs text-gray-500">
+                  <span className="font-medium text-amber-300">{overlapWarning.candidate.name || overlapWarning.candidate.filename}</span>
+                  {' '}(effective {formatMonthYear(...overlapWarning.candidate.effectiveDate.split('-').slice(0,2).map(Number) as [number,number])})
+                  {' '}overlaps with the following existing schedule{overlapWarning.overlapping.length !== 1 ? 's' : ''}:
+                </p>
+              </div>
+            </div>
+
+            <div className="space-y-2 mb-5">
+              {overlapWarning.overlapping.map((m) => {
+                const canFix = m.effectiveDate < overlapWarning.candidate.effectiveDate
+                const fixDate = prevMonthLastDay(overlapWarning.candidate.effectiveDate)
+                const [fy, fm] = fixDate.split('-').map(Number)
+                return (
+                  <div key={m.id} className="bg-gray-800 rounded-lg px-4 py-3">
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-sm font-medium text-gray-200">{m.name || m.filename}</span>
+                      {canFix ? (
+                        <span className="text-xs text-emerald-400 font-medium">Auto-fixable</span>
+                      ) : (
+                        <span className="text-xs text-amber-400">Manual fix needed</span>
+                      )}
+                    </div>
+                    <p className="text-xs text-gray-500">
+                      Effective {formatMonthYear(...m.effectiveDate.split('-').slice(0,2).map(Number) as [number,number])}
+                      {m.endDate ? ` – ${formatMonthYear(...m.endDate.split('-').slice(0,2).map(Number) as [number,number])}` : ' – present'}
+                    </p>
+                    {canFix && (
+                      <p className="text-xs text-emerald-500 mt-1">
+                        → End date will be set to {formatMonthYear(fy, fm)}
+                      </p>
+                    )}
+                    {!canFix && (
+                      <p className="text-xs text-amber-500/80 mt-1">
+                        → Starts after the new schedule — adjust dates manually after saving
+                      </p>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+
+            <div className="flex items-center gap-3">
+              <button
+                onClick={handleOverlapFixAndSave}
+                className="px-4 py-2 bg-emerald-700 hover:bg-emerald-600 text-white text-sm rounded-lg font-medium transition-colors"
+              >
+                Fix &amp; Save
+              </button>
+              <button
+                onClick={handleOverlapSaveAnyway}
+                className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-gray-200 text-sm rounded-lg font-medium transition-colors"
+              >
+                Save Anyway
+              </button>
+              <button
+                onClick={() => setOverlapWarning(null)}
+                className="ml-auto text-sm text-gray-500 hover:text-gray-300"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Spacer so sticky bar doesn't overlap content */}
       {hasUnsavedChanges && <div className="h-16" />}

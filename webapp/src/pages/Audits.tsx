@@ -58,6 +58,12 @@ export default function Audits() {
   const [reassignPopover, setReassignPopover] = useState<{ date: string; input: string } | null>(null)
   const [saving, setSaving] = useState(false)
   const dateInputRef = useRef<HTMLInputElement>(null)
+  const [resolvedItems, setResolvedItems] = useState<Array<{
+    fromDate: string
+    toDate: string
+    caseCount: number
+    totalUnits: number
+  }>>([])
 
   useEffect(() => {
     if (reassignPopover) setTimeout(() => dateInputRef.current?.focus(), 0)
@@ -119,6 +125,9 @@ export default function Audits() {
     const { date: fromDate, input: toDate } = reassignPopover
     if (!toDate || toDate === fromDate) { setReassignPopover(null); return }
 
+    // Capture stats before the save so we can show the resolved record
+    const day = orphanedProduction.find(d => d.date === fromDate)
+
     setSaving(true)
     try {
       // Find all reports containing line items on fromDate and mutate their serviceDate
@@ -134,6 +143,12 @@ export default function Audits() {
         )
       )
       setReassignPopover(null)
+      if (day) {
+        setResolvedItems(prev => [
+          ...prev.filter(r => r.fromDate !== fromDate),
+          { fromDate, toDate, caseCount: day.caseCount, totalUnits: day.totalUnits },
+        ])
+      }
     } finally {
       setSaving(false)
     }
@@ -180,7 +195,7 @@ export default function Audits() {
         <h2 className="text-2xl font-bold text-gray-100">Audits</h2>
         <select
           value={selectedYear}
-          onChange={e => { setSelectedYear(Number(e.target.value)); setReassignPopover(null) }}
+          onChange={e => { setSelectedYear(Number(e.target.value)); setReassignPopover(null); setResolvedItems([]) }}
           className="bg-gray-900 border border-gray-700 text-gray-300 text-sm rounded-md px-2 py-1 focus:outline-none focus:ring-1 focus:ring-indigo-500"
         >
           {years.map(y => <option key={y} value={y}>{y}</option>)}
@@ -203,14 +218,21 @@ export default function Audits() {
                 Production on Non-Working Days
               </h3>
               <SectionBadge count={orphanedProduction.length} variant="warn" />
+              {resolvedItems.length > 0 && (
+                <span className="px-2 py-0.5 text-xs font-semibold border rounded-full bg-emerald-900/30 text-emerald-500 border-emerald-800/50">
+                  {resolvedItems.length} resolved
+                </span>
+              )}
             </div>
             <p className="text-xs text-gray-600 mb-4">
               Cases recorded on unscheduled, V, H, or Postcall days that could not be attributed
               to a nearby working day via shared ticket number. Use Reassign to correct the service date in the source report.
             </p>
 
-            {orphanedProduction.length === 0 ? (
+            {orphanedProduction.length === 0 && resolvedItems.length === 0 ? (
               <EmptyCheck message={`No orphaned production found for ${selectedYear}`} />
+            ) : orphanedProduction.length === 0 ? (
+              <EmptyCheck message={`All ${resolvedItems.length} orphaned item${resolvedItems.length !== 1 ? 's' : ''} resolved for ${selectedYear}`} />
             ) : (
               <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
                 <div className="overflow-x-auto">
@@ -313,10 +335,38 @@ export default function Audits() {
                         )
                       })}
                     </tbody>
+                    {resolvedItems.length > 0 && (
+                      <tbody>
+                        {resolvedItems.map(r => (
+                          <tr key={r.fromDate} className="border-b border-emerald-900/40 bg-emerald-950/20">
+                            <td className="px-4 py-3 whitespace-nowrap">
+                              <span className="line-through text-gray-600">{formatDateFull(r.fromDate)}</span>
+                            </td>
+                            <td className="px-4 py-3 text-gray-600 whitespace-nowrap">{getDow(r.fromDate)}</td>
+                            <td className="px-4 py-3">
+                              <div className="flex items-center gap-2">
+                                <svg className="w-3.5 h-3.5 text-emerald-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                                </svg>
+                                <span className="text-xs text-emerald-400">
+                                  Reassigned to {formatDateFull(r.toDate)}
+                                </span>
+                              </div>
+                            </td>
+                            <td className="px-4 py-3 text-right text-xs text-emerald-600">{r.caseCount}</td>
+                            <td className="px-4 py-3 text-right text-xs text-emerald-600">{r.totalUnits.toFixed(2)}</td>
+                            <td />
+                          </tr>
+                        ))}
+                      </tbody>
+                    )}
                     <tfoot>
                       <tr className="bg-gray-800/60 border-t border-gray-700">
                         <td colSpan={3} className="px-4 py-2.5 text-xs font-semibold text-gray-500">
                           {orphanedProduction.length} day{orphanedProduction.length !== 1 ? 's' : ''}
+                          {resolvedItems.length > 0 && (
+                            <span className="ml-2 text-emerald-600">· {resolvedItems.length} resolved</span>
+                          )}
                         </td>
                         <td className="px-4 py-2.5 text-right text-xs font-bold text-amber-400">
                           {orphanedProduction.reduce((s, d) => s + d.caseCount, 0)}
