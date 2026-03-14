@@ -404,7 +404,7 @@ export function computeMonthlyStats(
     dayStipends,
     stipends,
   } = report
-  const defaultNoTimeHours = settings?.defaultNoTimeHours ?? report.defaultNoTimeHours
+  const defaultNoTimeHours = report.defaultNoTimeHours ?? settings?.defaultNoTimeHours ?? 4
 
   const totalCases = new Set(lineItems.map((li) => li.ticketNum)).size
   const rawUnits = lineItems.reduce((s, li) => s + li.totalDistributableUnits, 0)
@@ -515,8 +515,8 @@ export function computeCalendarMonthWorkingDays(
   }
 
   const labeledReport = allReports.find((r) => r.year === calYear && r.month === calMonth)
-  const paddingMinutes = labeledReport?.paddingMinutes ?? 30
-  const defaultNoTimeHours = settings.defaultNoTimeHours
+  const paddingMinutes = labeledReport?.paddingMinutes ?? settings.defaultPaddingMinutes ?? 30
+  const defaultNoTimeHours = labeledReport?.defaultNoTimeHours ?? settings.defaultNoTimeHours
   const holidayList = settings.holidays[calYear] ?? computeFederalHolidays(calYear)
 
   // Auto-select mapping for this calendar month (use labeled report's override if set)
