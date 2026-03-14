@@ -20,6 +20,14 @@ export default function MonthlyDetail() {
   const [editingUnitValue, setEditingUnitValue] = useState(false)
   const [unitValueInput, setUnitValueInput] = useState('')
 
+  // Padding edit
+  const [editingPadding, setEditingPadding] = useState(false)
+  const [paddingInput, setPaddingInput] = useState('')
+
+  // No-time hours edit
+  const [editingNoTime, setEditingNoTime] = useState(false)
+  const [noTimeInput, setNoTimeInput] = useState('')
+
   // Unit correction edit
   const [editingCorrection, setEditingCorrection] = useState(false)
   const [correctionInput, setCorrectionInput] = useState('')
@@ -54,6 +62,22 @@ export default function MonthlyDetail() {
     if (isNaN(val) || val <= 0) return
     await saveReport({ ...liveReport, unitDollarValue: val })
     setEditingUnitValue(false)
+    refresh()
+  }
+
+  const savePadding = async () => {
+    const val = parseInt(paddingInput)
+    if (isNaN(val) || val < 0) return
+    await saveReport({ ...liveReport, paddingMinutes: val })
+    setEditingPadding(false)
+    refresh()
+  }
+
+  const saveNoTime = async () => {
+    const val = parseFloat(noTimeInput)
+    if (isNaN(val) || val < 0) return
+    await saveReport({ ...liveReport, defaultNoTimeHours: val })
+    setEditingNoTime(false)
     refresh()
   }
 
@@ -145,7 +169,55 @@ export default function MonthlyDetail() {
               </span>
             )}
             <span>&middot;</span>
-            <span>{liveReport.paddingMinutes}min padding</span>
+            {editingPadding ? (
+              <span className="inline-flex items-center gap-1.5">
+                <input type="number" step="1" min="0" value={paddingInput}
+                  onChange={(e) => setPaddingInput(e.target.value)}
+                  className={`${inputCls} w-16 px-1.5 py-0.5 text-xs`}
+                  autoFocus
+                  onKeyDown={(e) => { if (e.key === 'Enter') savePadding(); if (e.key === 'Escape') setEditingPadding(false) }}
+                />
+                <span>min padding</span>
+                <button onClick={savePadding} className="text-xs text-indigo-400 font-medium hover:text-indigo-300">Save</button>
+                <button onClick={() => setEditingPadding(false)} className="text-xs text-gray-600 hover:text-gray-400">Cancel</button>
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1">
+                <span>{liveReport.paddingMinutes}min padding</span>
+                <button onClick={() => { setPaddingInput(String(liveReport.paddingMinutes)); setEditingPadding(true) }}
+                  className="text-gray-700 hover:text-indigo-400 transition-colors" title="Edit padding minutes">
+                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                      d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                  </svg>
+                </button>
+              </span>
+            )}
+            <span>&middot;</span>
+            {editingNoTime ? (
+              <span className="inline-flex items-center gap-1.5">
+                <input type="number" step="0.5" min="0" value={noTimeInput}
+                  onChange={(e) => setNoTimeInput(e.target.value)}
+                  className={`${inputCls} w-16 px-1.5 py-0.5 text-xs`}
+                  autoFocus
+                  onKeyDown={(e) => { if (e.key === 'Enter') saveNoTime(); if (e.key === 'Escape') setEditingNoTime(false) }}
+                />
+                <span>hrs (no-time default)</span>
+                <button onClick={saveNoTime} className="text-xs text-indigo-400 font-medium hover:text-indigo-300">Save</button>
+                <button onClick={() => setEditingNoTime(false)} className="text-xs text-gray-600 hover:text-gray-400">Cancel</button>
+              </span>
+            ) : (
+              <span className="inline-flex items-center gap-1">
+                <span>{liveReport.defaultNoTimeHours}h no-time default</span>
+                <button onClick={() => { setNoTimeInput(String(liveReport.defaultNoTimeHours)); setEditingNoTime(true) }}
+                  className="text-gray-700 hover:text-indigo-400 transition-colors" title="Edit default hours for days without times">
+                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                      d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                  </svg>
+                </button>
+              </span>
+            )}
             <span>&middot;</span>
             {editingCorrection ? (
               <span className="inline-flex items-center gap-1.5">
