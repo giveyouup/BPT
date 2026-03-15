@@ -1,6 +1,6 @@
 import { useState, useCallback, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { parseXlsx, detectMonthYear, detectMonthYearFromBuffer } from '../utils/xlsxParser'
+import { parseXlsx, detectMonthYear, detectMonthYearFromBuffer, isRawXlsx, exportCleanXlsx } from '../utils/xlsxParser'
 import { parseICS } from '../utils/icsParser'
 import { parseStipendMapping } from '../utils/stipendMappingParser'
 import { parseShiftSummary } from '../utils/shiftUtils'
@@ -80,6 +80,7 @@ function PcrUploadTab() {
   const [file, setFile] = useState<File | null>(null)
   const [parsed, setParsed] = useState<LineItem[] | null>(null)
   const [parseError, setParseError] = useState<string | null>(null)
+  const [wasRaw, setWasRaw] = useState(false)
 
   const [month, setMonth] = useState(new Date().getMonth() + 1)
   const [year, setYear] = useState(new Date().getFullYear())
@@ -94,6 +95,7 @@ function PcrUploadTab() {
     setFile(f)
     setParseError(null)
     setParsed(null)
+    setWasRaw(false)
     setShowConflict(false)
     setMultiMonthMode('none')
     try {
@@ -106,6 +108,8 @@ function PcrUploadTab() {
         const existingReport = reports.find((r) => r.id === existingId)
         if (existingReport) setUnitValue(existingReport.unitDollarValue.toFixed(2))
       }
+      const raw = isRawXlsx(buffer)
+      setWasRaw(raw)
       const items = parseXlsx(buffer)
       setParsed(items)
       const distinctMonths = new Set(items.map((li) => li.serviceDate.slice(0, 7)))
@@ -289,6 +293,23 @@ function PcrUploadTab() {
             <p className="text-xs text-amber-500 mt-1">
               {crossMonthCount} line item{crossMonthCount !== 1 ? 's' : ''} with service dates outside {MONTH_NAMES[month - 1]} {year}.
             </p>
+          )}
+          {wasRaw && parsed && (
+            <div className="mt-3 pt-3 border-t border-gray-700 flex items-center gap-2">
+              <svg className="w-4 h-4 text-emerald-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+              </svg>
+              <span className="text-xs text-gray-400">Raw format detected —</span>
+              <button
+                onClick={() => {
+                  const base = file!.name.replace(/\.[^.]+$/, '')
+                  exportCleanXlsx(parsed, `${base}_clean.xlsx`)
+                }}
+                className="text-xs text-emerald-400 hover:text-emerald-300 underline underline-offset-2"
+              >
+                Download cleaned .xlsx
+              </button>
+            </div>
           )}
         </div>
       )}

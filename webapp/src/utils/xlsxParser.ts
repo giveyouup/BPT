@@ -99,6 +99,49 @@ function detectMonthFromRows(rows: unknown[][]): { month: number; year: number }
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
+export function isRawXlsx(buffer: ArrayBuffer): boolean {
+  try {
+    const wb = XLSX.read(buffer, { type: 'array' })
+    const wsName = wb.SheetNames.find((n) => n !== 'Claude Cache') ?? wb.SheetNames[0]
+    const ws = wb.Sheets[wsName]
+    const rows = XLSX.utils.sheet_to_json<unknown[]>(ws, { header: 1, raw: true, defval: null })
+    return isRawFormat(rows)
+  } catch {
+    return false
+  }
+}
+
+const CLEAN_HEADERS = [
+  'IncidentID', 'ServiceDt', 'TicketNum', 'CPT/ASA', 'Modifier',
+  'UnitValue', 'DistributionValue', 'AgeValue',
+  'StartTime', 'EndTime', 'TotalTime', 'TimeUnits', 'TotalDistributableUnits',
+]
+
+export function exportCleanXlsx(items: LineItem[], filename: string): void {
+  const rows: unknown[][] = [CLEAN_HEADERS]
+  for (const li of items) {
+    rows.push([
+      li.incidentId,
+      li.serviceDate,
+      li.ticketNum,
+      li.cptAsa,
+      li.modifier,
+      li.unitValue,
+      li.distributionValue,
+      null,                       // AgeValue — not captured from raw
+      li.startTime,
+      li.endTime,
+      li.totalTime,
+      li.timeUnits,
+      li.totalDistributableUnits,
+    ])
+  }
+  const ws = XLSX.utils.aoa_to_sheet(rows)
+  const wb = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(wb, ws, 'Sheet1')
+  XLSX.writeFile(wb, filename)
+}
+
 export function parseXlsx(buffer: ArrayBuffer): LineItem[] {
   const wb = XLSX.read(buffer, { type: 'array' })
 
