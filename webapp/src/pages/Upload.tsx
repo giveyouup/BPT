@@ -1,6 +1,6 @@
 import { useState, useCallback, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { parseXlsx, detectMonthYear } from '../utils/xlsxParser'
+import { parseXlsx, detectMonthYear, detectMonthYearFromBuffer } from '../utils/xlsxParser'
 import { parseICS } from '../utils/icsParser'
 import { parseStipendMapping } from '../utils/stipendMappingParser'
 import { parseShiftSummary } from '../utils/shiftUtils'
@@ -96,16 +96,17 @@ function PcrUploadTab() {
     setParsed(null)
     setShowConflict(false)
     setMultiMonthMode('none')
-    const detected = detectMonthYear(f.name)
-    if (detected) {
-      setMonth(detected.month)
-      setYear(detected.year)
-      const existingId = `${detected.year}-${String(detected.month).padStart(2, '0')}`
-      const existingReport = reports.find((r) => r.id === existingId)
-      if (existingReport) setUnitValue(existingReport.unitDollarValue.toFixed(2))
-    }
     try {
-      const items = parseXlsx(await f.arrayBuffer())
+      const buffer = await f.arrayBuffer()
+      const detected = detectMonthYear(f.name) ?? detectMonthYearFromBuffer(buffer)
+      if (detected) {
+        setMonth(detected.month)
+        setYear(detected.year)
+        const existingId = `${detected.year}-${String(detected.month).padStart(2, '0')}`
+        const existingReport = reports.find((r) => r.id === existingId)
+        if (existingReport) setUnitValue(existingReport.unitDollarValue.toFixed(2))
+      }
+      const items = parseXlsx(buffer)
       setParsed(items)
       const distinctMonths = new Set(items.map((li) => li.serviceDate.slice(0, 7)))
       if (distinctMonths.size >= 3) setMultiMonthMode('prompt')
