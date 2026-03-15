@@ -32,10 +32,13 @@ function parseServiceDate(val: unknown): string {
 
 // ─── Raw Case Distribution Report format (PHIMED) ────────────────────────────
 //
-// The raw export has 9 title/header rows before data, 31 columns (many null),
-// and a footer with grand totals + search criteria. Column layout is fixed:
+// The raw export has header/title rows before data, 31 sparse columns, and a
+// footer with grand totals + search criteria. The label row contains keywords
+// like "Incident ID", "Service Dt", "Ticket Num", etc. at the column positions
+// that mostly match the data — except "Service Dt" (label col+2) and "Ticket
+// Num" (label col+1) due to merged cells in the original XLS.
 
-const RAW_COLS = {
+const RAW_COLS_DEFAULT = {
   incidentId:              0,
   serviceDate:             6,
   ticketNum:               9,
@@ -51,6 +54,52 @@ const RAW_COLS = {
   totalDistributableUnits: 30,
 } as const
 
+type RawCols = typeof RAW_COLS_DEFAULT
+
+function findRawCols(rows: unknown[][]): RawCols {
+  // Scan for the header label row — identified by "Incident ID" in col 0
+  for (let r = 0; r < Math.min(rows.length, 15); r++) {
+    const row = rows[r]
+    if (String(row?.[0] ?? '').trim().toLowerCase() !== 'incident id') continue
+
+    // Build column map from this row's keyword positions
+    const map: Partial<Record<keyof RawCols, number>> = {}
+    map.incidentId = 0
+    for (let c = 1; c < row.length; c++) {
+      const cell = String(row[c] ?? '').trim().toLowerCase()
+      if (cell === 'service dt')             map.serviceDate  = c + 2  // merged-cell offset
+      else if (cell === 'ticket num')        map.ticketNum    = c + 1  // merged-cell offset
+      else if (cell === 'cpt/asa')           map.cptAsa       = c
+      else if (cell === 'modifier')          map.modifier     = c
+      else if (cell.includes('unit value'))  map.unitValue    = c
+      else if (cell.includes('age value'))   map.ageValue     = c
+      else if (cell === 'time units')        map.timeUnits    = c
+    }
+    // Scan the combined row (r-1) for multi-row header labels
+    const rowAbove = rows[r - 1] ?? []
+    for (let c = 0; c < rowAbove.length; c++) {
+      const cell = String(rowAbove[c] ?? '').trim().toLowerCase()
+      if (cell === 'distribution')           map.distributionValue      = c
+      else if (cell === 'start')             map.startTime              = c
+      else if (cell === 'end')               map.endTime                = c
+      else if (cell === 'total distrib')     map.totalDistributableUnits = c
+      // "Total" label sits above the Total Time column, but only if not already "Total Distrib"
+    }
+    // "Total Time" shares row r-1 label "Total" — find it between endTime and timeUnits
+    if (map.endTime != null && map.timeUnits != null) {
+      map.totalTime = map.endTime + 3  // consistent offset in both files
+    }
+
+    // If we found enough columns, use the dynamic map; otherwise fall back
+    const required: (keyof RawCols)[] = ['serviceDate', 'ticketNum', 'cptAsa', 'distributionValue', 'timeUnits', 'totalDistributableUnits']
+    if (required.every((k) => map[k] != null)) {
+      return { ...RAW_COLS_DEFAULT, ...map } as RawCols
+    }
+    break
+  }
+  return RAW_COLS_DEFAULT
+}
+
 function isRawFormat(rows: unknown[][]): boolean {
   // Clean format: row 0 col 0 is "Incident ID"
   if (String(rows[0]?.[0] ?? '').trim().toLowerCase() === 'incident id') return false
@@ -63,23 +112,24 @@ function isRawFormat(rows: unknown[][]): boolean {
 }
 
 function parseRawRows(rows: unknown[][]): LineItem[] {
+  const cols = findRawCols(rows)
   const items: LineItem[] = []
   for (const row of rows) {
-    const incidentRaw = row[RAW_COLS.incidentId]
+    const incidentRaw = row[cols.incidentId]
     if (typeof incidentRaw !== 'number' || incidentRaw < 100000) continue
     items.push({
       incidentId:              String(Math.round(incidentRaw)),
-      serviceDate:             parseServiceDate(row[RAW_COLS.serviceDate]),
-      ticketNum:               String(row[RAW_COLS.ticketNum] ?? '').trim(),
-      cptAsa:                  String(row[RAW_COLS.cptAsa] ?? '').trim(),
-      modifier:                row[RAW_COLS.modifier] != null ? String(row[RAW_COLS.modifier]).trim() : '',
-      unitValue:               parseNum(row[RAW_COLS.unitValue]),
-      distributionValue:       parseNum(row[RAW_COLS.distributionValue]) ?? 0,
-      startTime:               parseTime(row[RAW_COLS.startTime]),
-      endTime:                 parseTime(row[RAW_COLS.endTime]),
-      totalTime:               parseTime(row[RAW_COLS.totalTime]),
-      timeUnits:               parseNum(row[RAW_COLS.timeUnits]) ?? 0,
-      totalDistributableUnits: parseNum(row[RAW_COLS.totalDistributableUnits]) ?? 0,
+      serviceDate:             parseServiceDate(row[cols.serviceDate]),
+      ticketNum:               String(row[cols.ticketNum] ?? '').trim(),
+      cptAsa:                  String(row[cols.cptAsa] ?? '').trim(),
+      modifier:                row[cols.modifier] != null ? String(row[cols.modifier]).trim() : '',
+      unitValue:               parseNum(row[cols.unitValue]),
+      distributionValue:       parseNum(row[cols.distributionValue]) ?? 0,
+      startTime:               parseTime(row[cols.startTime]),
+      endTime:                 parseTime(row[cols.endTime]),
+      totalTime:               parseTime(row[cols.totalTime]),
+      timeUnits:               parseNum(row[cols.timeUnits]) ?? 0,
+      totalDistributableUnits: parseNum(row[cols.totalDistributableUnits]) ?? 0,
     })
   }
   return items
