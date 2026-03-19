@@ -1,5 +1,8 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
 import { useLocation } from 'react-router-dom'
+import {
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
+} from 'recharts'
 import { useData } from '../context/DataContext'
 import {
   shiftBadgeClass, isOffDayShift, resolveShiftAlias, computeFederalHolidays,
@@ -51,6 +54,8 @@ export default function ScheduleCalendar() {
   const [year, setYear] = useState(navState?.year ?? now.getFullYear())
   const [month, setMonth] = useState(navState?.month ?? now.getMonth() + 1)
   const [summaryYear, setSummaryYear] = useState(now.getFullYear())
+  const [summaryView, setSummaryView] = useState<'cards' | 'chart'>('cards')
+  const [chartGroup, setChartGroup] = useState<'G' | 'Special' | 'FS' | 'Other'>('G')
   const [popover, setPopover] = useState<{ date: string; input: string } | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -210,6 +215,24 @@ export default function ScheduleCalendar() {
   const fsWe    = fsShifts.reduce((acc, [, d]) => acc + d.we, 0)
 
   const wdWeStr = (wd: number, we: number) => `${wd} WD · ${we} WE`
+
+  const chartData = useMemo(() => ({
+    G: [
+      ...g1g2.map(([s, d]) => ({ shift: s, Weekday: d.wd, Weekend: d.we })),
+      ...apsEntries.map(([, d]) => ({ shift: 'APS', Weekday: d.wd, Weekend: d.we })),
+      ...gHigh.map(([s, d]) => ({ shift: s, Weekday: d.wd, Weekend: d.we })),
+    ],
+    Special: specialShifts.map(([s, d]) => ({ shift: s, Weekday: d.wd, Weekend: d.we })),
+    FS: fsShifts.map(([s, d]) => ({ shift: s, Weekday: d.wd, Weekend: d.we })),
+    Other: otherShifts.map(([s, d]) => ({ shift: s, Weekday: d.wd, Weekend: d.we })),
+  }), [yearSummary]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const chartTabs = useMemo(() => ([
+    { key: 'G'       as const, label: 'G Shifts', available: [...g1g2, ...apsEntries, ...gHigh].length > 0 },
+    { key: 'Special' as const, label: 'Special',  available: specialShifts.length > 0 },
+    { key: 'FS'      as const, label: 'FS',       available: fsShifts.length > 0 },
+    { key: 'Other'   as const, label: 'Other',    available: otherShifts.length > 0 },
+  ].filter(t => t.available)), [yearSummary]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const cells = buildCalendarCells(year, month)
 
@@ -389,8 +412,8 @@ export default function ScheduleCalendar() {
       {/* ── Shift Summary ──────────────────────────────────────────────────── */}
       <div className="mt-10 pt-8 border-t border-gray-800">
         <div className="max-w-4xl">
-          {/* Section header with year dropdown */}
-          <div className="flex items-center gap-3 mb-4">
+          {/* Section header with year dropdown + view toggle */}
+          <div className="flex items-center gap-3 mb-4 flex-wrap">
             <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wider">
               Shift Summary
             </h3>
@@ -403,6 +426,21 @@ export default function ScheduleCalendar() {
                 <option key={y} value={y}>{y}</option>
               ))}
             </select>
+            <div className="ml-auto flex items-center gap-0.5 bg-gray-900 border border-gray-800 rounded-lg p-0.5">
+              {(['cards', 'chart'] as const).map(v => (
+                <button
+                  key={v}
+                  onClick={() => setSummaryView(v)}
+                  className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
+                    summaryView === v
+                      ? 'bg-gray-700 text-gray-100'
+                      : 'text-gray-500 hover:text-gray-300'
+                  }`}
+                >
+                  {v === 'cards' ? 'Cards' : 'Chart'}
+                </button>
+              ))}
+            </div>
           </div>
 
           {/* Row 1: Summary totals */}
@@ -479,6 +517,63 @@ export default function ScheduleCalendar() {
               </div>
             )
           })()}
+
+          {/* ── Chart view ──────────────────────────────────────────────── */}
+          {summaryView === 'chart' && chartTabs.length > 0 && (
+            <div className="mt-4">
+              {/* Group sub-tabs */}
+              <div className="flex gap-1 mb-4">
+                {chartTabs.map(tab => (
+                  <button
+                    key={tab.key}
+                    onClick={() => setChartGroup(tab.key)}
+                    className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
+                      chartGroup === tab.key
+                        ? 'bg-indigo-600 text-white'
+                        : 'text-gray-500 hover:bg-gray-800 hover:text-gray-200'
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+              {chartData[chartGroup]?.length > 0 ? (
+                <ResponsiveContainer width="100%" height={240}>
+                  <BarChart data={chartData[chartGroup]} barCategoryGap="35%" margin={{ top: 4, right: 8, left: -16, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" vertical={false} />
+                    <XAxis
+                      dataKey="shift"
+                      tick={{ fill: '#9ca3af', fontSize: 11, fontFamily: 'monospace' }}
+                      axisLine={false} tickLine={false}
+                    />
+                    <YAxis
+                      allowDecimals={false}
+                      tick={{ fill: '#6b7280', fontSize: 11 }}
+                      axisLine={false} tickLine={false}
+                    />
+                    <Tooltip
+                      contentStyle={{ backgroundColor: '#111827', border: '1px solid #374151', borderRadius: '8px', fontSize: 12 }}
+                      labelStyle={{ color: '#f9fafb', fontWeight: 600, marginBottom: 4 }}
+                      itemStyle={{ color: '#d1d5db' }}
+                      cursor={{ fill: 'rgba(255,255,255,0.04)' }}
+                    />
+                    <Legend
+                      wrapperStyle={{ fontSize: 11, color: '#6b7280', paddingTop: 8 }}
+                      iconType="square" iconSize={8}
+                    />
+                    <Bar dataKey="Weekday" stackId="a" fill="#6366f1" radius={[0, 0, 0, 0]} />
+                    <Bar dataKey="Weekend" stackId="a" fill="#f43f5e" radius={[3, 3, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              ) : (
+                <p className="text-xs text-gray-600 py-8 text-center">No {chartGroup} shift data for {summaryYear}</p>
+              )}
+            </div>
+          )}
+
+          {/* ── Cards view ──────────────────────────────────────────────── */}
+          {summaryView === 'cards' && (
+            <>
 
           {/* Row 2: G1, G2, APS */}
           {(g1g2.length > 0 || apsEntries.length > 0) && (
@@ -645,6 +740,8 @@ export default function ScheduleCalendar() {
                   />
                 ))}
               </div>
+            </>
+          )}
             </>
           )}
         </div>
