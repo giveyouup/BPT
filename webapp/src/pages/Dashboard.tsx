@@ -192,7 +192,7 @@ export default function Dashboard() {
   const prodDays = monthDays.filter((d) => d.hasProduction)
   const noProdDays = monthDays.filter((d) => !d.hasProduction)
   const weeks = groupByWeek(monthDays)
-  const maxWeekHours = Math.max(...weeks.map((w) => w.hours), 1)
+  // maxWeekHours computed after weekProjHours (see below)
 
   // Projection computed values
   const today = new Date()
@@ -204,8 +204,9 @@ export default function Dashboard() {
     (selStats.year === curYear  && selStats.month === curMonth) ||
     (selStats.year === prevYear && selStats.month === prevMonth)
   )
+  const dataCutoff = monthDays.reduce((max, d) => d.hasProduction && d.date > max ? d.date : max, '')
   const remainingDays = monthDays.filter(
-    (d) => !d.hasProduction && d.shiftTypes.some((s) => !isOffDayShift(s))
+    (d) => !d.hasProduction && d.shiftTypes.some((s) => !isOffDayShift(s)) && d.date > dataCutoff
   )
   const ytdRate = (() => {
     const u = yearStats.reduce((s, m) => s + m.totalDistributableUnits, 0)
@@ -221,13 +222,23 @@ export default function Dashboard() {
 
   // Lookup maps derived from projection (empty when projection is off)
   const projByDate = new Map(projection?.days.map((d) => [d.date, d]) ?? [])
-  const weekProjHours = new Map<string, number>()
+  const weekProjHours = new Map<string, number>()       // projected hours per week key
+  const weekRemainingBaseHours = new Map<string, number>() // placeholder hours already in w.hours that we replace
   if (projection) {
+    for (const dayProj of projection.days) {
+      const key = weekStart(dayProj.date)
+      weekProjHours.set(key, (weekProjHours.get(key) ?? 0) + dayProj.projectedHours)
+    }
     for (const day of remainingDays) {
       const key = weekStart(day.date)
-      weekProjHours.set(key, (weekProjHours.get(key) ?? 0) + day.hours)
+      weekRemainingBaseHours.set(key, (weekRemainingBaseHours.get(key) ?? 0) + day.hours)
     }
   }
+  const maxWeekHours = Math.max(...weeks.map((w) => {
+    const base = weekRemainingBaseHours.get(w.key) ?? 0
+    const proj = weekProjHours.get(w.key) ?? 0
+    return w.hours - base + proj
+  }), 1)
 
   return (
     <>
@@ -329,9 +340,10 @@ export default function Dashboard() {
 
         {/* Selected month summary */}
         {(() => {
-          const projUnits   = projection ? selStats.totalDistributableUnits + projection.totalProjectedUnits : null
-          const projUnitPay = projection ? selStats.unitCompensation + projection.totalProjectedUnitPay : null
-          const projTotal   = projection ? (selStats.unitCompensation + projection.totalProjectedUnitPay + selStats.totalStipends) : null
+          const projUnits    = projection ? selStats.totalDistributableUnits + projection.totalProjectedUnits : null
+          const projUnitPay  = projection ? selStats.unitCompensation + projection.totalProjectedUnitPay : null
+          const projStipends = projection ? projection.days.reduce((s, d) => s + d.stipendAmount, 0) : 0
+          const projTotal    = projection ? (selStats.unitCompensation + projection.totalProjectedUnitPay + selStats.totalStipends + projStipends) : null
           const items = [
             {
               label: 'Cases',
@@ -359,9 +371,9 @@ export default function Dashboard() {
             },
             {
               label: 'Stipends',
-              value: formatCurrency(selStats.totalStipends),
-              sub: projection ? 'exact · full month' : undefined,
-              proj: false,
+              value: projection ? `~${formatCurrency(selStats.totalStipends + projStipends)}` : formatCurrency(selStats.totalStipends),
+              sub: projection ? `actual: ${formatCurrency(selStats.totalStipends)} + ~${formatCurrency(projStipends)} sched` : undefined,
+              proj: !!projection,
             },
             {
               label: 'Total Pay',
@@ -474,7 +486,7 @@ export default function Dashboard() {
                     {/* Bar: layered so date can overlay on mobile when selected */}
                     {(() => {
                       const projHrs   = weekProjHours.get(w.key) ?? 0
-                      const actualHrs = w.hours - projHrs
+                      const actualHrs = w.hours - (weekRemainingBaseHours.get(w.key) ?? 0)
                       const actualPct = (actualHrs / maxWeekHours) * 100
                       const projPct   = (projHrs   / maxWeekHours) * 100
                       return (
@@ -501,7 +513,13 @@ export default function Dashboard() {
                       )
                     })()}
                     <span className={`text-xs font-semibold w-14 text-right flex-shrink-0 ${isSelected ? 'text-sky-300' : 'text-gray-200'}`}>
-                      {formatHours(w.hours)}
+                      {(() => {
+                        const projHrs = weekProjHours.get(w.key) ?? 0
+                        const baseHrs = weekRemainingBaseHours.get(w.key) ?? 0
+                        return projHrs > 0
+                          ? <span className="text-amber-400">~{formatHours(w.hours - baseHrs + projHrs)}</span>
+                          : formatHours(w.hours)
+                      })()}
                     </span>
                     <span className="text-xs text-gray-600 w-10 flex-shrink-0">{w.days}d</span>
                   </button>
@@ -511,7 +529,13 @@ export default function Dashboard() {
                 <span className="text-xs font-semibold text-gray-500 sm:w-32 flex-shrink-0">Total</span>
                 <div className="flex-1" />
                 <span className="text-xs font-bold text-gray-100 w-14 text-right flex-shrink-0">
-                  {formatHours(monthHours)}
+                  {(() => {
+                    const totalProjHrs = [...weekProjHours.values()].reduce((s, v) => s + v, 0)
+                    const totalBaseHrs = [...weekRemainingBaseHours.values()].reduce((s, v) => s + v, 0)
+                    return totalProjHrs > 0
+                      ? <span className="text-amber-400">~{formatHours(monthHours - totalBaseHrs + totalProjHrs)}</span>
+                      : formatHours(monthHours)
+                  })()}
                 </span>
                 <span className="text-xs text-gray-600 w-10 flex-shrink-0">{monthDays.length}d</span>
               </div>
@@ -533,8 +557,8 @@ export default function Dashboard() {
                       const isProj  = dayProj !== null && !day.hasProduction
                       const unitsPerHr  = day.hours > 0 && day.totalUnits > 0 ? day.totalUnits / day.hours : null
                       const dollarPerHr = day.hours > 0 && day.totalDayPay > 0 ? day.totalDayPay / day.hours : null
-                      const projUnitsPerHr  = isProj && day.hours > 0 ? dayProj!.projectedUnits / day.hours : null
-                      const projDollarPerHr = isProj && day.hours > 0 ? dayProj!.projectedTotal / day.hours : null
+                      const projUnitsPerHr  = isProj && dayProj!.projectedHours > 0 ? dayProj!.projectedUnits / dayProj!.projectedHours : null
+                      const projDollarPerHr = isProj && dayProj!.projectedHours > 0 ? dayProj!.projectedTotal / dayProj!.projectedHours : null
                       const rowBg = isProj
                         ? 'bg-amber-950/10 border-l-2 border-l-amber-800/40'
                         : (!day.hasProduction ? 'opacity-50' : '')
@@ -649,7 +673,9 @@ export default function Dashboard() {
                             }
                           </td>
                           <td className="py-1 text-right" onClick={(e) => e.stopPropagation()}>
-                            {editingHoursDate === day.date ? (
+                            {isProj ? (
+                              <span className="text-amber-400">~{formatHours(dayProj!.projectedHours)}</span>
+                            ) : editingHoursDate === day.date ? (
                               <span className="flex items-center justify-end gap-1">
                                 <input
                                   type="number" step="0.5" placeholder="0"

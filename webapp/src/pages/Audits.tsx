@@ -194,6 +194,14 @@ export default function Audits() {
     return out
   }, [noProdDays])
 
+  // Section 3: production days where case times were missing and hours were estimated
+  const defaultHoursDays = useMemo(
+    () => allDays
+      .filter(d => d.hasProduction && d.isDefault)
+      .sort((a, b) => a.date.localeCompare(b.date)),
+    [allDays]
+  )
+
   const hasData = yearStats.length > 0
 
   return (
@@ -391,6 +399,80 @@ export default function Audits() {
             )}
           </section>
 
+          {/* ── Section 3: Production days using default hours ───────────────── */}
+          <section>
+            <div className="flex items-center gap-3 mb-1">
+              <h3 className="text-sm font-semibold text-gray-300 uppercase tracking-wider">
+                Days Using Default Hours
+              </h3>
+              <SectionBadge count={defaultHoursDays.length} variant="warn" />
+            </div>
+            <p className="text-xs text-gray-600 mb-4">
+              Production days where no case start/end times were available. Hours were estimated using the default fallback, making the $/hr rate for these days unreliable.
+            </p>
+
+            {defaultHoursDays.length === 0 ? (
+              <EmptyCheck message={`All production days have time data for ${selectedYear}`} />
+            ) : (
+              <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-gray-800">
+                        <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider whitespace-nowrap">Date</th>
+                        <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Day</th>
+                        <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Shift</th>
+                        <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Month</th>
+                        <th className="px-4 py-3 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider">Cases</th>
+                        <th className="px-4 py-3 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider">Units</th>
+                        <th className="px-4 py-3 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider">Est. Hours</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {defaultHoursDays.map(day => (
+                        <tr
+                          key={day.date}
+                          className="border-b border-gray-800 last:border-0 hover:bg-gray-800/40 cursor-pointer"
+                          onClick={() => goToDashboard(day.date)}
+                        >
+                          <td className="px-4 py-3 text-gray-200 whitespace-nowrap hover:text-indigo-400 transition-colors">{formatDateFull(day.date)}</td>
+                          <td className="px-4 py-3 text-gray-500 whitespace-nowrap">{getDow(day.date)}</td>
+                          <td className="px-4 py-3">
+                            <div className="flex gap-1 flex-wrap">
+                              {day.shiftTypes.map(st => (
+                                <span key={st} className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${shiftBadgeClass(st)}`}>{st}</span>
+                              ))}
+                            </div>
+                          </td>
+                          <td className="px-4 py-3 text-gray-500 whitespace-nowrap">
+                            {getMonthName(parseInt(day.date.slice(5, 7)))}
+                          </td>
+                          <td className="px-4 py-3 text-right text-gray-300">{day.caseCount}</td>
+                          <td className="px-4 py-3 text-right text-indigo-400">{day.totalUnits.toFixed(2)}</td>
+                          <td className="px-4 py-3 text-right text-amber-400">{day.hours.toFixed(1)}h <span className="text-gray-600 text-[10px]">est.</span></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr className="bg-gray-800/60 border-t border-gray-700">
+                        <td colSpan={4} className="px-4 py-2.5 text-xs font-semibold text-gray-500">
+                          {defaultHoursDays.length} day{defaultHoursDays.length !== 1 ? 's' : ''}
+                        </td>
+                        <td className="px-4 py-2.5 text-right text-xs font-bold text-gray-400">
+                          {defaultHoursDays.reduce((s, d) => s + d.caseCount, 0)}
+                        </td>
+                        <td className="px-4 py-2.5 text-right text-xs font-bold text-indigo-400">
+                          {defaultHoursDays.reduce((s, d) => s + d.totalUnits, 0).toFixed(2)}
+                        </td>
+                        <td />
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              </div>
+            )}
+          </section>
+
           {/* ── Section 2: Scheduled working days with no production ─────────── */}
           <section>
             <div className="flex items-center gap-3 mb-1">
@@ -446,8 +528,8 @@ export default function Audits() {
                     </thead>
                     <tbody>
                       {noProdDays.map(day => (
-                        <tr key={day.date} className="border-b border-gray-800 last:border-0 hover:bg-gray-800/40">
-                          <td className="px-4 py-3 text-gray-200 whitespace-nowrap">{formatDateFull(day.date)}</td>
+                        <tr key={day.date} className="border-b border-gray-800 last:border-0 hover:bg-gray-800/40 cursor-pointer" onClick={() => goToDashboard(day.date)}>
+                          <td className="px-4 py-3 text-gray-200 whitespace-nowrap hover:text-indigo-400 transition-colors">{formatDateFull(day.date)}</td>
                           <td className="px-4 py-3 text-gray-500 whitespace-nowrap">{getDow(day.date)}</td>
                           <td className="px-4 py-3">
                             <div className="flex gap-1 flex-wrap">

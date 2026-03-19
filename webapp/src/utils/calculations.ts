@@ -707,48 +707,64 @@ export function computeCalendarYearStats(
 
 // ─── Month projection ──────────────────────────────────────────────────────
 
-/** Per-shift-type unit average derived from historical WorkingDayStats.
+type ShiftEntry2 = { totalUnits: number; totalHours: number; days: number; hoursDays: number }
+
+/** Per-shift-type unit AND hours averages derived from historical WorkingDayStats.
  *
  * Attribution rule (mirrors buildShiftStats in AnnualSummary):
- *  - If the day has primary (non-fixed, non-off) shifts: attribute units
- *    to those only, divided evenly. Fixed shifts on the same day are skipped.
- *  - If the day has ONLY fixed shifts (solo BR / APS / NIR day): attribute
- *    units to the fixed shift(s) — they do produce billing on those days.
+ *  - Primary shifts present: attribute units/hours to primaries only (split evenly).
+ *  - Fixed-only day (solo BR/APS/NIR): attribute to fixed shifts — they bill cases too.
+ *
+ * avgHours is only accumulated from days where day.hours > 0 (known shift length).
+ * Fixed-hour shifts (APS/BR/NIR) are excluded from hours averaging since their
+ * hours are predetermined via settings.shiftHours — those stay as-is on the day.
  */
-function buildShiftUnitMap(stats: MonthlyStats[]): Map<string, { avgUnits: number; days: number }> {
-  const acc = new Map<string, { totalUnits: number; days: number }>()
+function buildShiftUnitMap(
+  stats: MonthlyStats[],
+): Map<string, { avgUnits: number; avgHours: number | null; days: number }> {
+  const acc = new Map<string, ShiftEntry2>()
 
-  function credit(sk: string, units: number) {
-    if (!acc.has(sk)) acc.set(sk, { totalUnits: 0, days: 0 })
+  function credit(sk: string, units: number, hours: number, isFixed: boolean) {
+    if (!acc.has(sk)) acc.set(sk, { totalUnits: 0, totalHours: 0, days: 0, hoursDays: 0 })
     const e = acc.get(sk)!
     e.totalUnits += units
     e.days++
+    // Only accumulate hours for variable shifts with a known non-zero duration
+    if (!isFixed && hours > 0) {
+      e.totalHours += hours
+      e.hoursDays++
+    }
   }
 
   for (const month of stats) {
     for (const day of month.workingDays) {
       if (!day.hasProduction || day.shiftTypes.length === 0) continue
-      const nonOff      = day.shiftTypes.filter((s) => !isOffDayShift(s))
-      const primary     = nonOff.filter((s) => !getFixedShiftKey(resolveShiftAlias(s.toUpperCase())))
-      const fixedOnly   = nonOff.filter((s) =>  !!getFixedShiftKey(resolveShiftAlias(s.toUpperCase())))
+      const nonOff    = day.shiftTypes.filter((s) => !isOffDayShift(s))
+      const primary   = nonOff.filter((s) => !getFixedShiftKey(resolveShiftAlias(s.toUpperCase())))
+      const fixedOnly = nonOff.filter((s) =>  !!getFixedShiftKey(resolveShiftAlias(s.toUpperCase())))
       const shiftsToUse = primary.length > 0 ? primary : fixedOnly
       if (shiftsToUse.length === 0) continue
 
       const unitsEach = day.totalUnits / shiftsToUse.length
+      const hoursEach = day.hours / Math.max(shiftsToUse.length, 1)
       for (const raw of shiftsToUse) {
         const canonical = resolveShiftAlias(raw.toUpperCase())
-        // Call shifts get WD/WE suffix; fixed shifts (APS, BR, NIR) use plain name
+        const isFixed   = !!getFixedShiftKey(canonical)
         const sk = (primary.length > 0 && isCallShift(canonical))
           ? `${canonical} ${day.isCallWeekend ? 'WE' : 'WD'}`
           : canonical
-        credit(sk, unitsEach)
+        credit(sk, unitsEach, hoursEach, isFixed)
       }
     }
   }
 
-  const result = new Map<string, { avgUnits: number; days: number }>()
-  for (const [key, { totalUnits, days }] of acc) {
-    result.set(key, { avgUnits: days > 0 ? totalUnits / days : 0, days })
+  const result = new Map<string, { avgUnits: number; avgHours: number | null; days: number }>()
+  for (const [key, { totalUnits, totalHours, days, hoursDays }] of acc) {
+    result.set(key, {
+      avgUnits: days > 0 ? totalUnits / days : 0,
+      avgHours: hoursDays > 0 ? totalHours / hoursDays : null,
+      days,
+    })
   }
   return result
 }
@@ -756,8 +772,9 @@ function buildShiftUnitMap(stats: MonthlyStats[]): Map<string, { avgUnits: numbe
 export interface DayProjection {
   date: string
   projectedUnits: number
+  projectedHours: number   // blended historical avg for variable shifts; day.hours for fixed
   projectedUnitPay: number
-  stipendAmount: number  // exact — taken directly from WorkingDayStats
+  stipendAmount: number    // exact — taken directly from WorkingDayStats
   projectedTotal: number
 }
 
@@ -771,13 +788,13 @@ export interface MonthProjection {
 }
 
 /**
- * Project unit production for scheduled days that have no PCR line items.
- * Stipends are exact (already on WorkingDayStats); only unit production is estimated.
+ * Project unit production and shift hours for scheduled days with no PCR data.
+ * Stipends are exact (already on WorkingDayStats).
  *
- * Blending rule per shift type:
- *   - If currentYear.days >= priorYear.days → use current year only (prior fully displaced)
- *   - Otherwise → weighted average: (currDays×currAvg + priorDays×priorAvg) / totalDays
- *   - No history at all → fall back to overall avg units/production-day across both years
+ * Blending rule (same for both units and hours):
+ *   - currentYear.days >= priorYear.days → use current year only (prior displaced)
+ *   - Otherwise → weighted avg: (currDays×currVal + priorDays×priorVal) / totalDays
+ *   - No history → fall back to overall avg (units) or day.hours (hours)
  */
 export function projectRemainingDays(
   remainingDays: WorkingDayStats[],
@@ -788,13 +805,29 @@ export function projectRemainingDays(
   const currMap  = buildShiftUnitMap(currentYearStats)
   const priorMap = buildShiftUnitMap(priorYearStats)
 
-  // Overall fallback avg across all production days in both years
+  // Overall fallback: avg units across all production days in both years
   const allProdDays = [...currentYearStats, ...priorYearStats]
     .flatMap((m) => m.workingDays)
     .filter((d) => d.hasProduction)
-  const overallAvg = allProdDays.length > 0
+  const overallAvgUnits = allProdDays.length > 0
     ? allProdDays.reduce((s, d) => s + d.totalUnits, 0) / allProdDays.length
     : 0
+
+  function blend(
+    curr: { avgUnits: number; avgHours: number | null; days: number } | undefined,
+    prior: { avgUnits: number; avgHours: number | null; days: number } | undefined,
+    field: 'avgUnits' | 'avgHours',
+    fallback: number,
+  ): number {
+    const cv = curr?.[field] ?? null
+    const pv = prior?.[field] ?? null
+    if (cv === null && pv === null) return fallback
+    if (pv === null || (prior?.days ?? 0) === 0) return cv ?? fallback
+    if (cv === null || (curr?.days ?? 0) === 0) return pv
+    if ((curr!.days) >= (prior!.days)) return cv   // prior fully displaced
+    const total = curr!.days + prior!.days
+    return (curr!.days * cv + prior!.days * pv) / total
+  }
 
   const days: DayProjection[] = []
 
@@ -802,39 +835,41 @@ export function projectRemainingDays(
     const nonOff    = day.shiftTypes.filter((s) => !isOffDayShift(s))
     const primary   = nonOff.filter((s) => !getFixedShiftKey(resolveShiftAlias(s.toUpperCase())))
     const fixedOnly = nonOff.filter((s) =>  !!getFixedShiftKey(resolveShiftAlias(s.toUpperCase())))
-    // Mirror buildShiftUnitMap: use primary shifts when present, else fixed shifts
     const shiftsToProject = primary.length > 0 ? primary : fixedOnly
 
     let projectedUnits = 0
+    let projectedHours = day.hours  // default: keep existing (correct for fixed shifts)
+
+    // For variable-shift days, replace hours with blended historical avg
+    if (primary.length > 0) {
+      let hoursSum = 0
+      let hoursCount = 0
+      for (const raw of primary) {
+        const canonical = resolveShiftAlias(raw.toUpperCase())
+        const sk = isCallShift(canonical)
+          ? `${canonical} ${day.isCallWeekend ? 'WE' : 'WD'}`
+          : canonical
+        const curr  = currMap.get(sk)
+        const prior = priorMap.get(sk)
+        const avgH  = blend(curr, prior, 'avgHours', 0)
+        if (avgH > 0) { hoursSum += avgH; hoursCount++ }
+      }
+      if (hoursCount > 0) projectedHours = hoursSum  // sum across multi-primary days
+    }
 
     for (const raw of shiftsToProject) {
       const canonical = resolveShiftAlias(raw.toUpperCase())
       const sk = (primary.length > 0 && isCallShift(canonical))
         ? `${canonical} ${day.isCallWeekend ? 'WE' : 'WD'}`
         : canonical
-      const curr  = currMap.get(sk)
-      const prior = priorMap.get(sk)
-
-      let avg: number
-      if (!curr && !prior) {
-        avg = overallAvg
-      } else if (!prior || prior.days === 0) {
-        avg = curr!.avgUnits
-      } else if (!curr || curr.days === 0) {
-        avg = prior.avgUnits
-      } else if (curr.days >= prior.days) {
-        avg = curr.avgUnits  // prior year fully displaced
-      } else {
-        const total = curr.days + prior.days
-        avg = (curr.days * curr.avgUnits + prior.days * prior.avgUnits) / total
-      }
-      projectedUnits += avg
+      projectedUnits += blend(currMap.get(sk), priorMap.get(sk), 'avgUnits', overallAvgUnits)
     }
 
     const projectedUnitPay = projectedUnits * ytdRate
     days.push({
       date: day.date,
       projectedUnits,
+      projectedHours,
       projectedUnitPay,
       stipendAmount: day.stipendAmount,
       projectedTotal: projectedUnitPay + day.stipendAmount,
