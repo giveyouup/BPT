@@ -520,8 +520,11 @@ export function computeCalendarMonthWorkingDays(
   const holidayList = settings.holidays[calYear] ?? computeFederalHolidays(calYear)
 
   // Auto-select mapping for this calendar month (use labeled report's override if set)
+  const overrideId = labeledReport?.stipendMappingOverride
   const applicableMapping = allMappings.length
-    ? getApplicableMapping(calYear, calMonth, allMappings)
+    ? (overrideId
+        ? (allMappings.find((m) => m.id === overrideId) ?? getApplicableMapping(calYear, calMonth, allMappings))
+        : getApplicableMapping(calYear, calMonth, allMappings))
     : null
 
   // Compute PCR-based working days (unitDollarValue=undefined, we'll annotate after)

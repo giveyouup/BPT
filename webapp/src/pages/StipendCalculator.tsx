@@ -86,13 +86,15 @@ interface MonthRow {
   other: number
   additional: number
   mappingName: string | null
+  mappingId: string | null
+  overrideId: string | null
   details: DayDetail[]
 }
 
 // ─── Group metadata ───────────────────────────────────────────────────────────
 
 const GROUPS: {
-  key: keyof Omit<MonthRow, 'year' | 'month' | 'mappingName' | 'details'>
+  key: keyof Omit<MonthRow, 'year' | 'month' | 'mappingName' | 'mappingId' | 'overrideId' | 'details'>
   label: string
   headerClass: string
   cellClass: string
@@ -113,7 +115,7 @@ const GROUPS: {
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export default function StipendCalculator() {
-  const { reports, schedules: allSchedules, settings, stipendMappings: allMappings } = useData()
+  const { reports, schedules: allSchedules, settings, stipendMappings: allMappings, saveReport } = useData()
 
   const scheduleYears = allSchedules.flatMap((s) => s.entries.map((e) => parseInt(e.date.slice(0, 4))))
   const reportYears = reports.map((r) => r.year)
@@ -121,6 +123,7 @@ export default function StipendCalculator() {
 
   const [selectedYear, setSelectedYear] = useState<number>(years[0] ?? new Date().getFullYear())
   const [activeCell, setActiveCell] = useState<{ month: number; group: string } | null>(null)
+  const [savingMonth, setSavingMonth] = useState<number | null>(null)
 
   if (allSchedules.length === 0) {
     return (
@@ -158,12 +161,19 @@ export default function StipendCalculator() {
 
   const rows: MonthRow[] = []
   for (const [month, entries] of [...monthMap.entries()].sort((a, b) => a[0] - b[0])) {
-    const mapping = allMappings.length ? getApplicableMapping(selectedYear, month, allMappings) : null
+    const reportForMonth = reports.find((r) => r.year === selectedYear && r.month === month)
+    const overrideId = reportForMonth?.stipendMappingOverride ?? null
+    const autoMapping = allMappings.length ? getApplicableMapping(selectedYear, month, allMappings) : null
+    const mapping = overrideId
+      ? (allMappings.find((m) => m.id === overrideId) ?? autoMapping)
+      : autoMapping
 
     const row: MonthRow = {
       year: selectedYear, month,
       mainOrCall: 0, otherG: 0, APS: 0, BR: 0, NIR: 0, ROC: 0, GI: 0, FS: 0, other: 0, additional: 0,
       mappingName: mapping ? (mapping.name || mapping.filename) : null,
+      mappingId: mapping?.id ?? null,
+      overrideId,
       details: [],
     }
 
@@ -208,6 +218,20 @@ export default function StipendCalculator() {
     setActiveCell((prev) =>
       prev?.month === month && prev?.group === group ? null : { month, group }
     )
+  }
+
+  async function handleOverrideChange(month: number, mappingId: string) {
+    const report = reports.find((r) => r.year === selectedYear && r.month === month)
+    if (!report) return
+    setSavingMonth(month)
+    try {
+      await saveReport({
+        ...report,
+        stipendMappingOverride: mappingId || undefined,
+      })
+    } finally {
+      setSavingMonth(null)
+    }
   }
 
   return (
@@ -355,8 +379,27 @@ export default function StipendCalculator() {
                         <td className="px-4 py-3 text-right font-semibold text-emerald-400">
                           {formatCurrencyFull(total)}
                         </td>
-                        <td className="px-4 py-3 text-left text-xs text-gray-500">
-                          {row.mappingName ?? <span className="text-gray-700">—</span>}
+                        <td className="px-4 py-3 text-left">
+                          {reports.find((r) => r.year === selectedYear && r.month === row.month) ? (
+                            <div className="flex items-center gap-1.5">
+                              {row.overrideId && (
+                                <span className="w-1.5 h-1.5 rounded-full bg-amber-400 flex-shrink-0" title="Manual override active" />
+                              )}
+                              <select
+                                value={row.overrideId ?? ''}
+                                disabled={savingMonth === row.month}
+                                onChange={(e) => handleOverrideChange(row.month, e.target.value)}
+                                className="bg-transparent text-xs text-gray-400 border-0 outline-none cursor-pointer hover:text-gray-200 focus:text-gray-200 max-w-[140px] truncate disabled:opacity-40"
+                              >
+                                <option value="">Auto — {row.overrideId ? (allMappings.find(m => m.id === getApplicableMapping(selectedYear, row.month, allMappings)?.id)?.name ?? '—') : (row.mappingName ?? '—')}</option>
+                                {allMappings.map((m) => (
+                                  <option key={m.id} value={m.id}>{m.name || m.filename}</option>
+                                ))}
+                              </select>
+                            </div>
+                          ) : (
+                            <span className="text-xs text-gray-600">{row.mappingName ?? '—'}</span>
+                          )}
                         </td>
                       </tr>
 

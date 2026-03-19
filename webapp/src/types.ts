@@ -98,6 +98,7 @@ export interface MonthlyReport {
   dayStipends: Record<string, number>        // date -> additional per-day stipend
   stipends: Stipend[]        // additional (manual) stipends (legacy)
   autoSplit?: boolean        // true when created by splitting a multi-month upload
+  stipendMappingOverride?: string  // mapping id — overrides date-based auto-selection
   reassignmentLog?: Array<{  // audit trail of service-date reassignments
     fromDate: string
     toDate: string
