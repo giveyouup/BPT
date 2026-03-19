@@ -205,6 +205,9 @@ export default function AnnualSummary() {
   const ytdTotal    = yearStats.reduce((s, m) => s + m.totalCompensation, 0)
   const ytdHours    = yearStats.reduce((s, m) => s + m.totalHours, 0)
   const ytdCases    = yearStats.reduce((s, m) => s + m.totalCases, 0)
+  const daysScheduled  = yearStats.flatMap(m => m.workingDays)
+    .filter(d => d.shiftTypes.length > 0 && !d.shiftTypes.every(isOffDayShift)).length
+  const daysWithProduction = yearStats.reduce((s, m) => s + m.daysWorked, 0)
 
   const isProjectionActive = whatIfMapping !== null || whatIfUnitRate !== null
 
@@ -487,7 +490,7 @@ export default function AnnualSummary() {
       )}
 
       {/* YTD Stats */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4 mb-8">
         <StatCard
           label="YTD Total Pay"
           value={isProjectionActive && wiTotal != null ? formatCurrency(wiTotal) : formatCurrency(ytdTotal)}
@@ -520,6 +523,16 @@ export default function AnnualSummary() {
                 offDays.vacation > 0 ? `${offDays.vacation} vacation` : '',
               ].filter(Boolean).join(' · ')
             : undefined}
+        />
+        <StatCard
+          label="Days Scheduled"
+          value={daysScheduled > 0 ? String(daysScheduled) : '—'}
+          sub="working shift assignments"
+        />
+        <StatCard
+          label="Days w/ Production"
+          value={daysWithProduction > 0 ? String(daysWithProduction) : '—'}
+          sub="days with PCR line items"
         />
       </div>
 
