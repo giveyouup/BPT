@@ -357,9 +357,6 @@ export default function MonthlyDetail() {
                   <td className="px-4 py-3 font-semibold text-indigo-400">{c.totalUnits.toFixed(2)}</td>
                   <td className="px-4 py-3 flex items-center gap-1 flex-wrap">
                     {c.isSplit && <span className="bg-amber-900/40 text-amber-400 text-xs px-1.5 py-0.5 rounded">split</span>}
-                    {!c.serviceDate.startsWith(`${liveReport.year}-${String(liveReport.month).padStart(2, '0')}`) && (
-                      <span className="bg-gray-800 text-gray-500 text-xs px-1.5 py-0.5 rounded">cross-month</span>
-                    )}
                   </td>
                 </tr>
               ))}
