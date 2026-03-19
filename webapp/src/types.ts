@@ -97,6 +97,12 @@ export interface MonthlyReport {
   workingDayOverrides: Record<string, number> // date -> hours
   dayStipends: Record<string, number>        // date -> additional per-day stipend
   stipends: Stipend[]        // additional (manual) stipends (legacy)
+  reassignmentLog?: Array<{  // audit trail of service-date reassignments
+    fromDate: string
+    toDate: string
+    caseCount: number
+    totalUnits: number
+  }>
 }
 
 export interface MonthlyStats {

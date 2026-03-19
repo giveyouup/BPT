@@ -572,7 +572,7 @@ export function computeCalendarMonthWorkingDays(
     } else if (shiftTypes.every(isOffDayShift)) {
       hours = 0
     } else {
-      hours = settings.defaultNoTimeHours
+      hours = defaultNoTimeHours
     }
 
     result.push({

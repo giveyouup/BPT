@@ -58,12 +58,16 @@ export default function Audits() {
   const [reassignPopover, setReassignPopover] = useState<{ date: string; input: string } | null>(null)
   const [saving, setSaving] = useState(false)
   const dateInputRef = useRef<HTMLInputElement>(null)
-  const [resolvedItems, setResolvedItems] = useState<Array<{
-    fromDate: string
-    toDate: string
-    caseCount: number
-    totalUnits: number
-  }>>([])
+
+  // Derived from persisted report logs — survives refresh
+  const resolvedItems = useMemo(
+    () => reports
+      .flatMap(r => r.reassignmentLog ?? [])
+      .filter(log => log.fromDate.startsWith(String(selectedYear)))
+      // Deduplicate by fromDate (multiple reports may have same log entry)
+      .filter((log, i, arr) => arr.findIndex(l => l.fromDate === log.fromDate) === i),
+    [reports, selectedYear]
+  )
 
   useEffect(() => {
     if (reassignPopover) setTimeout(() => dateInputRef.current?.focus(), 0)
@@ -125,30 +129,34 @@ export default function Audits() {
     const { date: fromDate, input: toDate } = reassignPopover
     if (!toDate || toDate === fromDate) { setReassignPopover(null); return }
 
-    // Capture stats before the save so we can show the resolved record
+    // Capture stats before the save so we can persist the resolved record
     const day = orphanedProduction.find(d => d.date === fromDate)
+    const logEntry = day
+      ? { fromDate, toDate, caseCount: day.caseCount, totalUnits: day.totalUnits }
+      : null
 
     setSaving(true)
     try {
       // Find all reports containing line items on fromDate and mutate their serviceDate
       const affected = reports.filter(r => r.lineItems.some(li => li.serviceDate === fromDate))
       await Promise.all(
-        affected.map(r =>
+        affected.map((r, i) =>
           saveReport({
             ...r,
             lineItems: r.lineItems.map(li =>
               li.serviceDate === fromDate ? { ...li, serviceDate: toDate } : li
             ),
+            // Append log entry to first affected report only (others would duplicate it)
+            ...(i === 0 && logEntry ? {
+              reassignmentLog: [
+                ...(r.reassignmentLog ?? []).filter(l => l.fromDate !== fromDate),
+                logEntry,
+              ],
+            } : {}),
           })
         )
       )
       setReassignPopover(null)
-      if (day) {
-        setResolvedItems(prev => [
-          ...prev.filter(r => r.fromDate !== fromDate),
-          { fromDate, toDate, caseCount: day.caseCount, totalUnits: day.totalUnits },
-        ])
-      }
     } finally {
       setSaving(false)
     }
@@ -195,7 +203,7 @@ export default function Audits() {
         <h2 className="text-2xl font-bold text-gray-100">Audits</h2>
         <select
           value={selectedYear}
-          onChange={e => { setSelectedYear(Number(e.target.value)); setReassignPopover(null); setResolvedItems([]) }}
+          onChange={e => { setSelectedYear(Number(e.target.value)); setReassignPopover(null) }}
           className="bg-gray-900 border border-gray-700 text-gray-300 text-sm rounded-md px-2 py-1 focus:outline-none focus:ring-1 focus:ring-indigo-500"
         >
           {years.map(y => <option key={y} value={y}>{y}</option>)}

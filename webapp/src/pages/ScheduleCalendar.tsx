@@ -314,7 +314,7 @@ export default function ScheduleCalendar() {
                   ${isLastCol ? '' : 'border-r border-gray-800'}
                   ${isLastRow ? '' : 'border-b border-gray-800'}
                   ${isOpen ? 'bg-indigo-950/50 ring-1 ring-inset ring-indigo-500/40 z-10' : 'hover:bg-gray-800/50'}
-                  ${isOverride && !isOpen ? 'ring-1 ring-inset ring-amber-500/25' : ''}
+                  ${isOverride && !isOpen ? 'ring-1 ring-inset ring-amber-500/50 bg-amber-950/20' : ''}
                 `}
                 onClick={e => {
                   e.stopPropagation()
@@ -326,7 +326,12 @@ export default function ScheduleCalendar() {
                   <span className={`text-xs font-semibold w-5 h-5 flex items-center justify-center rounded-full ${isToday ? 'bg-indigo-600 text-white' : 'text-gray-500'}`}>
                     {dayNum}
                   </span>
-                  {isOverride && <span className="w-1.5 h-1.5 rounded-full bg-amber-500 flex-shrink-0" />}
+                  {isOverride && (
+                    <span
+                      title="Manual override"
+                      className="w-2 h-2 rounded-full bg-amber-400 flex-shrink-0 ring-1 ring-amber-300/30"
+                    />
+                  )}
                 </div>
 
                 <div className="flex flex-wrap gap-0.5">

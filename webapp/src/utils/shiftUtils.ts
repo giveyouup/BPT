@@ -38,10 +38,11 @@ export function parseShiftSummary(summary: string): string[] {
   return tokens.length > 0 ? [...new Set(tokens)] : [summary.trim()]
 }
 
-/** True if this shift type represents a non-working day (vacation, holiday, postcall) */
+/** True if this shift type represents a non-working day (vacation, holiday, postcall).
+ *  Case-insensitive; accepts "postcall", "post-call", "post call", etc. */
 export function isOffDayShift(shiftType: string): boolean {
-  const u = shiftType.toUpperCase()
-  return u === 'V' || u === 'H' || u === 'POSTCALL'
+  const normalized = shiftType.trim().toUpperCase().replace(/[-\s]/g, '')
+  return normalized === 'V' || normalized === 'H' || normalized === 'POSTCALL'
 }
 
 export function isWeekendOrHoliday(date: string, holidayList: string[]): boolean {
@@ -66,12 +67,14 @@ function dateToISO(d: Date): string {
 function nthWeekday(year: number, month: number, dow: number, n: number): string {
   const d = new Date(year, month - 1, 1)
   let count = 0
-  while (true) {
+  let guard = 0
+  while (guard < 35) {
     if (d.getDay() === dow) {
       count++
       if (count === n) break
     }
     d.setDate(d.getDate() + 1)
+    guard++
   }
   return dateToISO(d)
 }
