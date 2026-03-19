@@ -132,6 +132,7 @@ export interface Settings {
   clinicalDayStart: string // "HH:MM" — attribution cutoff & duration normalization boundary
   shiftHours: { APS: number; APS_weekend: number; BR: number; NIR: number }
   holidays: Record<number, string[]> // year -> ["YYYY-MM-DD", ...]
+  stipendMappingOverrides?: Record<string, string> // "YYYY-MM" -> mapping id (for months without a report)
 }
 
 export interface CptRange {

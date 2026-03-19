@@ -34,7 +34,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
           </svg>
         </button>
-        <span className="text-sm font-bold text-indigo-400 tracking-tight">BPT</span>
+        <span className="text-sm font-bold tracking-tight bg-gradient-to-r from-indigo-400 via-violet-400 to-fuchsia-400 bg-clip-text text-transparent">BRACT</span>
       </div>
 
       {/* Backdrop overlay (mobile) */}
@@ -56,10 +56,10 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       `}>
         {/* Header */}
         <div className="px-4 py-5 border-b border-gray-800 flex items-center justify-between min-h-[72px]">
-          {/* BPT title — hidden on desktop when collapsed */}
+          {/* BRACT title — hidden on desktop when collapsed */}
           <div className={desktopCollapsed ? 'hidden' : ''}>
-            <h1 className="text-lg font-bold text-indigo-400 tracking-tight">BPT</h1>
-            <p className="text-xs text-gray-500 mt-0.5">Bijan's PCR Tracker</p>
+            <h1 className="text-lg font-bold tracking-tight bg-gradient-to-r from-indigo-400 via-violet-400 to-fuchsia-400 bg-clip-text text-transparent">BRACT</h1>
+            <p className="text-xs text-gray-500 mt-0.5">Bijan's Revenue &amp; Anesthesia Comp Tracker</p>
           </div>
 
           {/* Desktop collapse toggle */}

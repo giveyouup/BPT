@@ -91,7 +91,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
       setLoading(false)
     }).catch((err) => {
       console.error('Failed to load data:', err)
-      setLoadError('Could not reach the server. Make sure the BPT server is running.')
+      setLoadError('Could not reach the server. Make sure the BRACT server is running.')
       setLoading(false)
     })
   }, [])

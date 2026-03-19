@@ -519,8 +519,9 @@ export function computeCalendarMonthWorkingDays(
   const defaultNoTimeHours = labeledReport?.defaultNoTimeHours ?? settings.defaultNoTimeHours
   const holidayList = settings.holidays[calYear] ?? computeFederalHolidays(calYear)
 
-  // Auto-select mapping for this calendar month (use labeled report's override if set)
-  const overrideId = labeledReport?.stipendMappingOverride
+  // Auto-select mapping for this calendar month (use labeled report's override if set, then settings override)
+  const monthKey = `${String(calYear)}-${String(calMonth).padStart(2, '0')}`
+  const overrideId = labeledReport?.stipendMappingOverride ?? settings.stipendMappingOverrides?.[monthKey]
   const applicableMapping = allMappings.length
     ? (overrideId
         ? (allMappings.find((m) => m.id === overrideId) ?? getApplicableMapping(calYear, calMonth, allMappings))

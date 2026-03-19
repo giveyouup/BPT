@@ -115,7 +115,7 @@ const GROUPS: {
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export default function StipendCalculator() {
-  const { reports, schedules: allSchedules, settings, stipendMappings: allMappings, saveReport } = useData()
+  const { reports, schedules: allSchedules, settings, stipendMappings: allMappings, saveReport, saveSettings } = useData()
 
   const scheduleYears = allSchedules.flatMap((s) => s.entries.map((e) => parseInt(e.date.slice(0, 4))))
   const reportYears = reports.map((r) => r.year)
@@ -162,7 +162,8 @@ export default function StipendCalculator() {
   const rows: MonthRow[] = []
   for (const [month, entries] of [...monthMap.entries()].sort((a, b) => a[0] - b[0])) {
     const reportForMonth = reports.find((r) => r.year === selectedYear && r.month === month)
-    const overrideId = reportForMonth?.stipendMappingOverride ?? null
+    const monthKey = `${selectedYear}-${String(month).padStart(2, '0')}`
+    const overrideId = settings.stipendMappingOverrides?.[monthKey] ?? reportForMonth?.stipendMappingOverride ?? null
     const autoMapping = allMappings.length ? getApplicableMapping(selectedYear, month, allMappings) : null
     const mapping = overrideId
       ? (allMappings.find((m) => m.id === overrideId) ?? autoMapping)
@@ -221,14 +222,22 @@ export default function StipendCalculator() {
   }
 
   async function handleOverrideChange(month: number, mappingId: string) {
-    const report = reports.find((r) => r.year === selectedYear && r.month === month)
-    if (!report) return
+    const monthKey = `${selectedYear}-${String(month).padStart(2, '0')}`
     setSavingMonth(month)
     try {
-      await saveReport({
-        ...report,
-        stipendMappingOverride: mappingId || undefined,
-      })
+      const overrides = { ...(settings.stipendMappingOverrides ?? {}) }
+      if (mappingId) {
+        overrides[monthKey] = mappingId
+      } else {
+        delete overrides[monthKey]
+      }
+      await saveSettings({ ...settings, stipendMappingOverrides: overrides })
+
+      // Also update the report's override field if a report exists (keeps them in sync)
+      const report = reports.find((r) => r.year === selectedYear && r.month === month)
+      if (report) {
+        await saveReport({ ...report, stipendMappingOverride: mappingId || undefined })
+      }
     } finally {
       setSavingMonth(null)
     }
@@ -380,7 +389,7 @@ export default function StipendCalculator() {
                           {formatCurrencyFull(total)}
                         </td>
                         <td className="px-4 py-3 text-left">
-                          {reports.find((r) => r.year === selectedYear && r.month === row.month) ? (
+                          {allMappings.length > 0 ? (
                             <div className="flex items-center gap-1.5">
                               {row.overrideId && (
                                 <span className="w-1.5 h-1.5 rounded-full bg-amber-400 flex-shrink-0" title="Manual override active" />
