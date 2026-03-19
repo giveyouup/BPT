@@ -383,11 +383,7 @@ export default function ScheduleCalendar() {
           <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
           Manual override
         </span>
-        <span className="flex items-center gap-1.5">
-          <span className="w-5 h-5 rounded-full bg-indigo-600 inline-flex items-center justify-center text-white text-[10px] font-semibold">9</span>
-          Today
-        </span>
-        <span className="text-gray-700">Click any day to edit · Multiple shifts space-separated · Leave blank and save to mark as no shift · Revert removes the override entirely</span>
+<span className="text-gray-700">Click any day to edit · Multiple shifts space-separated · Leave blank and save to mark as no shift · Revert removes the override entirely</span>
       </div>
 
       {/* ── Shift Summary ──────────────────────────────────────────────────── */}
