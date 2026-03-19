@@ -219,7 +219,6 @@ export default function ScheduleCalendar() {
   const chartData = useMemo(() => ({
     G: [
       ...g1g2.map(([s, d]) => ({ shift: s, Weekday: d.wd, Weekend: d.we })),
-      ...apsEntries.map(([, d]) => ({ shift: 'APS', Weekday: d.wd, Weekend: d.we })),
       ...gHigh.map(([s, d]) => ({ shift: s, Weekday: d.wd, Weekend: d.we })),
     ],
     Special: specialShifts.map(([s, d]) => ({ shift: s, Weekday: d.wd, Weekend: d.we })),
