@@ -199,6 +199,7 @@ function PcrUploadTab() {
           workingDayOverrides: existingReport?.workingDayOverrides ?? {},
           dayStipends: existingReport?.dayStipends ?? {},
           stipends: existingReport?.stipends ?? [],
+          autoSplit: true,
         })
       }
       navigate('/')
