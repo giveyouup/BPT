@@ -53,6 +53,13 @@ type ShiftRow = {
   isFixed: boolean
 }
 
+function shiftKey(canonical: string, isCallWeekend: boolean): string {
+  const isFixed = !!getFixedShiftKey(canonical)
+  return (!isFixed && isCallShift(canonical))
+    ? `${canonical} ${isCallWeekend ? 'WE' : 'WD'}`
+    : canonical
+}
+
 function buildShiftStats(stats: MonthlyStats[], cutoff: string | null, allMappings: StipendMapping[], unitRateOverride: number | null = null): ShiftRow[] {
   type Entry = { hours: number; days: number; units: number; pay: number }
   const map = new Map<string, Entry>()
@@ -60,13 +67,6 @@ function buildShiftStats(stats: MonthlyStats[], cutoff: string | null, allMappin
   function entry(key: string): Entry {
     if (!map.has(key)) map.set(key, { hours: 0, days: 0, units: 0, pay: 0 })
     return map.get(key)!
-  }
-
-  function shiftKey(canonical: string, isCallWeekend: boolean): string {
-    const isFixed = !!getFixedShiftKey(canonical)
-    return (!isFixed && isCallShift(canonical))
-      ? `${canonical} ${isCallWeekend ? 'WE' : 'WD'}`
-      : canonical
   }
 
   for (const month of stats) {
@@ -144,6 +144,7 @@ function deltaLabel(actual: number, projected: number): string {
 
 export default function AnnualSummary() {
   const [hoursView, setHoursView] = useState<'month' | 'week'>('month')
+  const [expandedShift, setExpandedShift] = useState<string | null>(null)
   const [shiftTab, setShiftTab] = useState<'hours' | 'dollars'>('hours')
   const [shiftSort, setShiftSort] = useState<{ col: string; dir: 1 | -1 }>({ col: 'shift', dir: 1 })
   const [whatIfMappingId, setWhatIfMappingId] = useState<string | null>(null)
@@ -316,6 +317,47 @@ export default function AnnualSummary() {
         return { week: `${getMonthName(m).slice(0, 3)} ${d}`, hours: Math.round(hours * 10) / 10 }
       })
   }, [yearStats])
+
+  // ── Per-shift day map (mirrors buildShiftStats attribution logic exactly) ────
+  const shiftDayMap = useMemo(() => {
+    type DayEntry = { day: import('../types').WorkingDayStats; hours: number; pay: number }
+    const map = new Map<string, DayEntry[]>()
+    const add = (key: string, day: import('../types').WorkingDayStats, hours: number, pay: number) => {
+      if (!map.has(key)) map.set(key, [])
+      map.get(key)!.push({ day, hours, pay })
+    }
+    for (const month of yearStats) {
+      const applicableMapping = getApplicableMapping(month.year, month.month, allMappings)
+      for (const day of month.workingDays) {
+        if (day.shiftTypes.length === 0) continue
+        if (shiftDataCutoff && day.date > shiftDataCutoff) continue
+        const effectiveTotalDayPay = day.unitPay + day.stipendAmount + day.additionalStipend
+        const fixedShifts   = day.shiftTypes.filter(s => !isOffDayShift(s) && !!getFixedShiftKey(resolveShiftAlias(s.toUpperCase())))
+        const primaryShifts = day.shiftTypes.filter(s => !isOffDayShift(s) && !getFixedShiftKey(resolveShiftAlias(s.toUpperCase())))
+        const isSharedDay   = fixedShifts.length > 0 && primaryShifts.length > 0
+        if (isSharedDay) {
+          const fixedStipendTotal = getStipendForDay(fixedShifts, day.isCallWeekend, applicableMapping)
+          const primaryPayEach = (effectiveTotalDayPay - fixedStipendTotal) / primaryShifts.length
+          for (const rawSt of primaryShifts) {
+            const canonical = resolveShiftAlias(rawSt.toUpperCase())
+            add(shiftKey(canonical, day.isCallWeekend), day, day.hours, primaryPayEach)
+          }
+          for (const rawSt of fixedShifts) {
+            const canonical = resolveShiftAlias(rawSt.toUpperCase())
+            const stipend = getStipendForDay([rawSt], day.isCallWeekend, applicableMapping)
+            add(canonical, day, 0, stipend)
+          }
+        } else {
+          for (const rawSt of day.shiftTypes) {
+            if (isOffDayShift(rawSt)) continue
+            const canonical = resolveShiftAlias(rawSt.toUpperCase())
+            add(shiftKey(canonical, day.isCallWeekend), day, day.hours, effectiveTotalDayPay)
+          }
+        }
+      }
+    }
+    return map
+  }, [yearStats, allMappings, shiftDataCutoff])
 
   // Dollar/hr chart data for shift analytics — use what-if when active
   const activeShiftStats = whatIfShiftStats ?? shiftStatsData
@@ -494,6 +536,11 @@ export default function AnnualSummary() {
               <Bar dataKey="units" fill="#6366f1" radius={[4, 4, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
+          {yearStats.length > 0 && (
+            <p className="text-xs text-gray-600 mt-2 text-right">
+              Avg <span className="text-gray-400 font-medium">{(ytdUnits / yearStats.length).toFixed(1)}</span> units/month
+            </p>
+          )}
         </div>
 
         <div className="bg-gray-900 rounded-xl border border-gray-800 p-5">
@@ -592,6 +639,18 @@ export default function AnnualSummary() {
               <Bar dataKey="hours" fill="#0ea5e9" radius={hoursView === 'month' ? [4, 4, 0, 0] : [2, 2, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
+          {(() => {
+            const totalHours = yearStats.reduce((s, m) => s + m.totalHours, 0)
+            const avgWeekly = weeklyHoursData.length > 0 ? totalHours / weeklyHoursData.length : null
+            const avgMonthly = chartData.length > 0 ? totalHours / chartData.length : null
+            return (
+              <div className="mt-3 flex items-center gap-4 text-xs text-gray-500">
+                <span>Avg <span className="text-gray-300 font-medium">{avgWeekly != null ? formatHours(avgWeekly) : '—'}</span> / week</span>
+                <span className="text-gray-700">·</span>
+                <span>Avg <span className="text-gray-300 font-medium">{avgMonthly != null ? formatHours(avgMonthly) : '—'}</span> / month</span>
+              </div>
+            )
+          })()}
         </div>
       </div>
 
@@ -712,38 +771,83 @@ export default function AnnualSummary() {
                       </tr>
                     </thead>
                     <tbody>
-                      {sortedRows.map((row) => (
-                        <tr key={row.shift} className="group border-b border-gray-800 hover:bg-gray-800">
-                          <td className="px-4 py-2.5 font-mono text-xs font-semibold text-gray-200 sticky left-0 z-10 bg-gray-900 group-hover:bg-gray-800">
-                            {row.shift}
-                          </td>
-                          <td className="px-4 py-2.5 text-gray-400">{row.days}</td>
-                          <td className="px-4 py-2.5 text-gray-400">
-                            {row.isFixed ? <span className="text-gray-600 text-xs">fixed</span> : row.avgHours != null ? `${row.avgHours}h` : '—'}
-                          </td>
-                          <td className="px-4 py-2.5 text-indigo-400">{row.avgUnits.toFixed(2)}</td>
-                          <td className="px-4 py-2.5">
-                            {whatIfMapping && row.wiAvgDollarPerHr != null ? (
-                              <span className="flex flex-col">
-                                <span className="text-amber-400 font-medium">${row.wiAvgDollarPerHr}/hr</span>
-                                <span className="text-gray-600 text-[10px]">actual: {row.avgDollarPerHr != null ? `$${row.avgDollarPerHr}/hr` : '—'}</span>
-                              </span>
-                            ) : (
-                              <span className="text-amber-400">{row.avgDollarPerHr != null ? `$${row.avgDollarPerHr}/hr` : '—'}</span>
+                      {sortedRows.map((row) => {
+                        const isExpanded = expandedShift === row.shift
+                        const dayEntries = (shiftDayMap.get(row.shift) ?? []).slice().sort((a, b) => a.day.date.localeCompare(b.day.date))
+                        return (
+                          <>
+                            <tr key={row.shift}
+                              className="group border-b border-gray-800 hover:bg-gray-800 cursor-pointer select-none"
+                              onClick={() => setExpandedShift(isExpanded ? null : row.shift)}
+                            >
+                              <td className="px-4 py-2.5 font-mono text-xs font-semibold text-gray-200 sticky left-0 z-10 bg-gray-900 group-hover:bg-gray-800">
+                                <span className="flex items-center gap-2">
+                                  <svg className={`w-3 h-3 text-gray-600 flex-shrink-0 transition-transform ${isExpanded ? 'rotate-90' : ''}`}
+                                    fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                                  </svg>
+                                  {row.shift}
+                                </span>
+                              </td>
+                              <td className="px-4 py-2.5 text-gray-400">{row.days}</td>
+                              <td className="px-4 py-2.5 text-gray-400">
+                                {row.isFixed ? <span className="text-gray-600 text-xs">fixed</span> : row.avgHours != null ? `${row.avgHours}h` : '—'}
+                              </td>
+                              <td className="px-4 py-2.5 text-indigo-400">{row.avgUnits.toFixed(2)}</td>
+                              <td className="px-4 py-2.5">
+                                {whatIfMapping && row.wiAvgDollarPerHr != null ? (
+                                  <span className="flex flex-col">
+                                    <span className="text-amber-400 font-medium">${row.wiAvgDollarPerHr}/hr</span>
+                                    <span className="text-gray-600 text-[10px]">actual: {row.avgDollarPerHr != null ? `$${row.avgDollarPerHr}/hr` : '—'}</span>
+                                  </span>
+                                ) : (
+                                  <span className="text-amber-400">{row.avgDollarPerHr != null ? `$${row.avgDollarPerHr}/hr` : '—'}</span>
+                                )}
+                              </td>
+                              <td className="px-4 py-2.5">
+                                {whatIfMapping && row.wiTotalPay != null ? (
+                                  <span className="flex flex-col">
+                                    <span className="text-amber-400 font-semibold">{formatCurrencyFull(row.wiTotalPay)}</span>
+                                    <span className="text-gray-600 text-[10px]">actual: {formatCurrencyFull(row.totalPay)}</span>
+                                  </span>
+                                ) : (
+                                  <span className="text-emerald-400 font-semibold">{formatCurrencyFull(row.totalPay)}</span>
+                                )}
+                              </td>
+                            </tr>
+                            {isExpanded && (
+                              <tr key={`${row.shift}-detail`} className="border-b border-gray-800 bg-gray-950">
+                                <td colSpan={cols.length} className="px-6 py-3">
+                                  <table className="w-full text-xs">
+                                    <thead>
+                                      <tr className="text-gray-600 uppercase tracking-wider border-b border-gray-800">
+                                        <th className="pb-1.5 text-left font-semibold pr-6">Date</th>
+                                        <th className="pb-1.5 text-left font-semibold pr-6">Cases</th>
+                                        <th className="pb-1.5 text-left font-semibold pr-6">Start</th>
+                                        <th className="pb-1.5 text-left font-semibold pr-6">End</th>
+                                        <th className="pb-1.5 text-left font-semibold pr-6">Hours</th>
+                                        <th className="pb-1.5 text-left font-semibold">Total Pay</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {dayEntries.map(({ day, hours, pay }) => (
+                                        <tr key={day.date} className="border-t border-gray-800/50">
+                                          <td className="py-1 pr-6 text-gray-300">{formatDateFull(day.date)}</td>
+                                          <td className="py-1 pr-6 text-gray-500">{day.caseCount > 0 ? day.caseCount : '—'}</td>
+                                          <td className="py-1 pr-6 font-mono text-gray-500">{day.firstStartTime ?? '—'}</td>
+                                          <td className="py-1 pr-6 font-mono text-gray-500">{day.lastEndTime ?? '—'}</td>
+                                          <td className="py-1 pr-6 text-gray-400">{hours > 0 ? formatHours(hours) : '—'}</td>
+                                          <td className="py-1 text-emerald-400 font-medium">{formatCurrencyFull(pay)}</td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                </td>
+                              </tr>
                             )}
-                          </td>
-                          <td className="px-4 py-2.5">
-                            {whatIfMapping && row.wiTotalPay != null ? (
-                              <span className="flex flex-col">
-                                <span className="text-amber-400 font-semibold">{formatCurrencyFull(row.wiTotalPay)}</span>
-                                <span className="text-gray-600 text-[10px]">actual: {formatCurrencyFull(row.totalPay)}</span>
-                              </span>
-                            ) : (
-                              <span className="text-emerald-400 font-semibold">{formatCurrencyFull(row.totalPay)}</span>
-                            )}
-                          </td>
-                        </tr>
-                      ))}
+                          </>
+                        )
+                      })}
                     </tbody>
                   </table>
                 </div>
