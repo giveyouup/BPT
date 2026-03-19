@@ -3,11 +3,12 @@ import { exportDashboardMonth } from '../utils/exportXlsx'
 import { createPortal } from 'react-dom'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useData } from '../context/DataContext'
-import { computeCalendarMonthWorkingDays, computeCalendarYearStats } from '../utils/calculations'
+import { computeCalendarMonthWorkingDays, computeCalendarYearStats, projectRemainingDays } from '../utils/calculations'
+import type { MonthProjection } from '../utils/calculations'
 import {
   formatCurrency, formatHours, formatMonthYear, formatDateShort, getMonthName,
 } from '../utils/dateUtils'
-import { shiftBadgeClass } from '../utils/shiftUtils'
+import { shiftBadgeClass, isOffDayShift } from '../utils/shiftUtils'
 import { getCptCategory } from '../utils/cptLookup'
 import type { WorkingDayStats } from '../types'
 
@@ -70,6 +71,8 @@ export default function Dashboard() {
   const [selectedWeek, setSelectedWeek] = useState<string | null>(null)
   const [selectedDayDate, setSelectedDayDate] = useState<string | null>(incomingDate)
   const [shiftPopover, setShiftPopover] = useState<{ date: string; input: string; x: number; y: number } | null>(null)
+  const [showProjection, setShowProjection] = useState(false)
+  const [projRateInput, setProjRateInput] = useState('')
   const shiftInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -89,6 +92,12 @@ export default function Dashboard() {
     const match = yearStats.find(s => s.month === month)
     if (match) setSelectedId(match.id)
   }, [yearStats, incomingDate])
+
+  // Reset projection when the selected month changes
+  useEffect(() => {
+    setShowProjection(false)
+    setProjRateInput('')
+  }, [selectedId])
 
   const saveDayStipend = async (date: string) => {
     if (!selStats) return
@@ -137,6 +146,12 @@ export default function Dashboard() {
     return manual ? new Set(manual.entries.map(e => e.date)) : new Set<string>()
   }, [allSchedules])
 
+  // ── Projection ──────────────────────────────────────────────────────────────
+  const priorYearStats = useMemo(
+    () => computeCalendarYearStats(selectedYear - 1, reports, allSchedules, settings, allMappings),
+    [selectedYear, reports, allSchedules, settings, allMappings]
+  )
+
   if (reports.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center h-full text-center px-8">
@@ -179,7 +194,30 @@ export default function Dashboard() {
   const weeks = groupByWeek(monthDays)
   const maxWeekHours = Math.max(...weeks.map((w) => w.hours), 1)
 
-
+  // Projection computed values
+  const today = new Date()
+  const curYear = today.getFullYear()
+  const curMonth = today.getMonth() + 1
+  const prevYear  = curMonth === 1 ? curYear - 1 : curYear
+  const prevMonth = curMonth === 1 ? 12 : curMonth - 1
+  const isProjectableMonth = (
+    (selStats.year === curYear  && selStats.month === curMonth) ||
+    (selStats.year === prevYear && selStats.month === prevMonth)
+  )
+  const remainingDays = monthDays.filter(
+    (d) => !d.hasProduction && d.shiftTypes.some((s) => !isOffDayShift(s))
+  )
+  const ytdRate = (() => {
+    const u = yearStats.reduce((s, m) => s + m.totalDistributableUnits, 0)
+    const p = yearStats.reduce((s, m) => s + m.unitCompensation, 0)
+    return u > 0 ? p / u : 0
+  })()
+  const projRate = projRateInput !== '' && !isNaN(parseFloat(projRateInput))
+    ? parseFloat(projRateInput)
+    : ytdRate
+  const projection: MonthProjection | null = showProjection && remainingDays.length > 0
+    ? projectRemainingDays(remainingDays, yearStats, priorYearStats, projRate)
+    : null
 
   return (
     <>
@@ -260,24 +298,120 @@ export default function Dashboard() {
                 {getMonthName(s.month).slice(0, 3)}
               </button>
             ))}
+          {isProjectableMonth && remainingDays.length > 0 && (
+            <button
+              onClick={() => setShowProjection((v) => !v)}
+              title={showProjection ? 'Hide projection' : `Project ${remainingDays.length} unprocessed day${remainingDays.length !== 1 ? 's' : ''}`}
+              className={`ml-auto flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium transition-colors border ${
+                showProjection
+                  ? 'bg-amber-900/30 border-amber-700/50 text-amber-300'
+                  : 'border-gray-700 text-gray-500 hover:text-gray-300 hover:border-gray-600'
+              }`}
+            >
+              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                  d="M13 10V3L4 14h7v7l9-11h-7z" />
+              </svg>
+              Project
+            </button>
+          )}
         </div>
 
         {/* Selected month summary */}
-        <div className="grid grid-cols-3 sm:grid-cols-6 divide-x divide-gray-800 border-b border-gray-800">
-          {[
-            { label: 'Cases', value: String(selStats.totalCases) },
-            { label: 'Units', value: selStats.totalDistributableUnits.toFixed(2) },
-            { label: '$/Unit', value: effectiveRate != null ? `$${effectiveRate.toFixed(2)} avg` : '—' },
-            { label: 'Unit Pay', value: formatCurrency(selStats.unitCompensation) },
-            { label: 'Stipends', value: formatCurrency(selStats.totalStipends) },
-            { label: 'Total Pay', value: formatCurrency(selStats.totalCompensation) },
-          ].map((item) => (
-            <div key={item.label} className="px-5 py-4">
-              <p className="text-xs text-gray-500">{item.label}</p>
-              <p className="text-base font-semibold text-gray-100 mt-0.5">{item.value}</p>
+        {(() => {
+          const projUnits   = projection ? selStats.totalDistributableUnits + projection.totalProjectedUnits : null
+          const projUnitPay = projection ? selStats.unitCompensation + projection.totalProjectedUnitPay : null
+          const projTotal   = projection ? (selStats.unitCompensation + projection.totalProjectedUnitPay + selStats.totalStipends) : null
+          const items = [
+            {
+              label: 'Cases',
+              value: String(selStats.totalCases),
+              sub: projection ? `${selStats.totalCases} recorded` : undefined,
+              proj: false,
+            },
+            {
+              label: 'Units',
+              value: projUnits != null ? `~${projUnits.toFixed(1)}` : selStats.totalDistributableUnits.toFixed(2),
+              sub: projection ? `actual: ${selStats.totalDistributableUnits.toFixed(1)} + ~${projection.totalProjectedUnits.toFixed(1)} proj` : undefined,
+              proj: !!projection,
+            },
+            {
+              label: '$/Unit',
+              value: projection ? `$${projRate.toFixed(2)}` : (effectiveRate != null ? `$${effectiveRate.toFixed(2)} avg` : '—'),
+              sub: projection ? 'YTD avg · editable below' : undefined,
+              proj: !!projection,
+            },
+            {
+              label: 'Unit Pay',
+              value: projUnitPay != null ? `~${formatCurrency(projUnitPay)}` : formatCurrency(selStats.unitCompensation),
+              sub: projection ? `actual: ${formatCurrency(selStats.unitCompensation)}` : undefined,
+              proj: !!projection,
+            },
+            {
+              label: 'Stipends',
+              value: formatCurrency(selStats.totalStipends),
+              sub: projection ? 'exact · full month' : undefined,
+              proj: false,
+            },
+            {
+              label: 'Total Pay',
+              value: projTotal != null ? `~${formatCurrency(projTotal)}` : formatCurrency(selStats.totalCompensation),
+              sub: projection ? `actual: ${formatCurrency(selStats.totalCompensation)}` : undefined,
+              proj: !!projection,
+            },
+          ]
+          return (
+            <div className="grid grid-cols-3 sm:grid-cols-6 divide-x divide-gray-800 border-b border-gray-800">
+              {items.map((item) => (
+                <div key={item.label} className="px-5 py-4">
+                  <p className="text-xs text-gray-500">{item.label}</p>
+                  <p className={`text-base font-semibold mt-0.5 ${item.proj ? 'text-amber-400' : 'text-gray-100'}`}>
+                    {item.value}
+                  </p>
+                  {item.sub && <p className="text-[10px] text-gray-600 mt-0.5">{item.sub}</p>}
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
+          )
+        })()}
+
+        {/* Projection banner */}
+        {showProjection && projection && (
+          <div className="border-b border-gray-800 px-5 py-3 bg-amber-950/20">
+            <div className="flex items-center gap-4 flex-wrap text-xs">
+              <span className="text-amber-500 font-medium flex items-center gap-1.5">
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
+                Projection
+              </span>
+              <span className="text-gray-500">
+                {projection.days.length} unprocessed {projection.days.length === 1 ? 'day' : 'days'} · ~{projection.totalProjectedUnits.toFixed(1)} units
+              </span>
+              <span className="text-gray-700">·</span>
+              <span className="text-gray-600">
+                {projection.currentYearDays > 0 && `${projection.currentYearDays}d current yr`}
+                {projection.currentYearDays > 0 && projection.priorYearDays > 0 && ' + '}
+                {projection.priorYearDays > 0 && `${projection.priorYearDays}d prior yr`}
+                {projection.currentYearDays > 0 && projection.priorYearDays > 0 && ' (weighted)'}
+              </span>
+              <div className="flex items-center gap-1.5 ml-auto">
+                <span className="text-gray-600 uppercase tracking-wider text-[10px]">$/unit</span>
+                <div className="relative">
+                  <span className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-500 pointer-events-none">$</span>
+                  <input
+                    type="number"
+                    step="0.01"
+                    placeholder={ytdRate.toFixed(2)}
+                    value={projRateInput}
+                    onChange={(e) => setProjRateInput(e.target.value)}
+                    className="w-20 bg-gray-800 border border-gray-700 rounded pl-5 pr-2 py-1 text-gray-300 focus:outline-none focus:ring-1 focus:ring-amber-500 text-xs"
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Weekly hours */}
         <div className="px-5 py-4">

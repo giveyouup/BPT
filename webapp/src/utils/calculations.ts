@@ -704,3 +704,137 @@ export function computeCalendarYearStats(
   }
   return results
 }
+
+// ─── Month projection ──────────────────────────────────────────────────────
+
+/** Per-shift-type unit average derived from historical WorkingDayStats */
+function buildShiftUnitMap(stats: MonthlyStats[]): Map<string, { avgUnits: number; days: number }> {
+  const acc = new Map<string, { totalUnits: number; days: number }>()
+  for (const month of stats) {
+    for (const day of month.workingDays) {
+      if (!day.hasProduction || day.shiftTypes.length === 0) continue
+      const primaryShifts = day.shiftTypes.filter(
+        (s) => !isOffDayShift(s) && !getFixedShiftKey(resolveShiftAlias(s.toUpperCase()))
+      )
+      if (primaryShifts.length === 0) continue
+      const unitsEach = day.totalUnits / primaryShifts.length
+      for (const raw of primaryShifts) {
+        const canonical = resolveShiftAlias(raw.toUpperCase())
+        const sk = isCallShift(canonical)
+          ? `${canonical} ${day.isCallWeekend ? 'WE' : 'WD'}`
+          : canonical
+        if (!acc.has(sk)) acc.set(sk, { totalUnits: 0, days: 0 })
+        const e = acc.get(sk)!
+        e.totalUnits += unitsEach
+        e.days++
+      }
+    }
+  }
+  const result = new Map<string, { avgUnits: number; days: number }>()
+  for (const [key, { totalUnits, days }] of acc) {
+    result.set(key, { avgUnits: days > 0 ? totalUnits / days : 0, days })
+  }
+  return result
+}
+
+export interface DayProjection {
+  date: string
+  projectedUnits: number
+  projectedUnitPay: number
+  stipendAmount: number  // exact — taken directly from WorkingDayStats
+  projectedTotal: number
+}
+
+export interface MonthProjection {
+  days: DayProjection[]
+  totalProjectedUnits: number
+  totalProjectedUnitPay: number
+  /** Sample counts used for blending — shown in the data note */
+  currentYearDays: number
+  priorYearDays: number
+}
+
+/**
+ * Project unit production for scheduled days that have no PCR line items.
+ * Stipends are exact (already on WorkingDayStats); only unit production is estimated.
+ *
+ * Blending rule per shift type:
+ *   - If currentYear.days >= priorYear.days → use current year only (prior fully displaced)
+ *   - Otherwise → weighted average: (currDays×currAvg + priorDays×priorAvg) / totalDays
+ *   - No history at all → fall back to overall avg units/production-day across both years
+ */
+export function projectRemainingDays(
+  remainingDays: WorkingDayStats[],
+  currentYearStats: MonthlyStats[],
+  priorYearStats: MonthlyStats[],
+  ytdRate: number,
+): MonthProjection {
+  const currMap  = buildShiftUnitMap(currentYearStats)
+  const priorMap = buildShiftUnitMap(priorYearStats)
+
+  // Overall fallback avg across all production days in both years
+  const allProdDays = [...currentYearStats, ...priorYearStats]
+    .flatMap((m) => m.workingDays)
+    .filter((d) => d.hasProduction)
+  const overallAvg = allProdDays.length > 0
+    ? allProdDays.reduce((s, d) => s + d.totalUnits, 0) / allProdDays.length
+    : 0
+
+  const days: DayProjection[] = []
+
+  for (const day of remainingDays) {
+    const primaryShifts = day.shiftTypes.filter(
+      (s) => !isOffDayShift(s) && !getFixedShiftKey(resolveShiftAlias(s.toUpperCase()))
+    )
+
+    let projectedUnits = 0
+
+    if (primaryShifts.length === 0) {
+      // Fixed-shift-only day (e.g. APS solo) — stipend is exact, no unit production
+    } else {
+      for (const raw of primaryShifts) {
+        const canonical = resolveShiftAlias(raw.toUpperCase())
+        const sk = isCallShift(canonical)
+          ? `${canonical} ${day.isCallWeekend ? 'WE' : 'WD'}`
+          : canonical
+        const curr  = currMap.get(sk)
+        const prior = priorMap.get(sk)
+
+        let avg: number
+        if (!curr && !prior) {
+          avg = overallAvg
+        } else if (!prior || prior.days === 0) {
+          avg = curr!.avgUnits
+        } else if (!curr || curr.days === 0) {
+          avg = prior.avgUnits
+        } else if (curr.days >= prior.days) {
+          avg = curr.avgUnits  // prior year fully displaced
+        } else {
+          const total = curr.days + prior.days
+          avg = (curr.days * curr.avgUnits + prior.days * prior.avgUnits) / total
+        }
+        projectedUnits += avg
+      }
+    }
+
+    const projectedUnitPay = projectedUnits * ytdRate
+    days.push({
+      date: day.date,
+      projectedUnits,
+      projectedUnitPay,
+      stipendAmount: day.stipendAmount,
+      projectedTotal: projectedUnitPay + day.stipendAmount,
+    })
+  }
+
+  const currentYearDays = [...currMap.values()].reduce((s, v) => s + v.days, 0)
+  const priorYearDays   = [...priorMap.values()].reduce((s, v) => s + v.days, 0)
+
+  return {
+    days,
+    totalProjectedUnits:   days.reduce((s, d) => s + d.projectedUnits, 0),
+    totalProjectedUnitPay: days.reduce((s, d) => s + d.projectedUnitPay, 0),
+    currentYearDays,
+    priorYearDays,
+  }
+}
