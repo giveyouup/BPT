@@ -444,6 +444,42 @@ export default function ScheduleCalendar() {
             />
           </div>
 
+          {/* Distribution bar */}
+          {yearSummary.totalWorking > 0 && (() => {
+            const segments = [
+              { label: 'G1/G2',   count: g1g2.reduce((s, [, d]) => s + d.total, 0),          color: 'bg-rose-500' },
+              { label: 'APS',     count: apsEntries.reduce((s, [, d]) => s + d.total, 0),     color: 'bg-amber-500' },
+              { label: 'G3+',     count: gHigh.reduce((s, [, d]) => s + d.total, 0),          color: 'bg-rose-300' },
+              { label: 'Special', count: specialShifts.reduce((s, [, d]) => s + d.total, 0),  color: 'bg-indigo-400' },
+              { label: 'FS',      count: fsTotal,                                              color: 'bg-teal-400' },
+              { label: 'Other',   count: otherShifts.reduce((s, [, d]) => s + d.total, 0),    color: 'bg-gray-400' },
+              { label: 'Days Off', count: yearSummary.daysOff,                                 color: 'bg-gray-700' },
+            ].filter(s => s.count > 0)
+            const total = segments.reduce((s, seg) => s + seg.count, 0)
+            return (
+              <div className="mt-4 mb-2">
+                <div className="flex rounded-md overflow-hidden h-2.5">
+                  {segments.map(seg => (
+                    <div
+                      key={seg.label}
+                      title={`${seg.label}: ${seg.count}`}
+                      style={{ width: `${(seg.count / total) * 100}%` }}
+                      className={seg.color}
+                    />
+                  ))}
+                </div>
+                <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2">
+                  {segments.map(seg => (
+                    <span key={seg.label} className="flex items-center gap-1.5 text-[10px] text-gray-500">
+                      <span className={`w-2 h-2 rounded-sm flex-shrink-0 ${seg.color}`} />
+                      {seg.label} <span className="text-gray-400 font-medium">{seg.count}</span>
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )
+          })()}
+
           {/* Row 2: G1, G2, APS */}
           {(g1g2.length > 0 || apsEntries.length > 0) && (
             <>
