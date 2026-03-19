@@ -219,6 +219,16 @@ export default function Dashboard() {
     ? projectRemainingDays(remainingDays, yearStats, priorYearStats, projRate)
     : null
 
+  // Lookup maps derived from projection (empty when projection is off)
+  const projByDate = new Map(projection?.days.map((d) => [d.date, d]) ?? [])
+  const weekProjHours = new Map<string, number>()
+  if (projection) {
+    for (const day of remainingDays) {
+      const key = weekStart(day.date)
+      weekProjHours.set(key, (weekProjHours.get(key) ?? 0) + day.hours)
+    }
+  }
+
   return (
     <>
     <div className="p-4 md:p-8">
@@ -462,18 +472,34 @@ export default function Dashboard() {
                     {/* Date label: desktop always visible, mobile hidden */}
                     <span className={`hidden sm:block text-xs w-32 flex-shrink-0 ${isSelected ? 'text-sky-300 font-medium' : 'text-gray-500'}`}>{w.label}</span>
                     {/* Bar: layered so date can overlay on mobile when selected */}
-                    <div className="flex-1 relative h-4">
-                      <div className="absolute inset-0 bg-gray-800 rounded-full" />
-                      <div
-                        className={`absolute inset-y-0 left-0 rounded-full transition-all ${isSelected ? 'bg-sky-400' : 'bg-sky-500'}`}
-                        style={{ width: `${(w.hours / maxWeekHours) * 100}%` }}
-                      />
-                      {isSelected && (
-                        <span className="sm:hidden absolute inset-0 flex items-center pl-2 text-xs font-medium text-white/90 whitespace-nowrap">
-                          {w.label}
-                        </span>
-                      )}
-                    </div>
+                    {(() => {
+                      const projHrs   = weekProjHours.get(w.key) ?? 0
+                      const actualHrs = w.hours - projHrs
+                      const actualPct = (actualHrs / maxWeekHours) * 100
+                      const projPct   = (projHrs   / maxWeekHours) * 100
+                      return (
+                        <div className="flex-1 relative h-4">
+                          <div className="absolute inset-0 bg-gray-800 rounded-full" />
+                          {actualHrs > 0 && (
+                            <div
+                              className={`absolute inset-y-0 left-0 transition-all ${isSelected ? 'bg-sky-400' : 'bg-sky-500'}`}
+                              style={{ width: `${actualPct}%`, borderRadius: projHrs > 0 ? '9999px 0 0 9999px' : '9999px' }}
+                            />
+                          )}
+                          {projHrs > 0 && (
+                            <div
+                              className="absolute inset-y-0 bg-amber-500/70 transition-all"
+                              style={{ left: `${actualPct}%`, width: `${projPct}%`, borderRadius: actualHrs > 0 ? '0 9999px 9999px 0' : '9999px' }}
+                            />
+                          )}
+                          {isSelected && (
+                            <span className="sm:hidden absolute inset-0 flex items-center pl-2 text-xs font-medium text-white/90 whitespace-nowrap">
+                              {w.label}
+                            </span>
+                          )}
+                        </div>
+                      )
+                    })()}
                     <span className={`text-xs font-semibold w-14 text-right flex-shrink-0 ${isSelected ? 'text-sky-300' : 'text-gray-200'}`}>
                       {formatHours(w.hours)}
                     </span>
@@ -503,20 +529,26 @@ export default function Dashboard() {
                     </thead>
                     <tbody>
                     {monthDays.filter((d) => !selectedWeek || weekStart(d.date) === selectedWeek).map((day) => {
-                      const unitsPerHr = day.hours > 0 && day.totalUnits > 0 ? day.totalUnits / day.hours : null
+                      const dayProj = projByDate.get(day.date) ?? null
+                      const isProj  = dayProj !== null && !day.hasProduction
+                      const unitsPerHr  = day.hours > 0 && day.totalUnits > 0 ? day.totalUnits / day.hours : null
                       const dollarPerHr = day.hours > 0 && day.totalDayPay > 0 ? day.totalDayPay / day.hours : null
-                      const rowBg = !day.hasProduction ? 'opacity-50' : ''
+                      const projUnitsPerHr  = isProj && day.hours > 0 ? dayProj!.projectedUnits / day.hours : null
+                      const projDollarPerHr = isProj && day.hours > 0 ? dayProj!.projectedTotal / day.hours : null
+                      const rowBg = isProj
+                        ? 'bg-amber-950/10 border-l-2 border-l-amber-800/40'
+                        : (!day.hasProduction ? 'opacity-50' : '')
                       const isExpanded = selectedDayDate === day.date
                       const dayCases = selStats.cases.filter((c) => c.serviceDate === day.date)
                       return (
                         <React.Fragment key={day.date}>
                         <tr
-                          className={`${rowBg} cursor-pointer ${isExpanded ? 'bg-indigo-950/30' : 'hover:bg-gray-800/40'} transition-colors`}
+                          className={`${rowBg} cursor-pointer ${isExpanded ? 'bg-indigo-950/30' : (!isProj ? 'hover:bg-gray-800/40' : 'hover:bg-amber-950/20')} transition-colors`}
                           onClick={() => setSelectedDayDate(isExpanded ? null : day.date)}
                         >
-                          <td className={`py-1 text-gray-500 sticky left-0 ${isExpanded ? 'bg-indigo-950/60' : 'bg-gray-900'}`}>{formatDateShort(day.date)}</td>
+                          <td className={`py-1 text-gray-500 sticky left-0 ${isExpanded ? 'bg-indigo-950/60' : isProj ? 'bg-amber-950/20' : 'bg-gray-900'}`}>{formatDateShort(day.date)}</td>
                           <td
-                            className={`py-1 sticky left-20 z-10 ${isExpanded ? 'bg-indigo-950/60' : 'bg-gray-900'}`}
+                            className={`py-1 sticky left-20 z-10 ${isExpanded ? 'bg-indigo-950/60' : isProj ? 'bg-amber-950/20' : 'bg-gray-900'}`}
                             onClick={e => e.stopPropagation()}
                           >
                             <button
@@ -539,20 +571,42 @@ export default function Dashboard() {
                           </td>
                           <td className="py-1 text-gray-500 pr-3">{day.firstStartTime ?? '—'}</td>
                           <td className="py-1 text-gray-500 pr-3">{day.lastEndTime ?? '—'}</td>
-                          <td className="py-1 text-gray-500 pr-3">
-                            {day.caseCount > 0 ? `${day.caseCount} cases` : (!day.hasProduction ? 'no prod.' : '')}
+                          <td className="py-1 pr-3">
+                            {day.caseCount > 0
+                              ? <span className="text-gray-500">{day.caseCount} cases</span>
+                              : isProj
+                                ? <span className="text-amber-600 flex items-center gap-0.5">
+                                    <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                                    </svg>
+                                    proj
+                                  </span>
+                                : <span className="text-gray-600">no prod.</span>
+                            }
                           </td>
-                          <td className="py-1 text-right text-indigo-400 pr-3">
-                            {day.totalUnits > 0 ? day.totalUnits.toFixed(2) : '—'}
+                          <td className="py-1 text-right pr-3">
+                            {isProj
+                              ? <span className="text-amber-400">~{dayProj!.projectedUnits.toFixed(2)}</span>
+                              : <span className="text-indigo-400">{day.totalUnits > 0 ? day.totalUnits.toFixed(2) : '—'}</span>
+                            }
                           </td>
-                          <td className="py-1 text-right text-indigo-300 pr-3">
-                            {unitsPerHr !== null ? unitsPerHr.toFixed(2) : '—'}
+                          <td className="py-1 text-right pr-3">
+                            {isProj
+                              ? <span className="text-amber-400">{projUnitsPerHr != null ? `~${projUnitsPerHr.toFixed(2)}` : '—'}</span>
+                              : <span className="text-indigo-300">{unitsPerHr !== null ? unitsPerHr.toFixed(2) : '—'}</span>
+                            }
                           </td>
-                          <td className="py-1 text-right text-emerald-400 pr-3">
-                            {day.unitPay > 0 ? formatCurrency(day.unitPay) : '—'}
+                          <td className="py-1 text-right pr-3">
+                            {isProj
+                              ? <span className="text-amber-400">~{formatCurrency(dayProj!.projectedUnitPay)}</span>
+                              : <span className="text-emerald-400">{day.unitPay > 0 ? formatCurrency(day.unitPay) : '—'}</span>
+                            }
                           </td>
-                          <td className="py-1 text-right text-emerald-400 pr-3">
-                            {day.stipendAmount > 0 ? formatCurrency(day.stipendAmount) : '—'}
+                          <td className="py-1 text-right pr-3">
+                            {isProj
+                              ? <span className="text-emerald-400">{dayProj!.stipendAmount > 0 ? formatCurrency(dayProj!.stipendAmount) : '—'}</span>
+                              : <span className="text-emerald-400">{day.stipendAmount > 0 ? formatCurrency(day.stipendAmount) : '—'}</span>
+                            }
                           </td>
                           <td className="py-1 text-right pr-3" onClick={(e) => e.stopPropagation()}>
                             {editingDayDate === day.date ? (
@@ -582,11 +636,17 @@ export default function Dashboard() {
                               </button>
                             )}
                           </td>
-                          <td className="py-1 text-right text-emerald-300 pr-3">
-                            {dollarPerHr !== null ? `$${dollarPerHr.toFixed(0)}` : '—'}
+                          <td className="py-1 text-right pr-3">
+                            {isProj
+                              ? <span className="text-amber-400">{projDollarPerHr != null ? `~$${projDollarPerHr.toFixed(0)}` : '—'}</span>
+                              : <span className="text-emerald-300">{dollarPerHr !== null ? `$${dollarPerHr.toFixed(0)}` : '—'}</span>
+                            }
                           </td>
-                          <td className="py-1 text-right font-medium text-gray-200 pr-3">
-                            {day.totalDayPay > 0 ? formatCurrency(day.totalDayPay) : '—'}
+                          <td className="py-1 text-right font-medium pr-3">
+                            {isProj
+                              ? <span className="text-amber-400">~{formatCurrency(dayProj!.projectedTotal)}</span>
+                              : <span className="text-gray-200">{day.totalDayPay > 0 ? formatCurrency(day.totalDayPay) : '—'}</span>
+                            }
                           </td>
                           <td className="py-1 text-right" onClick={(e) => e.stopPropagation()}>
                             {editingHoursDate === day.date ? (
