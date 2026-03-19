@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react'
+import { exportDashboardMonth } from '../utils/exportXlsx'
 import { createPortal } from 'react-dom'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { useData } from '../context/DataContext'
@@ -291,6 +292,15 @@ export default function Dashboard() {
               )}
               <span>&middot;</span>
               <span className="font-medium text-gray-300">{formatHours(monthHours)} total</span>
+              <button
+                onClick={() => exportDashboardMonth(monthDays, selStats.cases, selStats.year, selStats.month)}
+                title="Export to Excel"
+                className="text-gray-600 hover:text-gray-300 transition-colors"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3M3 17V7a2 2 0 012-2h6l2 2h6a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z" />
+                </svg>
+              </button>
               <button
                 onClick={() => navigate(`/month/${selStats.id}`)}
                 className="text-indigo-400 font-medium hover:text-indigo-300"

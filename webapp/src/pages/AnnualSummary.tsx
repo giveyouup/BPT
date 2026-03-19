@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
+import { exportShiftAnalytics, exportMonthBreakdown } from '../utils/exportXlsx'
 import {
   BarChart, Bar, Cell, LineChart, Line, XAxis, YAxis, CartesianGrid,
   Tooltip, Legend, ResponsiveContainer, ReferenceLine,
@@ -150,6 +151,7 @@ export default function AnnualSummary() {
   const [whatIfMappingId, setWhatIfMappingId] = useState<string | null>(null)
   const [whatIfUnitRate, setWhatIfUnitRate] = useState<number | null>(null)
   const [showWhatIfPopover, setShowWhatIfPopover] = useState(false)
+  const [showYoY, setShowYoY] = useState(false)
   const popoverRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -174,6 +176,15 @@ export default function AnnualSummary() {
   const yearStats = useMemo(
     () => year ? computeCalendarYearStats(year, reports, allSchedules, settings, allMappings) : [],
     [year, reports, allSchedules, settings, allMappings]
+  )
+
+  // ── YoY stats for all years (for comparison view) ─────────────────────────
+  const allYearStats = useMemo(
+    () => years.map((y) => ({
+      year: y,
+      stats: computeCalendarYearStats(y, reports, allSchedules, settings, allMappings),
+    })),
+    [years, reports, allSchedules, settings, allMappings],
   )
 
   const whatIfMapping = whatIfMappingId
@@ -374,7 +385,7 @@ export default function AnnualSummary() {
         {years.length > 1 && (
           <div className="flex gap-2 ml-4">
             {years.map((y) => (
-              <button key={y} onClick={() => { navigate(`/annual/${y}`); setWhatIfMappingId(null); setWhatIfUnitRate(null) }}
+              <button key={y} onClick={() => { navigate(`/annual/${y}`); setWhatIfMappingId(null); setWhatIfUnitRate(null); setShowYoY(false) }}
                 className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
                   y === year ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-gray-200'
                 }`}>
@@ -382,6 +393,18 @@ export default function AnnualSummary() {
               </button>
             ))}
           </div>
+        )}
+        {years.length > 1 && (
+          <button
+            onClick={() => setShowYoY((v) => !v)}
+            className={`ml-2 px-3 py-1 rounded-md text-sm font-medium transition-colors border ${
+              showYoY
+                ? 'border-violet-600 bg-violet-900/30 text-violet-300'
+                : 'border-gray-700 text-gray-500 hover:text-gray-300 hover:border-gray-600'
+            }`}
+          >
+            YoY
+          </button>
         )}
 
         {/* Projection icon button */}
@@ -474,6 +497,95 @@ export default function AnnualSummary() {
           </button>
         </div>
       )}
+
+      {/* Year-over-Year Comparison */}
+      {showYoY && years.length > 1 && (() => {
+        const allMonths = [1,2,3,4,5,6,7,8,9,10,11,12]
+        // Only show months that have data in at least one year
+        const activeMonths = allMonths.filter((m) =>
+          allYearStats.some(({ stats }) => stats.some((s) => s.month === m))
+        )
+        const sortedYears = [...years].sort((a, b) => a - b)
+
+        return (
+          <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden mb-8">
+            <div className="px-5 py-4 border-b border-gray-800">
+              <h3 className="text-sm font-semibold text-gray-300">Year-over-Year Comparison</h3>
+              <p className="text-xs text-gray-600 mt-0.5">Units and total compensation by month across all uploaded years</p>
+            </div>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm min-w-max">
+                <thead>
+                  <tr className="border-b border-gray-800">
+                    <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider sticky left-0 z-10 bg-gray-900">Month</th>
+                    {sortedYears.map((y) => (
+                      <th key={y} colSpan={3} className={`px-4 py-3 text-center text-xs font-semibold uppercase tracking-wider border-l border-gray-800 ${y === year ? 'text-indigo-400' : 'text-gray-500'}`}>
+                        {y}
+                      </th>
+                    ))}
+                  </tr>
+                  <tr className="border-b border-gray-800">
+                    <th className="sticky left-0 z-10 bg-gray-900" />
+                    {sortedYears.map((y) => (
+                      <>
+                        <th key={`${y}-cases`} className="px-3 py-2 text-right text-[10px] font-semibold text-gray-600 uppercase tracking-wider border-l border-gray-800">Cases</th>
+                        <th key={`${y}-units`} className="px-3 py-2 text-right text-[10px] font-semibold text-gray-600 uppercase tracking-wider">Units</th>
+                        <th key={`${y}-pay`} className="px-3 py-2 text-right text-[10px] font-semibold text-gray-600 uppercase tracking-wider">Total Pay</th>
+                      </>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {activeMonths.map((m) => (
+                    <tr key={m} className="border-b border-gray-800 hover:bg-gray-800/50 transition-colors">
+                      <td className="px-4 py-2.5 text-gray-400 font-medium sticky left-0 z-10 bg-gray-900 group-hover:bg-gray-800 text-sm">
+                        {getMonthName(m).slice(0, 3)}
+                      </td>
+                      {sortedYears.map((y) => {
+                        const ys = allYearStats.find((a) => a.year === y)
+                        const ms = ys?.stats.find((s) => s.month === m)
+                        const isCurrent = y === year
+                        return (
+                          <>
+                            <td key={`${y}-${m}-cases`} className={`px-3 py-2.5 text-right text-xs border-l border-gray-800 ${ms ? (isCurrent ? 'text-gray-300' : 'text-gray-500') : 'text-gray-800'}`}>
+                              {ms ? ms.totalCases : '—'}
+                            </td>
+                            <td key={`${y}-${m}-units`} className={`px-3 py-2.5 text-right text-xs font-medium ${ms ? (isCurrent ? 'text-indigo-400' : 'text-indigo-600') : 'text-gray-800'}`}>
+                              {ms ? ms.totalDistributableUnits.toFixed(1) : '—'}
+                            </td>
+                            <td key={`${y}-${m}-pay`} className={`px-3 py-2.5 text-right text-xs font-semibold ${ms ? (isCurrent ? 'text-emerald-400' : 'text-emerald-700') : 'text-gray-800'}`}>
+                              {ms ? formatCurrency(ms.totalCompensation) : '—'}
+                            </td>
+                          </>
+                        )
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr className="bg-gray-800 border-t border-gray-700 font-semibold">
+                    <td className="px-4 py-3 text-gray-300 sticky left-0 z-10 bg-gray-800 text-sm">Total</td>
+                    {sortedYears.map((y) => {
+                      const ys = allYearStats.find((a) => a.year === y)
+                      const totalCases = ys?.stats.reduce((s, m) => s + m.totalCases, 0) ?? 0
+                      const totalUnits = ys?.stats.reduce((s, m) => s + m.totalDistributableUnits, 0) ?? 0
+                      const totalPay   = ys?.stats.reduce((s, m) => s + m.totalCompensation, 0) ?? 0
+                      const isCurrent = y === year
+                      return (
+                        <>
+                          <td key={`${y}-tot-cases`} className={`px-3 py-3 text-right text-xs border-l border-gray-700 ${isCurrent ? 'text-gray-200' : 'text-gray-500'}`}>{totalCases}</td>
+                          <td key={`${y}-tot-units`} className={`px-3 py-3 text-right text-xs ${isCurrent ? 'text-indigo-300' : 'text-indigo-700'}`}>{totalUnits.toFixed(1)}</td>
+                          <td key={`${y}-tot-pay`} className={`px-3 py-3 text-right text-xs ${isCurrent ? 'text-emerald-300' : 'text-emerald-700'}`}>{formatCurrency(totalPay)}</td>
+                        </>
+                      )
+                    })}
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          </div>
+        )
+      })()}
 
       {/* Shift analytics cutoff notice */}
       {shiftDataCutoff && (
@@ -676,6 +788,16 @@ export default function AnnualSummary() {
             {/* Tab header */}
             <div className="flex items-center justify-between mb-1">
               <h3 className="text-sm font-semibold text-gray-300">Shift Type Analytics</h3>
+              <div className="flex items-center gap-2">
+              <button
+                onClick={() => exportShiftAnalytics(shiftTableData, year, isProjectionActive)}
+                title="Export to Excel"
+                className="p-1 text-gray-600 hover:text-gray-300 transition-colors"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3M3 17V7a2 2 0 012-2h6l2 2h6a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z" />
+                </svg>
+              </button>
               <div className="flex gap-1 bg-gray-800 rounded-lg p-1">
                 <button
                   onClick={() => setShiftTab('hours')}
@@ -693,6 +815,7 @@ export default function AnnualSummary() {
                 >
                   Avg $/hr
                 </button>
+              </div>
               </div>
             </div>
             {whatIfMapping && (
@@ -872,11 +995,26 @@ export default function AnnualSummary() {
 
       {/* Month-by-month table */}
       <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
-        <div className="px-5 py-4 border-b border-gray-800">
-          <h3 className="text-sm font-semibold text-gray-300">Month-by-Month Breakdown</h3>
-          {whatIfMapping && (
-            <p className="text-[10px] text-amber-600 mt-0.5">Stipends and totals shown using {whatIfMapping.name}</p>
-          )}
+        <div className="px-5 py-4 border-b border-gray-800 flex items-center justify-between">
+          <div>
+            <h3 className="text-sm font-semibold text-gray-300">Month-by-Month Breakdown</h3>
+            {whatIfMapping && (
+              <p className="text-[10px] text-amber-600 mt-0.5">Stipends and totals shown using {whatIfMapping.name}</p>
+            )}
+          </div>
+          <button
+            onClick={() => exportMonthBreakdown(yearStats, year, isProjectionActive ? {
+              unitPayByMonth: projUnitPayByMonth ?? undefined,
+              stipendsByMonth: projStipendsByMonth ?? undefined,
+              totalByMonth: projTotalByMonth ?? undefined,
+            } : undefined)}
+            title="Export to Excel"
+            className="p-1 text-gray-600 hover:text-gray-300 transition-colors"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3M3 17V7a2 2 0 012-2h6l2 2h6a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z" />
+            </svg>
+          </button>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm min-w-max">
