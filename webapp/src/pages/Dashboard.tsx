@@ -217,7 +217,7 @@ export default function Dashboard() {
     ? parseFloat(projRateInput)
     : ytdRate
   const projection: MonthProjection | null = showProjection && remainingDays.length > 0
-    ? projectRemainingDays(remainingDays, yearStats, priorYearStats, projRate)
+    ? projectRemainingDays(remainingDays, yearStats, priorYearStats, projRate, settings.shiftHours)
     : null
 
   // Lookup maps derived from projection (empty when projection is off)

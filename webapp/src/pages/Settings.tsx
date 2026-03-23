@@ -3,7 +3,7 @@ import { api, type MaintenanceResult } from '../api'
 import { useNavigate } from 'react-router-dom'
 import { useData } from '../context/DataContext'
 import { computeFederalHolidays, getFederalHolidayLabels } from '../utils/shiftUtils'
-import { formatDateFull, formatMonthYear, lastDayOfMonth, MONTH_ABBREVS } from '../utils/dateUtils'
+import { formatDateFull, formatMonthYear, lastDayOfMonth, MONTH_ABBREVS, randomId } from '../utils/dateUtils'
 import { parseStipendMapping } from '../utils/stipendMappingParser'
 import type { StipendMapping, StipendRate } from '../types'
 
@@ -78,11 +78,43 @@ export default function Settings() {
     saveStipendMapping,
     deleteStipendMapping,
     cptRanges,
+    physicians,
+    activePhysicianId,
+    savePhysician,
+    deletePhysician,
   } = useData()
 
   const [settings, setSettings] = useState(apiSettings)
   const [saved, setSaved] = useState(false)
   const [defaultsOpen, setDefaultsOpen] = useState(false)
+
+  // ── Physicians ──────────────────────────────────────────────────────────────
+  const [newPhysicianName, setNewPhysicianName] = useState('')
+  const [editingPhysicianId, setEditingPhysicianId] = useState<string | null>(null)
+  const [editingPhysicianName, setEditingPhysicianName] = useState('')
+  const [physicianSaving, setPhysicianSaving] = useState(false)
+  const [physicianError, setPhysicianError] = useState<string | null>(null)
+
+  const doSavePhysician = (p: { id: string; name: string }, onDone?: () => void) => {
+    setPhysicianSaving(true)
+    setPhysicianError(null)
+    let promise: Promise<void>
+    try {
+      promise = savePhysician(p)
+    } catch (err) {
+      setPhysicianError(String(err))
+      setPhysicianSaving(false)
+      return
+    }
+    promise
+      .then(() => onDone?.())
+      .catch((err) => setPhysicianError(String(err)))
+      .finally(() => setPhysicianSaving(false))
+  }
+
+  // ── Fixed-shift add form ────────────────────────────────────────────────────
+  const [newShiftName, setNewShiftName] = useState('')
+  const [newShiftHours, setNewShiftHours] = useState('8')
 
   // ── Maintenance ────────────────────────────────────────────────────────────
   const [maintState, setMaintState] = useState<'idle' | 'running' | 'done' | 'error'>('idle')
@@ -385,6 +417,93 @@ export default function Settings() {
         )}
       </div>
 
+      {/* Physicians */}
+      <section className="bg-gray-900 rounded-xl border border-gray-800 p-6 mb-6">
+        <h3 className="text-sm font-semibold text-gray-300 mb-4">Physicians</h3>
+        <div className="space-y-2 mb-4">
+          {physicians.map((p) => (
+            <div key={p.id} className="flex items-center gap-2 bg-gray-800/50 rounded-lg px-3 py-2">
+              {editingPhysicianId === p.id ? (
+                <>
+                  <input
+                    autoFocus
+                    value={editingPhysicianName}
+                    onChange={(e) => setEditingPhysicianName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        doSavePhysician({ id: p.id, name: editingPhysicianName.trim() || p.name }, () => setEditingPhysicianId(null))
+                      } else if (e.key === 'Escape') {
+                        setEditingPhysicianId(null)
+                      }
+                    }}
+                    className="flex-1 bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm text-gray-100 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  />
+                  <button
+                    disabled={physicianSaving}
+                    onClick={() => doSavePhysician({ id: p.id, name: editingPhysicianName.trim() || p.name }, () => setEditingPhysicianId(null))}
+                    className="text-xs px-2 py-1 bg-indigo-600 text-white rounded hover:bg-indigo-500 transition-colors"
+                  >Save</button>
+                  <button onClick={() => setEditingPhysicianId(null)} className="text-xs px-2 py-1 text-gray-400 hover:text-gray-200 transition-colors">Cancel</button>
+                </>
+              ) : (
+                <>
+                  <span className="w-5 h-5 rounded-full bg-indigo-600 flex items-center justify-center text-white text-[10px] font-bold flex-shrink-0">
+                    {p.name[0].toUpperCase()}
+                  </span>
+                  <span className="flex-1 text-sm text-gray-200">{p.name}</span>
+                  {p.id === activePhysicianId && (
+                    <span className="text-[10px] text-indigo-400 font-medium px-1.5 py-0.5 bg-indigo-500/10 rounded">active</span>
+                  )}
+                  <button
+                    onClick={() => { setEditingPhysicianId(p.id); setEditingPhysicianName(p.name) }}
+                    className="text-gray-500 hover:text-gray-300 transition-colors"
+                    title="Rename"
+                  >
+                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                    </svg>
+                  </button>
+                  {physicians.length > 1 && (
+                    <button
+                      onClick={() => { if (confirm(`Delete ${p.name}? Their data will no longer be accessible.`)) deletePhysician(p.id) }}
+                      className="text-gray-600 hover:text-red-400 transition-colors"
+                      title="Delete"
+                    >
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                      </svg>
+                    </button>
+                  )}
+                </>
+              )}
+            </div>
+          ))}
+        </div>
+        <div className="flex gap-2">
+          <input
+            value={newPhysicianName}
+            onChange={(e) => setNewPhysicianName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && newPhysicianName.trim()) {
+                doSavePhysician({ id: randomId(), name: newPhysicianName.trim() }, () => setNewPhysicianName(''))
+              }
+            }}
+            placeholder="New physician name"
+            className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 placeholder-gray-600"
+          />
+          <button
+            disabled={!newPhysicianName.trim() || physicianSaving}
+            onClick={() => doSavePhysician({ id: randomId(), name: newPhysicianName.trim() }, () => setNewPhysicianName(''))}
+            className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          >
+            Add
+          </button>
+        </div>
+        {physicianError && (
+          <p className="mt-2 text-xs text-red-400">{physicianError}</p>
+        )}
+      </section>
+
       {/* Defaults (collapsible) */}
       <section className="bg-gray-900 rounded-xl border border-gray-800 mb-6">
         <button
@@ -405,33 +524,114 @@ export default function Settings() {
           <div className="px-6 pb-6 border-t border-gray-800 pt-5 space-y-6">
             {/* Fixed-shift hours */}
             <div>
-              <h4 className="text-xs font-semibold text-gray-400 mb-1">Fixed-Hour Shift Defaults</h4>
+              <h4 className="text-xs font-semibold text-gray-400 mb-1">Fixed-Hour Shifts</h4>
               <p className="text-xs text-gray-600 mb-3">
-                APS, BR, and NIR shifts use these hours regardless of case times. Override per day via the pencil icon.
+                Shifts listed here use a preset hour count instead of computing hours from case times. Override per day via the pencil icon.
               </p>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-                {([
-                  { key: 'APS', label: 'APS Weekday' },
-                  { key: 'APS_weekend', label: 'APS Wknd/Holiday' },
-                  { key: 'BR', label: 'BR' },
-                  { key: 'NIR', label: 'NIR' },
-                ] as const).map(({ key, label }) => (
-                  <div key={key}>
-                    <label className="block text-xs font-semibold text-gray-400 mb-1.5">{label} (hours)</label>
-                    <input
-                      type="number"
-                      step="0.5"
-                      value={settings.shiftHours[key]}
-                      onChange={(e) =>
-                        setSettings((s) => ({
-                          ...s,
-                          shiftHours: { ...s.shiftHours, [key]: parseFloat(e.target.value) || 0 },
-                        }))
-                      }
-                      className={inputCls}
-                    />
+              {/* Table of primary shifts (exclude _weekend variant keys) */}
+              {(() => {
+                const primaryKeys = Object.keys(settings.shiftHours).filter(k => !k.toUpperCase().endsWith('_WEEKEND'))
+                return (
+                  <div className="space-y-2 mb-3">
+                    {primaryKeys.map((key) => {
+                      const weekendKey = Object.keys(settings.shiftHours).find(k => k.toUpperCase() === `${key.toUpperCase()}_WEEKEND`)
+                      const hasWeekend = weekendKey !== undefined
+                      return (
+                        <div key={key} className="flex items-center gap-3 bg-gray-800/40 border border-gray-800 rounded-lg px-3 py-2.5">
+                          {/* Shift name */}
+                          <span className="w-20 text-sm font-mono font-medium text-gray-200 flex-shrink-0">{key}</span>
+                          {/* Weekday hours */}
+                          <div className="flex items-center gap-1.5">
+                            <label className="text-xs text-gray-500 whitespace-nowrap">Weekday hrs</label>
+                            <input
+                              type="number" step="0.5" min="0"
+                              value={settings.shiftHours[key]}
+                              onChange={(e) => setSettings((s) => ({ ...s, shiftHours: { ...s.shiftHours, [key]: parseFloat(e.target.value) || 0 } }))}
+                              className="w-16 bg-gray-900 border border-gray-700 rounded px-2 py-1 text-sm text-gray-100 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                            />
+                          </div>
+                          {/* Weekend toggle + hours */}
+                          <div className="flex items-center gap-1.5">
+                            <input
+                              type="checkbox" id={`we-${key}`}
+                              checked={hasWeekend}
+                              onChange={(e) => {
+                                if (e.target.checked) {
+                                  setSettings((s) => ({ ...s, shiftHours: { ...s.shiftHours, [`${key}_weekend`]: s.shiftHours[key] } }))
+                                } else {
+                                  setSettings((s) => {
+                                    const next = { ...s.shiftHours }
+                                    if (weekendKey) delete next[weekendKey]
+                                    return { ...s, shiftHours: next }
+                                  })
+                                }
+                              }}
+                              className="accent-indigo-500"
+                            />
+                            <label htmlFor={`we-${key}`} className="text-xs text-gray-500 whitespace-nowrap cursor-pointer">Wknd/Holiday hrs</label>
+                            {hasWeekend && weekendKey && (
+                              <input
+                                type="number" step="0.5" min="0"
+                                value={settings.shiftHours[weekendKey]}
+                                onChange={(e) => setSettings((s) => ({ ...s, shiftHours: { ...s.shiftHours, [weekendKey]: parseFloat(e.target.value) || 0 } }))}
+                                className="w-16 bg-gray-900 border border-gray-700 rounded px-2 py-1 text-sm text-gray-100 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                              />
+                            )}
+                          </div>
+                          {/* Delete */}
+                          <button
+                            onClick={() => setSettings((s) => {
+                              const next = { ...s.shiftHours }
+                              delete next[key]
+                              if (weekendKey) delete next[weekendKey]
+                              return { ...s, shiftHours: next }
+                            })}
+                            className="ml-auto text-gray-700 hover:text-red-400 transition-colors flex-shrink-0"
+                            title="Remove shift"
+                          >
+                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                            </svg>
+                          </button>
+                        </div>
+                      )
+                    })}
                   </div>
-                ))}
+                )
+              })()}
+              {/* Add new shift */}
+              <div className="flex items-center gap-2">
+                <input
+                  type="text" placeholder="Shift name (e.g. TRAUMA)"
+                  value={newShiftName}
+                  onChange={(e) => setNewShiftName(e.target.value.toUpperCase())}
+                  onKeyDown={(e) => {
+                    if (e.key !== 'Enter') return
+                    const name = newShiftName.trim()
+                    if (!name || name.endsWith('_WEEKEND') || settings.shiftHours[name] !== undefined) return
+                    setSettings((s) => ({ ...s, shiftHours: { ...s.shiftHours, [name]: parseFloat(newShiftHours) || 8 } }))
+                    setNewShiftName(''); setNewShiftHours('8')
+                  }}
+                  className="flex-1 bg-gray-800 border border-gray-700 rounded px-2.5 py-1.5 text-sm text-gray-100 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                />
+                <input
+                  type="number" step="0.5" min="0" placeholder="hrs"
+                  value={newShiftHours}
+                  onChange={(e) => setNewShiftHours(e.target.value)}
+                  className="w-16 bg-gray-800 border border-gray-700 rounded px-2.5 py-1.5 text-sm text-gray-100 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                />
+                <button
+                  onClick={() => {
+                    const name = newShiftName.trim()
+                    if (!name || name.endsWith('_WEEKEND') || settings.shiftHours[name] !== undefined) return
+                    setSettings((s) => ({ ...s, shiftHours: { ...s.shiftHours, [name]: parseFloat(newShiftHours) || 8 } }))
+                    setNewShiftName(''); setNewShiftHours('8')
+                  }}
+                  disabled={!newShiftName.trim() || newShiftName.trim().toUpperCase().endsWith('_WEEKEND') || settings.shiftHours[newShiftName.trim()] !== undefined}
+                  className="px-3 py-1.5 bg-indigo-600 text-white text-xs rounded-md hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed font-medium whitespace-nowrap"
+                >
+                  Add Shift
+                </button>
               </div>
             </div>
 

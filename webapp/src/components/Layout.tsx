@@ -1,11 +1,23 @@
-import { useState } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { NavLink, useNavigate } from 'react-router-dom'
 import { useData } from '../context/DataContext'
 import { formatMonthYear } from '../utils/dateUtils'
 
 export default function Layout({ children }: { children: React.ReactNode }) {
-  const { reports } = useData()
+  const { reports, physicians, activePhysicianId, setActivePhysicianId } = useData()
   const navigate = useNavigate()
+  const [physicianMenuOpen, setPhysicianMenuOpen] = useState(false)
+  const physicianMenuRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (physicianMenuRef.current && !physicianMenuRef.current.contains(e.target as Node)) {
+        setPhysicianMenuOpen(false)
+      }
+    }
+    if (physicianMenuOpen) document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [physicianMenuOpen])
 
   const years = [...new Set(reports.map((r) => r.year))].sort((a, b) => b - a)
   const [selectedYear, setSelectedYear] = useState<number>(years[0] ?? new Date().getFullYear())
@@ -182,6 +194,92 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                       {formatMonthYear(r.year, r.month)}
                     </button>
                   ))}
+              </div>
+            </div>
+          )}
+          {/* Physician selector — pinned at nav bottom */}
+          {physicians.length > 0 && (
+            <div className="mt-auto pt-3 border-t border-gray-800" ref={physicianMenuRef}>
+              <div className="relative">
+                {desktopCollapsed ? (
+                  /* Collapsed: avatar-only button, dropdown opens to the right */
+                  <>
+                    <button
+                      onClick={() => setPhysicianMenuOpen((o) => !o)}
+                      title={physicians.find((p) => p.id === activePhysicianId)?.name ?? 'Select physician'}
+                      className="hidden md:flex w-full items-center justify-center py-2 rounded-md text-gray-400 hover:bg-gray-800 hover:text-gray-200 transition-colors"
+                    >
+                      <span className="w-5 h-5 rounded-full bg-indigo-600 flex items-center justify-center text-white text-[10px] font-bold">
+                        {(physicians.find((p) => p.id === activePhysicianId)?.name ?? '?')[0].toUpperCase()}
+                      </span>
+                    </button>
+                    {physicianMenuOpen && (
+                      <div className="hidden md:block absolute bottom-0 left-full ml-2 bg-gray-800 border border-gray-700 rounded-lg shadow-xl overflow-hidden z-50 min-w-36">
+                        {physicians.map((p) => (
+                          <button
+                            key={p.id}
+                            onClick={() => { setActivePhysicianId(p.id); setPhysicianMenuOpen(false) }}
+                            className={`w-full flex items-center gap-2 px-3 py-2 text-xs transition-colors ${
+                              p.id === activePhysicianId
+                                ? 'bg-indigo-600/20 text-indigo-300'
+                                : 'text-gray-300 hover:bg-gray-700'
+                            }`}
+                          >
+                            <span className="w-4 h-4 rounded-full bg-indigo-600 flex items-center justify-center text-white text-[9px] font-bold flex-shrink-0">
+                              {p.name[0].toUpperCase()}
+                            </span>
+                            <span className="truncate">{p.name}</span>
+                            {p.id === activePhysicianId && (
+                              <svg className="w-3 h-3 ml-auto text-indigo-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                              </svg>
+                            )}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </>
+                ) : null}
+                {/* Expanded (desktop or mobile): full name row */}
+                <button
+                  onClick={() => setPhysicianMenuOpen((o) => !o)}
+                  className={`w-full flex items-center gap-2 px-3 py-2 rounded-md text-xs text-gray-400 hover:bg-gray-800 hover:text-gray-200 transition-colors ${desktopCollapsed ? 'md:hidden' : ''}`}
+                >
+                  <span className="w-5 h-5 rounded-full bg-indigo-600 flex items-center justify-center text-white text-[10px] font-bold flex-shrink-0">
+                    {(physicians.find((p) => p.id === activePhysicianId)?.name ?? '?')[0].toUpperCase()}
+                  </span>
+                  <span className="flex-1 text-left truncate">
+                    {physicians.find((p) => p.id === activePhysicianId)?.name ?? 'Select physician'}
+                  </span>
+                  <svg className="w-3 h-3 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                  </svg>
+                </button>
+                {physicianMenuOpen && !desktopCollapsed && (
+                  <div className="absolute bottom-full left-0 right-0 mb-1 bg-gray-800 border border-gray-700 rounded-lg shadow-xl overflow-hidden z-50 md:block">
+                    {physicians.map((p) => (
+                      <button
+                        key={p.id}
+                        onClick={() => { setActivePhysicianId(p.id); setPhysicianMenuOpen(false) }}
+                        className={`w-full flex items-center gap-2 px-3 py-2 text-xs transition-colors ${
+                          p.id === activePhysicianId
+                            ? 'bg-indigo-600/20 text-indigo-300'
+                            : 'text-gray-300 hover:bg-gray-700'
+                        }`}
+                      >
+                        <span className="w-4 h-4 rounded-full bg-indigo-600 flex items-center justify-center text-white text-[9px] font-bold flex-shrink-0">
+                          {p.name[0].toUpperCase()}
+                        </span>
+                        <span className="truncate">{p.name}</span>
+                        {p.id === activePhysicianId && (
+                          <svg className="w-3 h-3 ml-auto text-indigo-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                          </svg>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           )}

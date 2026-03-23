@@ -1,4 +1,4 @@
-import type { MonthlyReport, Schedule, Settings, StipendMapping, CptRange } from './types'
+import type { MonthlyReport, Schedule, Settings, StipendMapping, CptRange, Physician } from './types'
 
 export interface MaintenanceResult {
   walPagesCheckpointed: number
@@ -19,21 +19,26 @@ async function req<T>(method: string, url: string, body?: unknown): Promise<T> {
 }
 
 export const api = {
+  physicians: {
+    list: () => req<Physician[]>('GET', '/physicians'),
+    upsert: (p: { id: string; name: string }) => req<void>('PUT', `/physicians/${p.id}`, p),
+    delete: (id: string) => req<void>('DELETE', `/physicians/${id}`),
+  },
   reports: {
-    list: () => req<MonthlyReport[]>('GET', '/reports'),
+    list: (physicianId: string) => req<MonthlyReport[]>('GET', `/reports?physicianId=${encodeURIComponent(physicianId)}`),
     upsert: (r: MonthlyReport) => req<void>('PUT', `/reports/${r.id}`, r),
     delete: (id: string) => req<void>('DELETE', `/reports/${id}`),
   },
   schedules: {
-    list: () => req<Schedule[]>('GET', '/schedules'),
+    list: (physicianId: string) => req<Schedule[]>('GET', `/schedules?physicianId=${encodeURIComponent(physicianId)}`),
     upsert: (s: Schedule) => req<void>('PUT', `/schedules/${s.id}`, s),
     delete: (id: string) => req<void>('DELETE', `/schedules/${id}`),
   },
   manualShifts: {
-    list: () => req<Record<string, string[]>>('GET', '/manual-shifts'),
-    upsert: (date: string, shiftTypes: string[]) =>
-      req<void>('PUT', `/manual-shifts/${date}`, { shiftTypes }),
-    delete: (date: string) => req<void>('DELETE', `/manual-shifts/${date}`),
+    list: (physicianId: string) => req<Record<string, string[]>>('GET', `/manual-shifts?physicianId=${encodeURIComponent(physicianId)}`),
+    upsert: (physicianId: string, date: string, shiftTypes: string[]) =>
+      req<void>('PUT', `/manual-shifts/${date}`, { physicianId, shiftTypes }),
+    delete: (physicianId: string, date: string) => req<void>('DELETE', `/manual-shifts/${date}?physicianId=${encodeURIComponent(physicianId)}`),
   },
   settings: {
     get: () => req<Settings>('GET', '/settings'),

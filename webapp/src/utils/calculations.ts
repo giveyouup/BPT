@@ -11,7 +11,8 @@ import type {
 } from '../types'
 import { timeToMinutes, durationMinutes, lastDayOfMonth } from './dateUtils'
 import {
-  getFixedShiftKey,
+  isFixedShift,
+  getFixedHours,
   isCallShift,
   isOffDayShift,
   isWeekendOrHoliday,
@@ -128,7 +129,7 @@ function computeWorkingDays(
   defaultNoTimeHours: number,
   overrides: Record<string, number>,
   shiftMap?: Map<string, ShiftEntry>,
-  shiftHours?: { APS: number; APS_weekend: number; BR: number; NIR: number },
+  shiftHours?: Record<string, number>,
   holidayList?: string[],
   unitDollarValue?: number,
   stipendMapping?: StipendMapping | null,
@@ -151,10 +152,8 @@ function computeWorkingDays(
 
     const shiftEntry = shiftMap?.get(date)
     const shiftTypes = shiftEntry?.shiftTypes ?? []
-    const fixedKey = shiftTypes.reduce<ReturnType<typeof getFixedShiftKey>>(
-      (k, s) => k ?? getFixedShiftKey(s), null
-    )
-    const hasVariableShift = shiftTypes.some((s) => !isOffDayShift(s) && !getFixedShiftKey(resolveShiftAlias(s.toUpperCase())))
+    const fixedShift = shiftHours ? shiftTypes.map((s) => resolveShiftAlias(s.toUpperCase())).find((s) => isFixedShift(s, shiftHours)) ?? null : null
+    const hasVariableShift = shiftTypes.some((s) => !isOffDayShift(s) && !(shiftHours && isFixedShift(resolveShiftAlias(s.toUpperCase()), shiftHours)))
     const isCallWeekend = shiftTypes.length > 0 && !!holidayList && isWeekendOrHoliday(date, holidayList)
 
     let firstStartTime: string | null = null
@@ -164,8 +163,8 @@ function computeWorkingDays(
     if (isOverridden) {
       hours = overrides[date]
       if (hasTimes) ({ firstStartTime, lastEndTime } = getStartEndTimes(timedItems, clinicalDayStartMins))
-    } else if (fixedKey && shiftHours && !hasVariableShift) {
-      hours = fixedKey === 'APS' && isCallWeekend ? shiftHours.APS_weekend : shiftHours[fixedKey]
+    } else if (fixedShift && shiftHours && !hasVariableShift) {
+      hours = getFixedHours(fixedShift, isCallWeekend, shiftHours) ?? 0
       if (hasTimes) ({ firstStartTime, lastEndTime } = getStartEndTimes(timedItems, clinicalDayStartMins))
     } else if (hasTimes) {
       ;({ firstStartTime, lastEndTime } = getStartEndTimes(timedItems, clinicalDayStartMins))
@@ -191,7 +190,7 @@ function computeWorkingDays(
       lastEndTime,
       hours,
       isOverridden,
-      isDefault: !hasTimes && !isOverridden && !fixedKey,
+      isDefault: !hasTimes && !isOverridden && !fixedShift,
       shiftTypes,
       hasProduction: true,
       isCallWeekend,
@@ -549,10 +548,8 @@ export function computeCalendarMonthWorkingDays(
     if (pcrDayMap.has(date)) continue
 
     const shiftTypes = shiftEntry.shiftTypes
-    const fixedKey = shiftTypes.reduce<ReturnType<typeof getFixedShiftKey>>(
-      (k, s) => k ?? getFixedShiftKey(s), null
-    )
-    const hasVariableShift = shiftTypes.some((s) => !isOffDayShift(s) && !getFixedShiftKey(resolveShiftAlias(s.toUpperCase())))
+    const fixedShift = shiftTypes.map((s) => resolveShiftAlias(s.toUpperCase())).find((s) => isFixedShift(s, settings.shiftHours)) ?? null
+    const hasVariableShift = shiftTypes.some((s) => !isOffDayShift(s) && !isFixedShift(resolveShiftAlias(s.toUpperCase()), settings.shiftHours))
     const isCallWeekend = shiftTypes.length > 0 && isWeekendOrHoliday(date, holidayList)
     const stipendAmount = getStipendForDay(shiftTypes, isCallWeekend, applicableMapping)
     const additionalStipend = labeledDayStipends[date] ?? 0
@@ -566,8 +563,8 @@ export function computeCalendarMonthWorkingDays(
     } else if (shiftEntry.hoursOverride !== undefined) {
       hours = shiftEntry.hoursOverride
       isOverridden = true
-    } else if (fixedKey && !hasVariableShift) {
-      hours = fixedKey === 'APS' && isCallWeekend ? settings.shiftHours.APS_weekend : settings.shiftHours[fixedKey]
+    } else if (fixedShift && !hasVariableShift) {
+      hours = getFixedHours(fixedShift, isCallWeekend, settings.shiftHours) ?? 0
     } else if (shiftTypes.every(isOffDayShift)) {
       hours = 0
     } else {
@@ -716,6 +713,7 @@ type ShiftEntry2 = { totalUnits: number; totalHours: number; days: number; hours
  */
 function buildShiftUnitMap(
   stats: MonthlyStats[],
+  shiftHours: Record<string, number>,
 ): Map<string, { avgUnits: number; avgHours: number | null; days: number }> {
   const acc = new Map<string, ShiftEntry2>()
 
@@ -735,8 +733,8 @@ function buildShiftUnitMap(
     for (const day of month.workingDays) {
       if (!day.hasProduction || day.shiftTypes.length === 0) continue
       const nonOff    = day.shiftTypes.filter((s) => !isOffDayShift(s))
-      const primary   = nonOff.filter((s) => !getFixedShiftKey(resolveShiftAlias(s.toUpperCase())))
-      const fixedOnly = nonOff.filter((s) =>  !!getFixedShiftKey(resolveShiftAlias(s.toUpperCase())))
+      const primary   = nonOff.filter((s) => !isFixedShift(resolveShiftAlias(s.toUpperCase()), shiftHours))
+      const fixedOnly = nonOff.filter((s) =>  isFixedShift(resolveShiftAlias(s.toUpperCase()), shiftHours))
       const shiftsToUse = primary.length > 0 ? primary : fixedOnly
       if (shiftsToUse.length === 0) continue
 
@@ -744,7 +742,7 @@ function buildShiftUnitMap(
       const hoursEach = day.hours / Math.max(shiftsToUse.length, 1)
       for (const raw of shiftsToUse) {
         const canonical = resolveShiftAlias(raw.toUpperCase())
-        const isFixed   = !!getFixedShiftKey(canonical)
+        const isFixed   = isFixedShift(canonical, shiftHours)
         const sk = (primary.length > 0 && isCallShift(canonical))
           ? `${canonical} ${day.isCallWeekend ? 'WE' : 'WD'}`
           : canonical
@@ -796,9 +794,10 @@ export function projectRemainingDays(
   currentYearStats: MonthlyStats[],
   priorYearStats: MonthlyStats[],
   ytdRate: number,
+  shiftHours: Record<string, number>,
 ): MonthProjection {
-  const currMap  = buildShiftUnitMap(currentYearStats)
-  const priorMap = buildShiftUnitMap(priorYearStats)
+  const currMap  = buildShiftUnitMap(currentYearStats, shiftHours)
+  const priorMap = buildShiftUnitMap(priorYearStats, shiftHours)
 
   // Overall fallback: avg units across all production days in both years
   const allProdDays = [...currentYearStats, ...priorYearStats]
@@ -828,8 +827,8 @@ export function projectRemainingDays(
 
   for (const day of remainingDays) {
     const nonOff    = day.shiftTypes.filter((s) => !isOffDayShift(s))
-    const primary   = nonOff.filter((s) => !getFixedShiftKey(resolveShiftAlias(s.toUpperCase())))
-    const fixedOnly = nonOff.filter((s) =>  !!getFixedShiftKey(resolveShiftAlias(s.toUpperCase())))
+    const primary   = nonOff.filter((s) => !isFixedShift(resolveShiftAlias(s.toUpperCase()), shiftHours))
+    const fixedOnly = nonOff.filter((s) =>  isFixedShift(resolveShiftAlias(s.toUpperCase()), shiftHours))
     const shiftsToProject = primary.length > 0 ? primary : fixedOnly
 
     let projectedUnits = 0

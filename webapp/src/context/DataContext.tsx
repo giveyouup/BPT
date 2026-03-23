@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState, useMemo } from 'react'
-import type { MonthlyReport, Schedule, Settings, StipendMapping, CptRange } from '../types'
+import type { MonthlyReport, Schedule, Settings, StipendMapping, CptRange, Physician } from '../types'
 import { api } from '../api'
 import { parseShiftSummary } from '../utils/shiftUtils'
 import { lastDayOfMonth } from '../utils/dateUtils'
@@ -29,6 +29,11 @@ function normalizeStipendMapping(m: StipendMapping): StipendMapping {
 }
 
 interface DataContextValue {
+  physicians: Physician[]
+  activePhysicianId: string
+  setActivePhysicianId: (id: string) => void
+  savePhysician: (p: { id: string; name: string }) => Promise<void>
+  deletePhysician: (id: string) => Promise<void>
   reports: MonthlyReport[]
   schedules: Schedule[]
   settings: Settings
@@ -61,6 +66,11 @@ export function useData(): DataContextValue {
 export function DataProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
+  const [initialized, setInitialized] = useState(false)
+
+  const [physicians, setPhysicians] = useState<Physician[]>([])
+  const [activePhysicianId, setActivePhysicianIdState] = useState<string>('')
+
   const [rawReports, setRawReports] = useState<MonthlyReport[]>([])
   const [rawSchedules, setRawSchedules] = useState<Schedule[]>([])
   const [manualShifts, setManualShifts] = useState<Record<string, string[]>>({})
@@ -68,28 +78,55 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
   const [rawStipendMappings, setRawStipendMappings] = useState<StipendMapping[]>([])
   const [cptRanges, setCptRanges] = useState<CptRange[]>([])
 
+  // One-time initialization: shared data + physicians
   useEffect(() => {
     Promise.all([
-      api.reports.list(),
-      api.schedules.list(),
-      api.manualShifts.list(),
+      api.physicians.list(),
       api.settings.get(),
       api.stipendMappings.list(),
       api.cptRanges.list(),
-    ]).then(([rpts, scheds, manual, setts, mappings, cptRangesData]) => {
-      setRawReports(rpts)
-      setRawSchedules(scheds)
-      setManualShifts(manual)
-      setSettings({ ...DEFAULT_SETTINGS, ...setts, shiftHours: { ...DEFAULT_SETTINGS.shiftHours, ...setts.shiftHours } })
+    ]).then(([physList, setts, mappings, cptRangesData]) => {
+      setPhysicians(physList)
+      setSettings({ ...DEFAULT_SETTINGS, ...setts, shiftHours: setts.shiftHours ?? DEFAULT_SETTINGS.shiftHours })
       setRawStipendMappings(mappings)
       setCptRanges(cptRangesData)
-      setLoading(false)
+
+      const stored = localStorage.getItem('activePhysicianId')
+      const validId = physList.find((p) => p.id === stored)?.id ?? physList[0]?.id ?? ''
+      setActivePhysicianIdState(validId)
+      if (validId) localStorage.setItem('activePhysicianId', validId)
+      setInitialized(true)
     }).catch((err) => {
       console.error('Failed to load data:', err)
       setLoadError('Could not reach the server. Make sure the BRACT server is running.')
       setLoading(false)
     })
   }, [])
+
+  // Reload physician-specific data when activePhysicianId changes
+  useEffect(() => {
+    if (!initialized || !activePhysicianId) return
+    setLoading(true)
+    Promise.all([
+      api.reports.list(activePhysicianId),
+      api.schedules.list(activePhysicianId),
+      api.manualShifts.list(activePhysicianId),
+    ]).then(([rpts, scheds, manual]) => {
+      setRawReports(rpts)
+      setRawSchedules(scheds)
+      setManualShifts(manual)
+      setLoading(false)
+    }).catch((err) => {
+      console.error('Failed to load physician data:', err)
+      setLoadError('Could not reach the server. Make sure the BRACT server is running.')
+      setLoading(false)
+    })
+  }, [initialized, activePhysicianId])
+
+  const setActivePhysicianId = (id: string) => {
+    localStorage.setItem('activePhysicianId', id)
+    setActivePhysicianIdState(id)
+  }
 
   const reports = useMemo(() => rawReports.map(normalizeReport), [rawReports])
 
@@ -122,13 +159,40 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
     [rawStipendMappings],
   )
 
-  // ─── Mutations ──────────────────────────────────────────────────────────────
+  // ─── Physician mutations ──────────────────────────────────────────────────
+
+  const savePhysician = async (p: { id: string; name: string }) => {
+    await api.physicians.upsert(p)
+    setPhysicians((prev) => {
+      const idx = prev.findIndex((x) => x.id === p.id)
+      if (idx >= 0) {
+        const next = [...prev]
+        next[idx] = { ...next[idx], name: p.name }
+        return next
+      }
+      return [...prev, { id: p.id, name: p.name, createdAt: new Date().toISOString() }]
+    })
+  }
+
+  const deletePhysician = async (id: string) => {
+    await api.physicians.delete(id)
+    setPhysicians((prev) => {
+      const remaining = prev.filter((p) => p.id !== id)
+      if (id === activePhysicianId && remaining.length > 0) {
+        setActivePhysicianId(remaining[0].id)
+      }
+      return remaining
+    })
+  }
+
+  // ─── Mutations ────────────────────────────────────────────────────────────
 
   const saveReport = async (report: MonthlyReport) => {
-    await api.reports.upsert(report)
-    const normalized = normalizeReport(report)
+    const r = { ...report, physicianId: report.physicianId ?? activePhysicianId }
+    await api.reports.upsert(r)
+    const normalized = normalizeReport(r)
     setRawReports((prev) => {
-      const idx = prev.findIndex((r) => r.id === report.id)
+      const idx = prev.findIndex((x) => x.id === r.id)
       if (idx >= 0) {
         const next = [...prev]
         next[idx] = normalized
@@ -144,15 +208,16 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
   }
 
   const saveSchedule = async (schedule: Schedule) => {
-    await api.schedules.upsert(schedule)
+    const s = { ...schedule, physicianId: schedule.physicianId ?? activePhysicianId }
+    await api.schedules.upsert(s)
     setRawSchedules((prev) => {
-      const idx = prev.findIndex((s) => s.id === schedule.id)
+      const idx = prev.findIndex((x) => x.id === s.id)
       if (idx >= 0) {
         const next = [...prev]
-        next[idx] = schedule
+        next[idx] = s
         return next
       }
-      return [...prev, schedule].sort((a, b) => a.uploadDate.localeCompare(b.uploadDate))
+      return [...prev, s].sort((a, b) => a.uploadDate.localeCompare(b.uploadDate))
     })
   }
 
@@ -162,12 +227,12 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
   }
 
   const saveManualShift = async (date: string, shiftTypes: string[]) => {
-    await api.manualShifts.upsert(date, shiftTypes)
+    await api.manualShifts.upsert(activePhysicianId, date, shiftTypes)
     setManualShifts((prev) => ({ ...prev, [date]: shiftTypes }))
   }
 
   const deleteManualShift = async (date: string) => {
-    await api.manualShifts.delete(date)
+    await api.manualShifts.delete(activePhysicianId, date)
     setManualShifts((prev) => {
       const next = { ...prev }
       delete next[date]
@@ -219,6 +284,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <DataContext.Provider value={{
+      physicians, activePhysicianId, setActivePhysicianId, savePhysician, deletePhysician,
       reports, schedules, settings, stipendMappings, cptRanges, loading, loadError,
       saveReport, deleteReport,
       saveSchedule, deleteSchedule, saveManualShift, deleteManualShift,
