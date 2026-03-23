@@ -340,10 +340,16 @@ export function runMaintenance(): MaintenanceResult {
   const dbSizeBefore = fs.existsSync(DB_PATH) ? fs.statSync(DB_PATH).size : 0
 
   type CheckpointRow = { busy: number; log: number; checkpointed: number }
+
+  // Pre-VACUUM checkpoint (optional but reduces WAL work during VACUUM)
+  db.pragma('wal_checkpoint(TRUNCATE)')
+
+  // VACUUM rewrites the entire database through the WAL in WAL mode,
+  // so a second checkpoint is required to flush and truncate it afterwards.
+  db.exec('VACUUM')
+
   const cpRows = db.pragma('wal_checkpoint(TRUNCATE)') as CheckpointRow[]
   const cp = cpRows[0] ?? { busy: 0, log: 0, checkpointed: 0 }
-
-  db.exec('VACUUM')
 
   const dbSizeAfter = fs.existsSync(DB_PATH) ? fs.statSync(DB_PATH).size : 0
   const backupExists = fs.existsSync(DB_PATH + '.bak')
