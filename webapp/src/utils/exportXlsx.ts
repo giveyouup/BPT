@@ -180,12 +180,15 @@ export function exportStipendMappings(mappings: StipendMapping[]) {
   sorted.forEach((m) => {
     const rows: (string | number)[][] = m.rates.map((r) => [r.shiftType, r.amount])
     const ws = XLSX.utils.aoa_to_sheet(rows)
-    // Sheet names must be ≤31 chars and unique
-    const rawName = (m.name || m.effectiveDate).slice(0, 31)
+    // Always lead with YYYY-MM so the importer can auto-detect the date.
+    // Sheet names must be ≤31 chars and unique.
+    const datePrefix = m.effectiveDate.slice(0, 7)
+    const namePart = m.name ? ` ${m.name}` : ''
+    const rawName = `${datePrefix}${namePart}`.slice(0, 31)
     let sheetName = rawName
-    let suffix = 2
+    let dedupIdx = 2
     while (wb.SheetNames.includes(sheetName)) {
-      sheetName = `${rawName.slice(0, 28)}_${suffix++}`
+      sheetName = `${rawName.slice(0, 28)}_${dedupIdx++}`
     }
     XLSX.utils.book_append_sheet(wb, ws, sheetName)
   })

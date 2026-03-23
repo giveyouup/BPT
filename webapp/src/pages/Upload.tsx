@@ -3,7 +3,8 @@ import { useNavigate } from 'react-router-dom'
 import { parseXlsx, detectMonthYear, detectMonthYearFromBuffer, isRawXlsx, exportCleanXlsx } from '../utils/xlsxParser'
 import { exportStipendMappings } from '../utils/exportXlsx'
 import { parseICS } from '../utils/icsParser'
-import { parseStipendMapping } from '../utils/stipendMappingParser'
+import { parseStipendMappings } from '../utils/stipendMappingParser'
+import type { ParsedStipendSheet } from '../utils/stipendMappingParser'
 import { parseShiftSummary, shiftBadgeClass } from '../utils/shiftUtils'
 import { getWeekendPairs, buildDayList, parseScheduleText } from '../utils/schedulePaste'
 import type { ParseScheduleResult } from '../utils/schedulePaste'
@@ -1037,9 +1038,10 @@ function StipendRatesTab() {
 
   const [dragging, setDragging] = useState(false)
   const [file, setFile] = useState<File | null>(null)
-  const [rates, setRates] = useState<StipendMapping['rates'] | null>(null)
+  const [parsedSheets, setParsedSheets] = useState<ParsedStipendSheet[] | null>(null)
+  // Per-sheet effective month overrides (keyed by sheetName): YYYY-MM
+  const [sheetDates, setSheetDates] = useState<Record<string, string>>({})
   const [parseError, setParseError] = useState<string | null>(null)
-  const [uploadMonth, setUploadMonth] = useState(defaultUploadMonth)
   const [saved, setSaved] = useState(false)
 
   // ── Edit state ────────────────────────────────────────────────────────────
@@ -1047,18 +1049,24 @@ function StipendRatesTab() {
   const [draft, setDraft] = useState<StipendMapping | null>(null)
 
   const handleFile = useCallback(async (f: File) => {
-    setFile(f); setRates(null); setParseError(null); setSaved(false)
+    setFile(f); setParsedSheets(null); setSheetDates({}); setParseError(null); setSaved(false)
     try {
-      const parsed = parseStipendMapping(await f.arrayBuffer())
-      if (parsed.length === 0) {
+      const sheets = parseStipendMappings(await f.arrayBuffer())
+      if (sheets.length === 0) {
         setParseError('No valid shift→amount rows found. Expected 2-column spreadsheet (shift name, dollar amount).')
         return
       }
-      setRates(parsed)
+      setParsedSheets(sheets)
+      // Pre-fill detected dates; fallback to current month
+      const dates: Record<string, string> = {}
+      sheets.forEach((s) => {
+        dates[s.sheetName] = s.detectedDate ? s.detectedDate.slice(0, 7) : defaultUploadMonth
+      })
+      setSheetDates(dates)
     } catch (e) {
       setParseError(e instanceof Error ? e.message : 'Failed to parse file')
     }
-  }, [])
+  }, [defaultUploadMonth])
 
   const onDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault(); setDragging(false)
@@ -1066,17 +1074,23 @@ function StipendRatesTab() {
   }, [handleFile])
 
   const handleSave = async () => {
-    if (!rates || !file) return
-    const mapping: StipendMapping = {
-      id: genId(),
-      name: file.name.replace(/\.[^.]+$/, ''),
-      filename: file.name,
-      uploadDate: new Date().toISOString(),
-      effectiveDate: uploadMonth + '-01',
-      rates,
+    if (!parsedSheets || !file) return
+    const uploadDate = new Date().toISOString()
+    for (const sheet of parsedSheets) {
+      const month = sheetDates[sheet.sheetName] ?? defaultUploadMonth
+      // Use sheet name stripped of the leading YYYY-MM prefix as the mapping name
+      const strippedName = sheet.sheetName.replace(/^\d{4}-\d{2}\s*/, '').trim()
+      const mapping: StipendMapping = {
+        id: genId(),
+        name: strippedName || sheet.sheetName,
+        filename: file.name,
+        uploadDate,
+        effectiveDate: month + '-01',
+        rates: sheet.rates,
+      }
+      await saveStipendMapping(mapping)
     }
-    await saveStipendMapping(mapping)
-    setSaved(true); setFile(null); setRates(null)
+    setSaved(true); setFile(null); setParsedSheets(null); setSheetDates({})
   }
 
   const expandMapping = (m: StipendMapping) => {
@@ -1164,8 +1178,14 @@ function StipendRatesTab() {
               </svg>
             </div>
             <p className="text-sm font-medium text-gray-200">{file.name}</p>
-            <p className="text-xs text-gray-500 mt-0.5">{rates?.length ?? 0} shift rates found</p>
-            <button onClick={() => { setFile(null); setRates(null) }}
+            <p className="text-xs text-gray-500 mt-0.5">
+              {parsedSheets
+                ? parsedSheets.length === 1
+                  ? `${parsedSheets[0].rates.length} shift rates found`
+                  : `${parsedSheets.length} schedules · ${parsedSheets.reduce((n, s) => n + s.rates.length, 0)} rates total`
+                : '0 shift rates found'}
+            </p>
+            <button onClick={() => { setFile(null); setParsedSheets(null); setSheetDates({}) }}
               className="text-xs text-gray-500 hover:text-gray-300 mt-1">Remove</button>
           </div>
         ) : (
@@ -1196,26 +1216,38 @@ function StipendRatesTab() {
         </div>
       )}
 
-      {rates && (
-        <div className="bg-gray-800/50 border border-gray-700 rounded-xl p-4 mb-6">
-          <div className="flex items-center gap-4 mb-3 flex-wrap">
-            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Effective from</p>
-            <MonthPicker value={uploadMonth} onChange={setUploadMonth} />
-            <p className="text-xs text-gray-600">Rates apply from this month onward</p>
-          </div>
-          <div className="grid grid-cols-2 gap-1 max-h-48 overflow-y-auto mb-4">
-            {rates.map((r) => (
-              <div key={r.shiftType} className="flex justify-between text-xs py-1 px-2 rounded hover:bg-gray-800">
-                <span className="font-mono text-gray-400">{r.shiftType}</span>
-                <span className="text-emerald-400">${r.amount.toFixed(2)}</span>
+      {parsedSheets && (
+        <div className="space-y-3 mb-6">
+          {parsedSheets.map((sheet) => (
+            <div key={sheet.sheetName} className="bg-gray-800/50 border border-gray-700 rounded-xl p-4">
+              {parsedSheets.length > 1 && (
+                <p className="text-xs font-semibold text-gray-300 mb-3 truncate">{sheet.sheetName}</p>
+              )}
+              <div className="flex items-center gap-4 mb-3 flex-wrap">
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Effective from</p>
+                <MonthPicker
+                  value={sheetDates[sheet.sheetName] ?? defaultUploadMonth}
+                  onChange={(v) => setSheetDates((prev) => ({ ...prev, [sheet.sheetName]: v || defaultUploadMonth }))}
+                />
+                {sheet.detectedDate && (
+                  <p className="text-xs text-indigo-400">auto-detected from sheet name</p>
+                )}
               </div>
-            ))}
-          </div>
+              <div className="grid grid-cols-2 gap-1 max-h-36 overflow-y-auto">
+                {sheet.rates.map((r) => (
+                  <div key={r.shiftType} className="flex justify-between text-xs py-1 px-2 rounded hover:bg-gray-800">
+                    <span className="font-mono text-gray-400">{r.shiftType}</span>
+                    <span className="text-emerald-400">${r.amount.toFixed(2)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
           <button
             onClick={handleSave}
             className="w-full py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-500 transition-colors"
           >
-            Save Stipend Rates
+            {parsedSheets.length === 1 ? 'Save Stipend Rates' : `Save All ${parsedSheets.length} Rate Schedules`}
           </button>
         </div>
       )}
