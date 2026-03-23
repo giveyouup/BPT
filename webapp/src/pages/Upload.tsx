@@ -1,6 +1,7 @@
 import { useState, useCallback, useMemo, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { parseXlsx, detectMonthYear, detectMonthYearFromBuffer, isRawXlsx, exportCleanXlsx } from '../utils/xlsxParser'
+import { exportStipendMappings } from '../utils/exportXlsx'
 import { parseICS } from '../utils/icsParser'
 import { parseStipendMapping } from '../utils/stipendMappingParser'
 import { parseShiftSummary, shiftBadgeClass } from '../utils/shiftUtils'
@@ -1222,8 +1223,18 @@ function StipendRatesTab() {
       {/* Saved rate schedules */}
       {existingMappings.length > 0 && (
         <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
-          <div className="px-5 py-4 border-b border-gray-800">
+          <div className="px-5 py-4 border-b border-gray-800 flex items-center justify-between">
             <h3 className="text-sm font-semibold text-gray-300">Saved Stipend Rate Schedules</h3>
+            <button
+              onClick={() => exportStipendMappings(existingMappings)}
+              className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-gray-200 transition-colors"
+              title="Export all rate schedules to Excel"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+              </svg>
+              Export
+            </button>
           </div>
           <div className="divide-y divide-gray-800">
             {existingMappings.map((m, i) => {

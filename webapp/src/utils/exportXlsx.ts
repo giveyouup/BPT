@@ -1,5 +1,5 @@
 import * as XLSX from 'xlsx'
-import type { MonthlyStats, WorkingDayStats, CaseSummary } from '../types'
+import type { MonthlyStats, WorkingDayStats, CaseSummary, StipendMapping } from '../types'
 import { formatMonthYear, getMonthName } from './dateUtils'
 
 function download(wb: XLSX.WorkBook, filename: string) {
@@ -170,4 +170,24 @@ export function exportDashboardMonth(
   XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([caseHeaders, ...caseRows]), 'Cases')
   download(wb, `BRACT_${year}_${String(month).padStart(2, '0')}_${getMonthName(month)}.xlsx`)
   void monthLabel
+}
+
+// ─── Stipend Rate Schedules ────────────────────────────────────────────────
+
+export function exportStipendMappings(mappings: StipendMapping[]) {
+  const wb = XLSX.utils.book_new()
+  const sorted = [...mappings].sort((a, b) => a.effectiveDate.localeCompare(b.effectiveDate))
+  sorted.forEach((m) => {
+    const rows: (string | number)[][] = m.rates.map((r) => [r.shiftType, r.amount])
+    const ws = XLSX.utils.aoa_to_sheet(rows)
+    // Sheet names must be ≤31 chars and unique
+    const rawName = (m.name || m.effectiveDate).slice(0, 31)
+    let sheetName = rawName
+    let suffix = 2
+    while (wb.SheetNames.includes(sheetName)) {
+      sheetName = `${rawName.slice(0, 28)}_${suffix++}`
+    }
+    XLSX.utils.book_append_sheet(wb, ws, sheetName)
+  })
+  download(wb, 'BRACT_stipend_rate_schedules.xlsx')
 }
