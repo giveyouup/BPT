@@ -29,7 +29,7 @@ function normalizeSettings(s: Partial<Settings>): Settings {
   return {
     ...DEFAULT_SETTINGS,
     ...s,
-    shiftHours: { ...DEFAULT_SETTINGS.shiftHours, ...(s.shiftHours ?? {}) },
+    shiftHours: s.shiftHours ?? DEFAULT_SETTINGS.shiftHours,
     holidays: s.holidays ?? {},
   }
 }

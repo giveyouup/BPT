@@ -1,11 +1,27 @@
-export type FixedShiftKey = 'APS' | 'BR' | 'NIR'
+// Fallback set used when shiftHours is unavailable (e.g. badge callers without settings context)
+const DEFAULT_FIXED_KEYS = new Set(['APS', 'BR', 'NIR'])
 
-export function getFixedShiftKey(shiftType: string): FixedShiftKey | null {
+/** Returns true if shiftType is a primary fixed-hour shift (not a _weekend variant) */
+export function isFixedShift(shiftType: string, shiftHours: Record<string, number>): boolean {
   const u = shiftType.toUpperCase()
-  if (u === 'APS') return 'APS'
-  if (u === 'BR') return 'BR'
-  if (u === 'NIR') return 'NIR'
-  return null
+  return Object.keys(shiftHours).some((k) => k.toUpperCase() === u && !k.toUpperCase().endsWith('_WEEKEND'))
+}
+
+/**
+ * Returns the configured hours for a fixed shift.
+ * On weekends/holidays checks for a `{name}_weekend` variant key first.
+ * Returns null if the shift is not in shiftHours.
+ */
+export function getFixedHours(shiftType: string, isWeekend: boolean, shiftHours: Record<string, number>): number | null {
+  const u = shiftType.toUpperCase()
+  // Find the canonical key (case-insensitive, ignoring _weekend entries)
+  const primaryKey = Object.keys(shiftHours).find((k) => k.toUpperCase() === u && !k.toUpperCase().endsWith('_WEEKEND'))
+  if (!primaryKey) return null
+  if (isWeekend) {
+    const weekendKey = Object.keys(shiftHours).find((k) => k.toUpperCase() === `${u}_WEEKEND`)
+    if (weekendKey !== undefined) return shiftHours[weekendKey]
+  }
+  return shiftHours[primaryKey]
 }
 
 export function isCallShift(shiftType: string): boolean {
@@ -65,9 +81,9 @@ export function isWeekendOrHoliday(date: string, holidayList: string[]): boolean
   return holidayList.includes(date)
 }
 
-export function shiftBadgeClass(shiftType: string): string {
-  const key = getFixedShiftKey(shiftType)
-  if (key) return 'bg-amber-900/40 text-amber-400'
+export function shiftBadgeClass(shiftType: string, shiftHours?: Record<string, number>): string {
+  const isFixed = shiftHours ? isFixedShift(shiftType, shiftHours) : DEFAULT_FIXED_KEYS.has(shiftType.toUpperCase())
+  if (isFixed) return 'bg-amber-900/40 text-amber-400'
   if (isCallShift(shiftType)) return 'bg-rose-900/40 text-rose-400'
   if (isOffDayShift(shiftType)) return 'bg-emerald-900/50 text-emerald-400'
   return 'bg-indigo-900/30 text-indigo-400'

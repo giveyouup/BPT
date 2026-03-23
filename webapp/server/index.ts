@@ -1,6 +1,7 @@
 import express from 'express'
 import path from 'path'
 import {
+  getPhysicians, upsertPhysician, deletePhysician,
   getReports, getReport, upsertReport, deleteReport,
   getSchedules, upsertSchedule, deleteSchedule,
   getManualShifts, upsertManualShift, deleteManualShift,
@@ -15,9 +16,26 @@ const PORT = parseInt(process.env.PORT ?? '3001', 10)
 
 app.use(express.json({ limit: '50mb' }))
 
+// ─── Physicians ────────────────────────────────────────────────────────────────
+
+app.get('/api/physicians', (_req, res) => res.json(getPhysicians()))
+
+app.put('/api/physicians/:id', (req, res) => {
+  upsertPhysician({ id: req.params.id, name: req.body.name })
+  res.json({ ok: true })
+})
+
+app.delete('/api/physicians/:id', (req, res) => {
+  deletePhysician(req.params.id)
+  res.json({ ok: true })
+})
+
 // ─── Reports ──────────────────────────────────────────────────────────────────
 
-app.get('/api/reports', (_req, res) => res.json(getReports()))
+app.get('/api/reports', (req, res) => {
+  const physicianId = req.query.physicianId as string | undefined
+  res.json(getReports(physicianId))
+})
 
 app.get('/api/reports/:id', (req, res) => {
   const r = getReport(req.params.id)
@@ -36,7 +54,10 @@ app.delete('/api/reports/:id', (req, res) => {
 
 // ─── Schedules ────────────────────────────────────────────────────────────────
 
-app.get('/api/schedules', (_req, res) => res.json(getSchedules()))
+app.get('/api/schedules', (req, res) => {
+  const physicianId = req.query.physicianId as string | undefined
+  res.json(getSchedules(physicianId))
+})
 
 app.put('/api/schedules/:id', (req, res) => {
   upsertSchedule(req.body)
@@ -50,15 +71,23 @@ app.delete('/api/schedules/:id', (req, res) => {
 
 // ─── Manual Shifts ────────────────────────────────────────────────────────────
 
-app.get('/api/manual-shifts', (_req, res) => res.json(getManualShifts()))
+app.get('/api/manual-shifts', (req, res) => {
+  const physicianId = req.query.physicianId as string | undefined
+  if (!physicianId) return res.status(400).json({ error: 'physicianId required' })
+  res.json(getManualShifts(physicianId))
+})
 
 app.put('/api/manual-shifts/:date', (req, res) => {
-  upsertManualShift(req.params.date, req.body.shiftTypes ?? [])
+  const physicianId = req.body.physicianId
+  if (!physicianId) return res.status(400).json({ error: 'physicianId required' })
+  upsertManualShift(physicianId, req.params.date, req.body.shiftTypes ?? [])
   res.json({ ok: true })
 })
 
 app.delete('/api/manual-shifts/:date', (req, res) => {
-  deleteManualShift(req.params.date)
+  const physicianId = req.query.physicianId as string | undefined
+  if (!physicianId) return res.status(400).json({ error: 'physicianId required' })
+  deleteManualShift(physicianId, req.params.date)
   res.json({ ok: true })
 })
 
@@ -172,7 +201,6 @@ function scheduleMaintenance() {
     }
   }
 
-  // Run once 60 s after startup, then on the regular interval.
   setTimeout(() => {
     run()
     setInterval(run, intervalMs)

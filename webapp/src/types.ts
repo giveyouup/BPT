@@ -1,3 +1,9 @@
+export interface Physician {
+  id: string
+  name: string
+  createdAt: string
+}
+
 export interface LineItem {
   incidentId: string
   serviceDate: string // "YYYY-MM-DD"
@@ -24,6 +30,7 @@ export interface Schedule {
   filename: string
   uploadDate: string  // ISO datetime
   entries: ShiftEntry[]
+  physicianId?: string
 }
 
 export interface StipendRate {
@@ -85,6 +92,7 @@ export interface Stipend {
 
 export interface MonthlyReport {
   id: string   // "YYYY-MM"
+  physicianId?: string
   year: number
   month: number // 1–12
   filename: string
@@ -130,7 +138,7 @@ export interface Settings {
   defaultPaddingMinutes: number
   defaultNoTimeHours: number
   clinicalDayStart: string // "HH:MM" — attribution cutoff & duration normalization boundary
-  shiftHours: { APS: number; APS_weekend: number; BR: number; NIR: number }
+  shiftHours: Record<string, number>
   holidays: Record<number, string[]> // year -> ["YYYY-MM-DD", ...]
   stipendMappingOverrides?: Record<string, string> // "YYYY-MM" -> mapping id (for months without a report)
 }

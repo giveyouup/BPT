@@ -11,7 +11,7 @@ import {
   formatCurrency, formatCurrencyFull, formatDateFull, formatHours, formatMonthYear, getMonthName, MONTH_ABBREVS,
 } from '../utils/dateUtils'
 import StatCard from '../components/StatCard'
-import { isOffDayShift, getFixedShiftKey, isCallShift, resolveShiftAlias, computeFederalHolidays, isVacationShift, isHolidayOffShift, isPostcallShift } from '../utils/shiftUtils'
+import { isOffDayShift, isFixedShift, isCallShift, resolveShiftAlias, computeFederalHolidays, isVacationShift, isHolidayOffShift, isPostcallShift } from '../utils/shiftUtils'
 import type { MonthlyStats, StipendMapping } from '../types'
 
 function shiftSortKey(shift: string): string {
@@ -54,14 +54,13 @@ type ShiftRow = {
   isFixed: boolean
 }
 
-function shiftKey(canonical: string, isCallWeekend: boolean): string {
-  const isFixed = !!getFixedShiftKey(canonical)
-  return (!isFixed && isCallShift(canonical))
+function shiftKey(canonical: string, isCallWeekend: boolean, shiftHours: Record<string, number>): string {
+  return (!isFixedShift(canonical, shiftHours) && isCallShift(canonical))
     ? `${canonical} ${isCallWeekend ? 'WE' : 'WD'}`
     : canonical
 }
 
-function buildShiftStats(stats: MonthlyStats[], cutoff: string | null, allMappings: StipendMapping[], unitRateOverride: number | null = null): ShiftRow[] {
+function buildShiftStats(stats: MonthlyStats[], cutoff: string | null, allMappings: StipendMapping[], shiftHours: Record<string, number>, unitRateOverride: number | null = null): ShiftRow[] {
   type Entry = { hours: number; days: number; units: number; pay: number }
   const map = new Map<string, Entry>()
 
@@ -84,8 +83,8 @@ function buildShiftStats(stats: MonthlyStats[], cutoff: string | null, allMappin
         : day.unitPay
       const effectiveTotalDayPay = effectiveUnitPay + day.stipendAmount + day.additionalStipend
 
-      const fixedShifts   = day.shiftTypes.filter(s => !isOffDayShift(s) && !!getFixedShiftKey(resolveShiftAlias(s.toUpperCase())))
-      const primaryShifts = day.shiftTypes.filter(s => !isOffDayShift(s) && !getFixedShiftKey(resolveShiftAlias(s.toUpperCase())))
+      const fixedShifts   = day.shiftTypes.filter(s => !isOffDayShift(s) &&  isFixedShift(resolveShiftAlias(s.toUpperCase()), shiftHours))
+      const primaryShifts = day.shiftTypes.filter(s => !isOffDayShift(s) && !isFixedShift(resolveShiftAlias(s.toUpperCase()), shiftHours))
       const isSharedDay   = fixedShifts.length > 0 && primaryShifts.length > 0
 
       if (isSharedDay) {
@@ -98,7 +97,7 @@ function buildShiftStats(stats: MonthlyStats[], cutoff: string | null, allMappin
         // Primary shifts: full hours + days credit, units and pay minus fixed stipends
         for (const rawSt of primaryShifts) {
           const canonical = resolveShiftAlias(rawSt.toUpperCase())
-          const e = entry(shiftKey(canonical, day.isCallWeekend))
+          const e = entry(shiftKey(canonical, day.isCallWeekend, shiftHours))
           e.days++
           e.hours += day.hours
           e.units += primaryUnitsEach
@@ -116,7 +115,7 @@ function buildShiftStats(stats: MonthlyStats[], cutoff: string | null, allMappin
         for (const rawSt of day.shiftTypes) {
           if (isOffDayShift(rawSt)) continue
           const canonical = resolveShiftAlias(rawSt.toUpperCase())
-          const e = entry(shiftKey(canonical, day.isCallWeekend))
+          const e = entry(shiftKey(canonical, day.isCallWeekend, shiftHours))
           e.days++
           e.hours += day.hours
           e.units += day.totalUnits
@@ -133,7 +132,7 @@ function buildShiftStats(stats: MonthlyStats[], cutoff: string | null, allMappin
       avgUnits: days > 0 ? Math.round((units / days) * 100) / 100 : 0,
       avgDollarPerHr: hours > 0 ? Math.round(pay / hours) : null,
       totalPay: pay,
-      isFixed: !!getFixedShiftKey(shift),
+      isFixed: isFixedShift(shift, shiftHours),
     }))
     .sort((a, b) => shiftSortKey(a.shift).localeCompare(shiftSortKey(b.shift)))
 }
@@ -359,13 +358,13 @@ export default function AnnualSummary() {
     return max || null
   })()
 
-  const shiftStatsData = buildShiftStats(yearStats, shiftDataCutoff, allMappings)
+  const shiftStatsData = buildShiftStats(yearStats, shiftDataCutoff, allMappings, settings.shiftHours)
   const whatIfMappings = whatIfMapping
     ? [{ ...whatIfMapping, effectiveDate: '0000-01-01', endDate: undefined }]
     : allMappings
   // Compute projected shift stats whenever either lever is active
   const whatIfShiftStats = isProjectionActive
-    ? buildShiftStats(whatIfYearStats ?? yearStats, shiftDataCutoff, whatIfMappings, whatIfUnitRate)
+    ? buildShiftStats(whatIfYearStats ?? yearStats, shiftDataCutoff, whatIfMappings, settings.shiftHours, whatIfUnitRate)
     : null
 
   // Merge actual + what-if by shift key for the table
@@ -433,15 +432,15 @@ export default function AnnualSummary() {
         if (day.shiftTypes.length === 0) continue
         if (shiftDataCutoff && day.date > shiftDataCutoff) continue
         const effectiveTotalDayPay = day.unitPay + day.stipendAmount + day.additionalStipend
-        const fixedShifts   = day.shiftTypes.filter(s => !isOffDayShift(s) && !!getFixedShiftKey(resolveShiftAlias(s.toUpperCase())))
-        const primaryShifts = day.shiftTypes.filter(s => !isOffDayShift(s) && !getFixedShiftKey(resolveShiftAlias(s.toUpperCase())))
+        const fixedShifts   = day.shiftTypes.filter(s => !isOffDayShift(s) &&  isFixedShift(resolveShiftAlias(s.toUpperCase()), settings.shiftHours))
+        const primaryShifts = day.shiftTypes.filter(s => !isOffDayShift(s) && !isFixedShift(resolveShiftAlias(s.toUpperCase()), settings.shiftHours))
         const isSharedDay   = fixedShifts.length > 0 && primaryShifts.length > 0
         if (isSharedDay) {
           const fixedStipendTotal = getStipendForDay(fixedShifts, day.isCallWeekend, applicableMapping)
           const primaryPayEach = (effectiveTotalDayPay - fixedStipendTotal) / primaryShifts.length
           for (const rawSt of primaryShifts) {
             const canonical = resolveShiftAlias(rawSt.toUpperCase())
-            add(shiftKey(canonical, day.isCallWeekend), day, day.hours, primaryPayEach)
+            add(shiftKey(canonical, day.isCallWeekend, settings.shiftHours), day, day.hours, primaryPayEach)
           }
           for (const rawSt of fixedShifts) {
             const canonical = resolveShiftAlias(rawSt.toUpperCase())
@@ -452,13 +451,13 @@ export default function AnnualSummary() {
           for (const rawSt of day.shiftTypes) {
             if (isOffDayShift(rawSt)) continue
             const canonical = resolveShiftAlias(rawSt.toUpperCase())
-            add(shiftKey(canonical, day.isCallWeekend), day, day.hours, effectiveTotalDayPay)
+            add(shiftKey(canonical, day.isCallWeekend, settings.shiftHours), day, day.hours, effectiveTotalDayPay)
           }
         }
       }
     }
     return map
-  }, [yearStats, allMappings, shiftDataCutoff])
+  }, [yearStats, allMappings, shiftDataCutoff, settings])
 
   // Dollar/hr chart data for shift analytics — use what-if when active
   const activeShiftStats = whatIfShiftStats ?? shiftStatsData

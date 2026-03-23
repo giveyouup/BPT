@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useData } from '../context/DataContext'
 import type { CptRange } from '../types'
+import { randomId } from '../utils/dateUtils'
 
 type SortKey = 'lo' | 'label'
 
@@ -47,7 +48,7 @@ export default function CptRangesPage() {
     if (isNaN(lo) || isNaN(hi) || !newForm.label.trim()) return
     setSaving(true)
     try {
-      await saveCptRange({ id: crypto.randomUUID(), lo, hi: Math.max(lo, hi), label: newForm.label.trim() })
+      await saveCptRange({ id: randomId(), lo, hi: Math.max(lo, hi), label: newForm.label.trim() })
       setNewForm({ lo: '', hi: '', label: '' })
     } finally { setSaving(false) }
   }
