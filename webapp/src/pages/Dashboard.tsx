@@ -340,10 +340,10 @@ export default function Dashboard() {
 
         {/* Selected month summary */}
         {(() => {
-          const projUnits    = projection ? selStats.totalDistributableUnits + projection.totalProjectedUnits : null
-          const projUnitPay  = projection ? selStats.unitCompensation + projection.totalProjectedUnitPay : null
-          const projStipends = projection ? projection.days.reduce((s, d) => s + d.stipendAmount, 0) : 0
-          const projTotal    = projection ? (selStats.unitCompensation + projection.totalProjectedUnitPay + selStats.totalStipends + projStipends) : null
+          const projUnits   = projection ? selStats.totalDistributableUnits + projection.totalProjectedUnits : null
+          const projUnitPay = projection ? selStats.unitCompensation + projection.totalProjectedUnitPay : null
+          // selStats.totalStipends already includes ALL scheduled days (production + non-production)
+          const projTotal   = projection ? (selStats.unitCompensation + projection.totalProjectedUnitPay + selStats.totalStipends) : null
           const items = [
             {
               label: 'Cases',
@@ -371,9 +371,9 @@ export default function Dashboard() {
             },
             {
               label: 'Stipends',
-              value: projection ? `~${formatCurrency(selStats.totalStipends + projStipends)}` : formatCurrency(selStats.totalStipends),
-              sub: projection ? `actual: ${formatCurrency(selStats.totalStipends)} + ~${formatCurrency(projStipends)} sched` : undefined,
-              proj: !!projection,
+              value: formatCurrency(selStats.totalStipends),
+              sub: projection ? 'full month · exact' : undefined,
+              proj: false,
             },
             {
               label: 'Total Pay',
@@ -542,12 +542,29 @@ export default function Dashboard() {
 
               {/* Day-by-day shift detail */}
               {monthDays.some((d) => d.shiftTypes.length > 0) && (
-                <div className="mt-4 pt-4 border-t border-gray-800 overflow-x-auto">
-                  <table className="text-xs min-w-max w-full">
+                <div className="mt-4 pt-4 border-t border-gray-800 relative">
+                  {/* Option B: right-edge fade on mobile to hint at horizontal scroll */}
+                  <div className="pointer-events-none absolute inset-y-0 right-0 w-8 bg-gradient-to-l from-gray-900 to-transparent sm:hidden z-20" />
+                <div className="overflow-x-auto">
+                  <table className="text-xs min-w-max sm:w-full">
                     <thead>
                       <tr>
-                        {[['Date','w-20 text-left'],['Shift','w-16 text-left'],['Start','w-12 text-left'],['End','w-12 text-left'],['Cases','w-14 text-left'],['Units','w-12 text-right'],['Units/hr','w-14 text-right'],['Unit Pay','w-16 text-right'],['Stipend','w-16 text-right'],["Add'l",'w-20 text-right'],['$/hr','w-12 text-right'],['Total','w-16 text-right'],['Hours','w-14 text-right']].map(([label, cls], i) => (
-                          <th key={label} className={`pb-1 font-semibold text-gray-600 uppercase tracking-wider ${cls}${i === 0 ? ' sticky left-0 bg-gray-900' : i === 1 ? ' sticky left-20 bg-gray-900' : ''}`}>{label}</th>
+                        {([
+                          ['Date',     'w-14 text-left',  false],
+                          ['Shift',    'w-16 text-left',  false],
+                          ['Start',    'w-12 text-left',  false],
+                          ['End',      'w-12 text-left',  false],
+                          ['Cases',    'w-14 text-left',  true ],
+                          ['Units',    'w-12 text-right', true ],
+                          ['Units/hr', 'w-14 text-right', true ],
+                          ['Unit Pay', 'w-16 text-right', true ],
+                          ['Stipend',  'w-16 text-right', true ],
+                          ["Add'l",    'w-20 text-right', true ],
+                          ['$/hr',     'w-12 text-right', false],
+                          ['Total',    'w-16 text-right', false],
+                          ['Hours',    'w-14 text-right', true ],
+                        ] as [string, string, boolean][]).map(([label, cls, mobileHide], i) => (
+                          <th key={label} className={`pb-1 font-semibold text-gray-600 uppercase tracking-wider ${cls}${i === 0 ? ' sticky left-0 bg-gray-900' : i === 1 ? ' sticky left-14 bg-gray-900' : ''}${mobileHide ? ' hidden sm:table-cell' : ''}`}>{label}</th>
                         ))}
                       </tr>
                     </thead>
@@ -572,7 +589,7 @@ export default function Dashboard() {
                         >
                           <td className={`py-1 text-gray-500 sticky left-0 ${isExpanded ? 'bg-indigo-950/60' : isProj ? 'bg-amber-950/20' : 'bg-gray-900'}`}>{formatDateShort(day.date)}</td>
                           <td
-                            className={`py-1 sticky left-20 z-10 ${isExpanded ? 'bg-indigo-950/60' : isProj ? 'bg-amber-950/20' : 'bg-gray-900'}`}
+                            className={`py-1 sticky left-14 z-10 ${isExpanded ? 'bg-indigo-950/60' : isProj ? 'bg-amber-950/20' : 'bg-gray-900'}`}
                             onClick={e => e.stopPropagation()}
                           >
                             <button
@@ -595,7 +612,7 @@ export default function Dashboard() {
                           </td>
                           <td className="py-1 text-gray-500 pr-3">{day.firstStartTime ?? '—'}</td>
                           <td className="py-1 text-gray-500 pr-3">{day.lastEndTime ?? '—'}</td>
-                          <td className="py-1 pr-3">
+                          <td className="py-1 pr-3 hidden sm:table-cell">
                             {day.caseCount > 0
                               ? <span className="text-gray-500">{day.caseCount} cases</span>
                               : isProj
@@ -608,31 +625,31 @@ export default function Dashboard() {
                                 : <span className="text-gray-600">no prod.</span>
                             }
                           </td>
-                          <td className="py-1 text-right pr-3">
+                          <td className="py-1 text-right pr-3 hidden sm:table-cell">
                             {isProj
                               ? <span className="text-amber-400">~{dayProj!.projectedUnits.toFixed(2)}</span>
                               : <span className="text-indigo-400">{day.totalUnits > 0 ? day.totalUnits.toFixed(2) : '—'}</span>
                             }
                           </td>
-                          <td className="py-1 text-right pr-3">
+                          <td className="py-1 text-right pr-3 hidden sm:table-cell">
                             {isProj
                               ? <span className="text-amber-400">{projUnitsPerHr != null ? `~${projUnitsPerHr.toFixed(2)}` : '—'}</span>
                               : <span className="text-indigo-300">{unitsPerHr !== null ? unitsPerHr.toFixed(2) : '—'}</span>
                             }
                           </td>
-                          <td className="py-1 text-right pr-3">
+                          <td className="py-1 text-right pr-3 hidden sm:table-cell">
                             {isProj
                               ? <span className="text-amber-400">~{formatCurrency(dayProj!.projectedUnitPay)}</span>
                               : <span className="text-emerald-400">{day.unitPay > 0 ? formatCurrency(day.unitPay) : '—'}</span>
                             }
                           </td>
-                          <td className="py-1 text-right pr-3">
+                          <td className="py-1 text-right pr-3 hidden sm:table-cell">
                             {isProj
                               ? <span className="text-emerald-400">{dayProj!.stipendAmount > 0 ? formatCurrency(dayProj!.stipendAmount) : '—'}</span>
                               : <span className="text-emerald-400">{day.stipendAmount > 0 ? formatCurrency(day.stipendAmount) : '—'}</span>
                             }
                           </td>
-                          <td className="py-1 text-right pr-3" onClick={(e) => e.stopPropagation()}>
+                          <td className="py-1 text-right pr-3 hidden sm:table-cell" onClick={(e) => e.stopPropagation()}>
                             {editingDayDate === day.date ? (
                               <span className="flex items-center justify-end gap-1">
                                 <input
@@ -672,7 +689,7 @@ export default function Dashboard() {
                               : <span className="text-gray-200">{day.totalDayPay > 0 ? formatCurrency(day.totalDayPay) : '—'}</span>
                             }
                           </td>
-                          <td className="py-1 text-right" onClick={(e) => e.stopPropagation()}>
+                          <td className="py-1 text-right hidden sm:table-cell" onClick={(e) => e.stopPropagation()}>
                             {isProj ? (
                               <span className="text-amber-400">~{formatHours(dayProj!.projectedHours)}</span>
                             ) : editingHoursDate === day.date ? (
@@ -707,6 +724,14 @@ export default function Dashboard() {
                         {isExpanded && (
                           <tr className="bg-indigo-950/20">
                             <td colSpan={13} className="pb-3 pt-1 px-2">
+                              {/* Mobile-only: show fields hidden from the main row */}
+                              <div className="sm:hidden grid grid-cols-3 gap-x-4 gap-y-1 mb-3 text-xs">
+                                <div><span className="text-gray-600">Cases</span><span className="ml-1 text-gray-400">{isProj ? '—' : day.caseCount > 0 ? day.caseCount : '—'}</span></div>
+                                <div><span className="text-gray-600">Units</span><span className="ml-1 text-indigo-400">{isProj ? `~${dayProj!.projectedUnits.toFixed(2)}` : day.totalUnits > 0 ? day.totalUnits.toFixed(2) : '—'}</span></div>
+                                <div><span className="text-gray-600">Hours</span><span className="ml-1 text-gray-400">{isProj ? `~${formatHours(dayProj!.projectedHours)}` : day.hours > 0 ? formatHours(day.hours) : '—'}</span></div>
+                                <div><span className="text-gray-600">Unit Pay</span><span className="ml-1 text-emerald-400">{isProj ? `~${formatCurrency(dayProj!.projectedUnitPay)}` : day.unitPay > 0 ? formatCurrency(day.unitPay) : '—'}</span></div>
+                                <div><span className="text-gray-600">Stipend</span><span className="ml-1 text-emerald-400">{(isProj ? dayProj!.stipendAmount : day.stipendAmount) > 0 ? formatCurrency(isProj ? dayProj!.stipendAmount : day.stipendAmount) : '—'}</span></div>
+                              </div>
                               {dayCases.length === 0 ? (
                                 <p className="text-gray-600 italic">No case details available.</p>
                               ) : (
@@ -769,6 +794,7 @@ export default function Dashboard() {
                     })}
                     </tbody>
                   </table>
+                </div>
                 </div>
               )}
             </div>

@@ -329,8 +329,99 @@ export default function StipendCalculator() {
           )
         })()}
 
-        {/* ── Table ──────────────────────────────────────────────────────────── */}
-        <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
+        {/* ── Mobile card view ───────────────────────────────────────────────── */}
+        <div className="md:hidden space-y-3 mb-3">
+          {rows.map((row) => {
+            const total = rowTotal(row)
+            const isRowExpanded = activeCell?.month === row.month
+            const expandedGroup = isRowExpanded ? activeCell!.group : null
+            const nonZeroGroups = visibleGroups.filter((g) => row[g.key] > 0)
+
+            return (
+              <div key={`${row.year}-${row.month}`} className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
+                {/* Month + Total header */}
+                <div className="flex items-center justify-between px-4 py-3 border-b border-gray-800">
+                  <span className="font-semibold text-gray-200">{getMonthName(row.month)}</span>
+                  <span className="text-emerald-400 font-bold text-base">{formatCurrencyFull(total)}</span>
+                </div>
+
+                {/* Group breakdown */}
+                <div className="px-3 py-2 space-y-0.5">
+                  {nonZeroGroups.map((g) => {
+                    const isActive = expandedGroup === g.key
+                    const detailRows = row.details.filter((d) => d.group === g.key).sort((a, b) => a.date.localeCompare(b.date))
+                    return (
+                      <div key={g.key}>
+                        <button
+                          onClick={() => toggleCell(row.month, g.key)}
+                          className={`w-full flex items-center justify-between rounded-lg px-2 py-1.5 transition-colors ${isActive ? g.activeBg : 'hover:bg-gray-800/50'}`}
+                        >
+                          <span className="text-xs text-gray-500">{g.label}</span>
+                          <span className={`text-sm font-medium ${g.cellClass} ${isActive ? 'underline underline-offset-2' : ''}`}>
+                            {formatCurrencyFull(row[g.key])}
+                          </span>
+                        </button>
+                        {/* Inline detail panel */}
+                        {isActive && detailRows.length > 0 && (
+                          <div className={`mt-1 mb-1 rounded-lg border border-gray-700/50 overflow-hidden ${g.activeBg}`}>
+                            <table className="text-xs w-full">
+                              <tbody>
+                                {detailRows.map((d, i) => (
+                                  <tr key={i} className="border-b border-gray-700/30 last:border-0">
+                                    <td className="px-3 py-1.5 text-gray-300 whitespace-nowrap">{formatDateFull(d.date)}</td>
+                                    <td className="px-3 py-1.5 text-gray-500 whitespace-nowrap">{d.isWeekend ? 'WE/Hol' : 'WD'}</td>
+                                    <td className={`px-3 py-1.5 text-right font-semibold whitespace-nowrap ${g.cellClass}`}>{formatCurrencyFull(d.amount)}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                              <tfoot>
+                                <tr className="border-t border-gray-700/50">
+                                  <td className="px-3 py-1.5 text-gray-500 font-semibold">{detailRows.length} shift{detailRows.length !== 1 ? 's' : ''}</td>
+                                  <td />
+                                  <td className={`px-3 py-1.5 text-right font-bold whitespace-nowrap ${g.cellClass}`}>
+                                    {formatCurrencyFull(detailRows.reduce((s, d) => s + d.amount, 0))}
+                                  </td>
+                                </tr>
+                              </tfoot>
+                            </table>
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+
+                {/* Rate Schedule */}
+                {allMappings.length > 0 && (
+                  <div className="flex items-center gap-1.5 px-4 py-2.5 border-t border-gray-800">
+                    <span className="text-[10px] text-gray-600 uppercase tracking-wider">Rate</span>
+                    {row.overrideId && <span className="w-1.5 h-1.5 rounded-full bg-amber-400 flex-shrink-0" title="Manual override active" />}
+                    <select
+                      value={row.overrideId ?? ''}
+                      disabled={savingMonth === row.month}
+                      onChange={(e) => handleOverrideChange(row.month, e.target.value)}
+                      className="bg-transparent text-xs text-gray-400 border-0 outline-none cursor-pointer hover:text-gray-200 focus:text-gray-200 min-w-0 flex-1 truncate disabled:opacity-40"
+                    >
+                      <option value="">Auto — {row.overrideId ? (allMappings.find(m => m.id === getApplicableMapping(selectedYear, row.month, allMappings)?.id)?.name ?? '—') : (row.mappingName ?? '—')}</option>
+                      {allMappings.map((m) => (
+                        <option key={m.id} value={m.id}>{m.name || m.filename}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+              </div>
+            )
+          })}
+
+          {/* Year total summary card */}
+          <div className="bg-gray-800 rounded-xl border border-gray-700 px-4 py-3 flex items-center justify-between">
+            <span className="text-sm font-semibold text-gray-300">{selectedYear} Total</span>
+            <span className="text-emerald-400 font-bold text-base">{formatCurrencyFull(grandTotal)}</span>
+          </div>
+        </div>
+
+        {/* ── Desktop table ───────────────────────────────────────────────────── */}
+        <div className="hidden md:block bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-sm min-w-max">
               <thead>

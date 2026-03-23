@@ -13,9 +13,6 @@ const inputCls = 'border border-gray-700 bg-gray-800 text-gray-100 rounded focus
 export default function MonthlyDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
-  const [refreshKey, setRefreshKey] = useState(0)
-  const refresh = () => setRefreshKey((k) => k + 1)
-
   // $/unit edit
   const [editingUnitValue, setEditingUnitValue] = useState(false)
   const [unitValueInput, setUnitValueInput] = useState('')
@@ -48,9 +45,6 @@ export default function MonthlyDetail() {
     )
   }
 
-  // Suppress unused warning on refreshKey
-  void refreshKey
-
   const liveStats = computeMonthlyStats(liveReport, allSchedules, settings, allMappings)
   const autoMapping = getApplicableMapping(liveReport.year, liveReport.month, allMappings)
 
@@ -62,7 +56,6 @@ export default function MonthlyDetail() {
     if (isNaN(val) || val <= 0) return
     await saveReport({ ...liveReport, unitDollarValue: val })
     setEditingUnitValue(false)
-    refresh()
   }
 
   const savePadding = async () => {
@@ -70,7 +63,6 @@ export default function MonthlyDetail() {
     if (isNaN(val) || val < 0) return
     await saveReport({ ...liveReport, paddingMinutes: val })
     setEditingPadding(false)
-    refresh()
   }
 
   const saveNoTime = async () => {
@@ -78,7 +70,6 @@ export default function MonthlyDetail() {
     if (isNaN(val) || val < 0) return
     await saveReport({ ...liveReport, defaultNoTimeHours: val })
     setEditingNoTime(false)
-    refresh()
   }
 
   const saveCorrection = async () => {
@@ -86,7 +77,6 @@ export default function MonthlyDetail() {
     if (isNaN(val)) return
     await saveReport({ ...liveReport, unitCorrection: val === 0 ? undefined : val })
     setEditingCorrection(false)
-    refresh()
   }
 
   const handleDelete = async () => {

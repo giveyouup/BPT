@@ -2,9 +2,8 @@ import { useState, useMemo, useRef, useEffect, Fragment } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useData } from '../context/DataContext'
 import { computeCalendarYearStats } from '../utils/calculations'
-import { isOffDayShift } from '../utils/shiftUtils'
-import { shiftBadgeClass } from '../utils/shiftUtils'
-import { formatDateFull, getMonthName } from '../utils/dateUtils'
+import { isOffDayShift, shiftBadgeClass, computeFederalHolidays } from '../utils/shiftUtils'
+import { formatDateFull, formatCurrency, getMonthName } from '../utils/dateUtils'
 
 const DOW_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
@@ -202,6 +201,22 @@ export default function Audits() {
     [allDays]
   )
 
+  // Section 4: days on federal/custom holidays with production or a shift assignment
+  const holidaySet = useMemo(
+    () => new Set(settings.holidays[selectedYear] ?? computeFederalHolidays(selectedYear)),
+    [settings, selectedYear]
+  )
+
+  const holidayDays = useMemo(
+    () => allDays
+      .filter(d =>
+        holidaySet.has(d.date) &&
+        (d.hasProduction || (d.shiftTypes.length > 0 && !d.shiftTypes.every(isOffDayShift)))
+      )
+      .sort((a, b) => a.date.localeCompare(b.date)),
+    [allDays, holidaySet]
+  )
+
   const hasData = yearStats.length > 0
 
   return (
@@ -251,12 +266,14 @@ export default function Audits() {
               <EmptyCheck message={`All ${resolvedItems.length} orphaned item${resolvedItems.length !== 1 ? 's' : ''} resolved for ${selectedYear}`} />
             ) : (
               <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
+                <div className="relative">
+                  <div className="pointer-events-none absolute inset-y-0 right-0 w-8 bg-gradient-to-l from-gray-900 to-transparent sm:hidden z-10" />
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="border-b border-gray-800">
                         <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider whitespace-nowrap">Date</th>
-                        <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Day</th>
+                        <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider hidden sm:table-cell">Day</th>
                         <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider whitespace-nowrap">Scheduled As</th>
                         <th className="px-4 py-3 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider">Cases</th>
                         <th className="px-4 py-3 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider">Units</th>
@@ -274,7 +291,7 @@ export default function Audits() {
                           <Fragment key={day.date}>
                             <tr className={`border-b border-gray-800 ${isOpen ? 'bg-indigo-950/30' : 'hover:bg-gray-800/40'}`}>
                               <td onClick={() => goToDashboard(day.date)} className="px-4 py-3 text-gray-200 whitespace-nowrap cursor-pointer hover:text-indigo-400 transition-colors">{formatDateFull(day.date)}</td>
-                              <td onClick={() => goToDashboard(day.date)} className="px-4 py-3 text-gray-500 whitespace-nowrap cursor-pointer hover:text-indigo-400 transition-colors">{getDow(day.date)}</td>
+                              <td onClick={() => goToDashboard(day.date)} className="px-4 py-3 text-gray-500 whitespace-nowrap cursor-pointer hover:text-indigo-400 transition-colors hidden sm:table-cell">{getDow(day.date)}</td>
                               <td onClick={() => goToDashboard(day.date)} className="px-4 py-3 cursor-pointer group">
                                 {day.shiftTypes.length === 0 ? (
                                   <span className="text-xs text-gray-600 italic group-hover:text-indigo-400 transition-colors">Unscheduled</span>
@@ -358,7 +375,7 @@ export default function Audits() {
                             <td className="px-4 py-3 whitespace-nowrap">
                               <span className="line-through text-gray-600">{formatDateFull(r.fromDate)}</span>
                             </td>
-                            <td className="px-4 py-3 text-gray-600 whitespace-nowrap">{getDow(r.fromDate)}</td>
+                            <td className="px-4 py-3 text-gray-600 whitespace-nowrap hidden sm:table-cell">{getDow(r.fromDate)}</td>
                             <td className="px-4 py-3">
                               <div className="flex items-center gap-2">
                                 <svg className="w-3.5 h-3.5 text-emerald-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -395,6 +412,7 @@ export default function Audits() {
                     </tfoot>
                   </table>
                 </div>
+                </div>
               </div>
             )}
           </section>
@@ -415,14 +433,16 @@ export default function Audits() {
               <EmptyCheck message={`All production days have time data for ${selectedYear}`} />
             ) : (
               <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
+                <div className="relative">
+                  <div className="pointer-events-none absolute inset-y-0 right-0 w-8 bg-gradient-to-l from-gray-900 to-transparent sm:hidden z-10" />
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="border-b border-gray-800">
                         <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider whitespace-nowrap">Date</th>
-                        <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Day</th>
+                        <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider hidden sm:table-cell">Day</th>
                         <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Shift</th>
-                        <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Month</th>
+                        <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider hidden sm:table-cell">Month</th>
                         <th className="px-4 py-3 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider">Cases</th>
                         <th className="px-4 py-3 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider">Units</th>
                         <th className="px-4 py-3 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider">Est. Hours</th>
@@ -436,7 +456,7 @@ export default function Audits() {
                           onClick={() => goToDashboard(day.date)}
                         >
                           <td className="px-4 py-3 text-gray-200 whitespace-nowrap hover:text-indigo-400 transition-colors">{formatDateFull(day.date)}</td>
-                          <td className="px-4 py-3 text-gray-500 whitespace-nowrap">{getDow(day.date)}</td>
+                          <td className="px-4 py-3 text-gray-500 whitespace-nowrap hidden sm:table-cell">{getDow(day.date)}</td>
                           <td className="px-4 py-3">
                             <div className="flex gap-1 flex-wrap">
                               {day.shiftTypes.map(st => (
@@ -444,7 +464,7 @@ export default function Audits() {
                               ))}
                             </div>
                           </td>
-                          <td className="px-4 py-3 text-gray-500 whitespace-nowrap">
+                          <td className="px-4 py-3 text-gray-500 whitespace-nowrap hidden sm:table-cell">
                             {getMonthName(parseInt(day.date.slice(5, 7)))}
                           </td>
                           <td className="px-4 py-3 text-right text-gray-300">{day.caseCount}</td>
@@ -468,6 +488,98 @@ export default function Audits() {
                       </tr>
                     </tfoot>
                   </table>
+                </div>
+                </div>
+              </div>
+            )}
+          </section>
+
+          {/* ── Section 4: Holiday Audit ─────────────────────────────────────── */}
+          <section>
+            <div className="flex items-center gap-3 mb-1">
+              <h3 className="text-sm font-semibold text-gray-300 uppercase tracking-wider">
+                Holiday Audit
+              </h3>
+              <SectionBadge count={holidayDays.length} variant="warn" />
+            </div>
+            <p className="text-xs text-gray-600 mb-4">
+              Days with production or a shift assignment that fall on a federal or custom-defined holiday.
+              Verify that holiday stipend rates were applied correctly.
+            </p>
+
+            {holidayDays.length === 0 ? (
+              <EmptyCheck message={`No production or assignments on holidays for ${selectedYear}`} />
+            ) : (
+              <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
+                <div className="relative">
+                  <div className="pointer-events-none absolute inset-y-0 right-0 w-8 bg-gradient-to-l from-gray-900 to-transparent sm:hidden z-10" />
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-gray-800">
+                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider whitespace-nowrap">Date</th>
+                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider hidden sm:table-cell">Day</th>
+                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Shift</th>
+                          <th className="px-4 py-3 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider">Cases</th>
+                          <th className="px-4 py-3 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider">Stipend</th>
+                          <th className="px-4 py-3 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider">Total</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {holidayDays.map(day => (
+                          <tr
+                            key={day.date}
+                            className="border-b border-gray-800 last:border-0 hover:bg-gray-800/40 cursor-pointer"
+                            onClick={() => goToDashboard(day.date)}
+                          >
+                            <td className="px-4 py-3 text-gray-200 whitespace-nowrap hover:text-indigo-400 transition-colors">{formatDateFull(day.date)}</td>
+                            <td className="px-4 py-3 text-gray-500 whitespace-nowrap hidden sm:table-cell">{getDow(day.date)}</td>
+                            <td className="px-4 py-3">
+                              {day.shiftTypes.length === 0 ? (
+                                <span className="text-xs text-gray-600 italic">Unscheduled</span>
+                              ) : (
+                                <div className="flex gap-1 flex-wrap">
+                                  {day.shiftTypes.map(st => (
+                                    <span key={st} className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${shiftBadgeClass(st)}`}>{st}</span>
+                                  ))}
+                                </div>
+                              )}
+                            </td>
+                            <td className="px-4 py-3 text-right text-gray-300">
+                              {day.hasProduction ? day.caseCount : <span className="text-gray-600">—</span>}
+                            </td>
+                            <td className="px-4 py-3 text-right text-emerald-400">
+                              {day.stipendAmount > 0 ? formatCurrency(day.stipendAmount) : <span className="text-gray-600">—</span>}
+                            </td>
+                            <td className="px-4 py-3 text-right font-semibold text-gray-200">
+                              {day.totalDayPay + day.additionalStipend > 0
+                                ? formatCurrency(day.totalDayPay + day.additionalStipend)
+                                : <span className="text-gray-600">—</span>}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                      <tfoot>
+                        <tr className="bg-gray-800/60 border-t border-gray-700">
+                          <td colSpan={3} className="px-4 py-2.5 text-xs font-semibold text-gray-500 hidden sm:table-cell">
+                            {holidayDays.length} day{holidayDays.length !== 1 ? 's' : ''}
+                          </td>
+                          <td colSpan={3} className="px-4 py-2.5 text-xs font-semibold text-gray-500 sm:hidden">
+                            {holidayDays.length} day{holidayDays.length !== 1 ? 's' : ''}
+                          </td>
+                          <td className="px-4 py-2.5 text-right text-xs font-bold text-gray-400 hidden sm:table-cell">
+                            {holidayDays.filter(d => d.hasProduction).reduce((s, d) => s + d.caseCount, 0)}
+                          </td>
+                          <td className="px-4 py-2.5 text-right text-xs font-bold text-emerald-400 hidden sm:table-cell">
+                            {formatCurrency(holidayDays.reduce((s, d) => s + d.stipendAmount, 0))}
+                          </td>
+                          <td className="px-4 py-2.5 text-right text-xs font-bold text-gray-200 hidden sm:table-cell">
+                            {formatCurrency(holidayDays.reduce((s, d) => s + d.totalDayPay + d.additionalStipend, 0))}
+                          </td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
                 </div>
               </div>
             )}
@@ -516,6 +628,8 @@ export default function Audits() {
               <EmptyCheck message={`All scheduled working days have production for ${selectedYear}`} />
             ) : (
               <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
+                <div className="relative">
+                  <div className="pointer-events-none absolute inset-y-0 right-0 w-8 bg-gradient-to-l from-gray-900 to-transparent sm:hidden z-10" />
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead>
@@ -552,6 +666,7 @@ export default function Audits() {
                       </tr>
                     </tfoot>
                   </table>
+                </div>
                 </div>
               </div>
             )}

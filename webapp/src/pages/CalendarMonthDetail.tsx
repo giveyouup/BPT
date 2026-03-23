@@ -62,16 +62,12 @@ export default function CalendarMonthDetail() {
     return null
   }
 
-  const [refreshKey, setRefreshKey] = useState(0)
-  const refresh = () => setRefreshKey((k) => k + 1)
   const [selectedDay, setSelectedDay] = useState<string | null>(null)
   const [showNoProd, setShowNoProd] = useState(false)
   const [editingShiftDate, setEditingShiftDate] = useState<string | null>(null)
   const [shiftDraft, setShiftDraft] = useState<string[]>([])
   const [editingHoursDate, setEditingHoursDate] = useState<string | null>(null)
   const [hoursInput, setHoursInput] = useState('')
-  void refreshKey
-
   const labeledReport = allReports.find((r) => r.year === calYear && r.month === calMonth)
 
   const saveHoursOverride = async (date: string) => {
@@ -85,7 +81,6 @@ export default function CalendarMonthDetail() {
     }
     await saveReport({ ...labeledReport, workingDayOverrides })
     setEditingHoursDate(null)
-    refresh()
   }
   const visibleCases = selectedDay
     ? stats.cases.filter((c) => c.serviceDate === selectedDay)
@@ -246,7 +241,7 @@ export default function CalendarMonthDetail() {
                           </div>
                           <div className="flex items-center gap-2">
                             <button
-                              onClick={async () => { await saveManualShift(day.date, shiftDraft); setEditingShiftDate(null); refresh() }}
+                              onClick={async () => { await saveManualShift(day.date, shiftDraft); setEditingShiftDate(null) }}
                               className="text-xs text-indigo-400 font-medium hover:text-indigo-300"
                             >Save</button>
                             <button

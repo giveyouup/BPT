@@ -1,31 +1,21 @@
-import { useState, useCallback, useMemo } from 'react'
+import { useState, useCallback, useMemo, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { parseXlsx, detectMonthYear, detectMonthYearFromBuffer, isRawXlsx, exportCleanXlsx } from '../utils/xlsxParser'
 import { parseICS } from '../utils/icsParser'
 import { parseStipendMapping } from '../utils/stipendMappingParser'
-import { parseShiftSummary } from '../utils/shiftUtils'
-import { formatMonthYear, formatDateFull } from '../utils/dateUtils'
+import { parseShiftSummary, shiftBadgeClass } from '../utils/shiftUtils'
+import { getWeekendPairs, buildDayList, parseScheduleText } from '../utils/schedulePaste'
+import type { ParseScheduleResult } from '../utils/schedulePaste'
+import { formatMonthYear, formatDateFull, lastDayOfMonth, MONTH_ABBREVS, getMonthName } from '../utils/dateUtils'
 import { useData } from '../context/DataContext'
 import type { LineItem, ShiftEntry, Schedule, StipendMapping, StipendRate } from '../types'
-
-const MONTH_NAMES = [
-  'January', 'February', 'March', 'April', 'May', 'June',
-  'July', 'August', 'September', 'October', 'November', 'December',
-]
 
 function genId() { return `sched-${Date.now()}-${Math.random().toString(36).slice(2)}` }
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────
 
-const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
 const PICKER_YEARS = Array.from({ length: 10 }, (_, i) => new Date().getFullYear() - 3 + i)
 const SEL_CLS = 'bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500'
-
-function lastDayOfMonthStr(ym: string): string {
-  const [y, m] = ym.split('-').map(Number)
-  const d = new Date(y, m, 0)
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-}
 
 function stipendDateRange(m: StipendMapping, nextM: StipendMapping | null): string {
   const [y, mo] = m.effectiveDate.split('-').map(Number)
@@ -60,7 +50,7 @@ function MonthPicker({ value, onChange, placeholder = 'Select' }: {
     <div className="flex items-center gap-1">
       <select value={mo} onChange={(e) => setMo(e.target.value)} className={SEL_CLS}>
         <option value="">{placeholder}</option>
-        {MONTHS.map((name, i) => <option key={i + 1} value={i + 1}>{name}</option>)}
+        {MONTH_ABBREVS.map((name, i) => <option key={i + 1} value={i + 1}>{name}</option>)}
       </select>
       <select value={yr} onChange={(e) => setYr(e.target.value)} className={SEL_CLS}>
         <option value="">{placeholder}</option>
@@ -292,7 +282,7 @@ function PcrUploadTab() {
           )}
           {crossMonthCount > 0 && (
             <p className="text-xs text-amber-500 mt-1">
-              {crossMonthCount} line item{crossMonthCount !== 1 ? 's' : ''} with service dates outside {MONTH_NAMES[month - 1]} {year}.
+              {crossMonthCount} line item{crossMonthCount !== 1 ? 's' : ''} with service dates outside {getMonthName(month)} {year}.
             </p>
           )}
           {wasRaw && parsed && (
@@ -370,7 +360,7 @@ function PcrUploadTab() {
                 const hasExisting = reports.some((r) => r.id === ym)
                 return (
                   <tr key={ym} className="border-b border-gray-800/50">
-                    <td className="py-2 pr-4 font-medium text-gray-200">{MONTH_NAMES[m - 1]} {y}</td>
+                    <td className="py-2 pr-4 font-medium text-gray-200">{getMonthName(m)} {y}</td>
                     <td className="py-2 pr-4 text-gray-400">{items.length}</td>
                     <td className="py-2 pr-4 text-gray-400">{tickets}</td>
                     <td className="py-2 pr-4 text-indigo-400">{units.toFixed(2)}</td>
@@ -397,7 +387,7 @@ function PcrUploadTab() {
           <div>
             <label className="block text-xs font-semibold text-gray-400 mb-1.5">Month</label>
             <select value={month} onChange={(e) => setMonth(parseInt(e.target.value))} className={inputCls}>
-              {MONTH_NAMES.map((name, i) => <option key={i + 1} value={i + 1}>{name}</option>)}
+              {MONTH_ABBREVS.map((name, i) => <option key={i + 1} value={i + 1}>{name}</option>)}
             </select>
           </div>
           <div>
@@ -1029,7 +1019,38 @@ function StipendRatesTab() {
   return (
     <div>
       <div className="bg-gray-800/30 border border-gray-700/50 rounded-lg px-4 py-3 mb-5">
-        <p className="text-xs font-semibold text-gray-400 mb-1">Expected format</p>
+        <div className="flex items-center gap-1.5 mb-1">
+          <p className="text-xs font-semibold text-gray-400">Expected format</p>
+          <div className="relative group">
+            <button
+              type="button"
+              className="w-4 h-4 rounded-full border border-gray-600 text-gray-500 hover:border-gray-400 hover:text-gray-300 transition-colors flex items-center justify-center text-[10px] font-bold leading-none"
+              tabIndex={-1}
+            >
+              i
+            </button>
+            <div className="absolute left-0 top-6 z-50 hidden group-hover:block w-72 bg-gray-800 border border-gray-700 rounded-lg p-3 shadow-xl text-xs text-gray-300 space-y-2">
+              <p className="font-semibold text-gray-200 mb-1">Rate Key Format</p>
+              <p>Each row has a <span className="font-mono text-indigo-300">shiftType</span> key and a dollar amount. Keys are case-insensitive.</p>
+              <div className="space-y-1">
+                <p className="font-semibold text-gray-400 uppercase tracking-wide text-[10px]">Weekday / Weekend variants</p>
+                <p>Append <span className="font-mono text-amber-300">_weekday</span> or <span className="font-mono text-amber-300">_weekend</span> to a shift name to set day-type-specific rates (e.g. <span className="font-mono text-gray-400">G1_weekday</span>, <span className="font-mono text-gray-400">G1_weekend</span>). If only a plain key exists it applies to both.</p>
+              </div>
+              <div className="space-y-1">
+                <p className="font-semibold text-gray-400 uppercase tracking-wide text-[10px]">Call shifts (G1 / G2)</p>
+                <p>Always resolved using <span className="font-mono text-amber-300">_weekday</span> / <span className="font-mono text-amber-300">_weekend</span> suffix based on federal holiday calendar.</p>
+              </div>
+              <div className="space-y-1">
+                <p className="font-semibold text-gray-400 uppercase tracking-wide text-[10px]">GI / ENDO</p>
+                <p><span className="font-mono text-gray-400">ENDO</span> is an alias for <span className="font-mono text-gray-400">GI</span>. GI always uses the <span className="font-mono text-amber-300">_weekend</span> rate regardless of day.</p>
+              </div>
+              <div className="space-y-1">
+                <p className="font-semibold text-gray-400 uppercase tracking-wide text-[10px]">Fixed-hour shifts</p>
+                <p><span className="font-mono text-gray-400">APS</span>, <span className="font-mono text-gray-400">BR</span>, and <span className="font-mono text-gray-400">NIR</span> support plain or <span className="font-mono text-amber-300">_weekday</span>/<span className="font-mono text-amber-300">_weekend</span> variants.</p>
+              </div>
+            </div>
+          </div>
+        </div>
         <p className="text-xs text-gray-500">
           2-column Excel (.xlsx) spreadsheet. Column A: shift type key (e.g., G1_weekday, G1_weekend, APS, BR, NIR, GI).
           Column B: dollar amount per shift day. Set the effective month after upload to control which
@@ -1176,7 +1197,7 @@ function StipendRatesTab() {
                           <div className="flex items-center gap-2">
                             <MonthPicker
                               value={draft.endDate ? draft.endDate.slice(0, 7) : ''}
-                              onChange={(v) => setDraft({ ...draft, endDate: v ? lastDayOfMonthStr(v) : undefined })}
+                              onChange={(v) => setDraft({ ...draft, endDate: v ? lastDayOfMonth(...v.split('-').map(Number) as [number, number]) : undefined })}
                               placeholder="—"
                             />
                             {draft.endDate && (
@@ -1279,10 +1300,413 @@ function StipendRatesTab() {
   )
 }
 
+// ─── Grid Paste ───────────────────────────────────────────────────────────────
+
+function SchedulePasteTab() {
+  const { schedules, saveSchedule } = useData()
+
+  const now = new Date()
+  const nextMonthDate = new Date(now.getFullYear(), now.getMonth() + 1, 1)
+  const [year, setYear]   = useState(nextMonthDate.getFullYear())
+  const [month, setMonth] = useState(nextMonthDate.getMonth() + 1)
+  const [activeWeekends, setActiveWeekends] = useState<Set<string>>(new Set())
+  const [pasteText, setPasteText]           = useState('')
+  const [parseResult, setParseResult]       = useState<ParseScheduleResult | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [saved,  setSaved]  = useState(false)
+
+  const [conflicts,         setConflicts]         = useState<ConflictEntry[]>([])
+  const [showConflictModal, setShowConflictModal] = useState(false)
+  const [pendingEntries,    setPendingEntries]    = useState<ShiftEntry[]>([])
+  const [isDuplicate,       setIsDuplicate]       = useState(false)
+  const [xResolutions, setXResolutions] = useState<Record<string, 'H' | 'V' | 'Postcall'>>({})
+
+  const weekendPairs = useMemo(() => getWeekendPairs(year, month), [year, month])
+
+  const activeWeekendDates = useMemo(() => {
+    const dates = new Set<string>()
+    for (const key of activeWeekends) {
+      const pair = weekendPairs.find(p => p.dates[0] === key)
+      if (pair) pair.dates.forEach(d => dates.add(d))
+    }
+    return dates
+  }, [activeWeekends, weekendPairs])
+
+  const dayList = useMemo(
+    () => buildDayList(year, month, activeWeekendDates),
+    [year, month, activeWeekendDates],
+  )
+
+  // Re-parse whenever any input changes; clear X resolutions on any change
+  useEffect(() => {
+    setXResolutions({})
+    if (!pasteText.trim()) { setParseResult(null); return }
+    setParseResult(parseScheduleText(year, month, activeWeekendDates, pasteText))
+  }, [pasteText, year, month, activeWeekendDates])
+
+  // For each X in the parse result, determine if it auto-resolves to Postcall
+  // (previous calendar day = G1/G2 in this paste or in stored schedules)
+  const xEntries = useMemo(() => {
+    if (!parseResult?.entries) return []
+    const parsedMap = new Map(parseResult.entries.map(e => [e.date, e.shift]))
+    const storedMap = new Map<string, string[]>()
+    for (const sched of [...schedules].filter(s => s.id !== 'manual_shifts').sort((a, b) => a.uploadDate.localeCompare(b.uploadDate)))
+      for (const entry of sched.entries)
+        storedMap.set(entry.date, entry.shiftTypes)
+
+    return parseResult.entries
+      .filter(e => e.shift.trim().toUpperCase() === 'X')
+      .map(e => {
+        const [y, m, d] = e.date.split('-').map(Number)
+        const prev = new Date(y, m - 1, d - 1)
+        const prevStr = `${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, '0')}-${String(prev.getDate()).padStart(2, '0')}`
+        const prevShift = parsedMap.get(prevStr)
+        const prevShifts = prevShift ? [prevShift] : (storedMap.get(prevStr) ?? [])
+        const isPostcall = prevShifts.some(s => { const v = s.trim().toUpperCase(); return v === 'G1' || v === 'G2' })
+        return { date: e.date, autoLabel: isPostcall ? 'Postcall' as const : null }
+      })
+  }, [parseResult, schedules])
+
+  const unresolvedXDates = useMemo(
+    () => xEntries.filter(x => x.autoLabel === null).map(x => x.date),
+    [xEntries],
+  )
+  const allXResolved = unresolvedXDates.every(d => xResolutions[d])
+
+  // Returns the final label to store/display for an entry (resolves X)
+  function resolvedShift(e: { date: string; shift: string }): string {
+    if (e.shift.trim().toUpperCase() !== 'X') return e.shift
+    const xe = xEntries.find(x => x.date === e.date)
+    return xe?.autoLabel ?? xResolutions[e.date] ?? e.shift
+  }
+
+  const toggleWeekend = (key: string) => {
+    setActiveWeekends(prev => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key); else next.add(key)
+      return next
+    })
+  }
+
+  const reset = () => {
+    setPasteText(''); setParseResult(null); setActiveWeekends(new Set())
+    setConflicts([]); setPendingEntries([]); setIsDuplicate(false); setXResolutions({})
+  }
+
+  const doSave = async (entries: ShiftEntry[], rejectedDates: string[]) => {
+    const finalEntries = entries.filter(e => !rejectedDates.includes(e.date))
+    setSaving(true)
+    await saveSchedule({
+      id: genId(),
+      filename: `Grid Paste — ${MONTH_ABBREVS[month - 1]} ${year}`,
+      uploadDate: new Date().toISOString(),
+      entries: finalEntries,
+    })
+    setSaved(true)
+    setSaving(false)
+    setShowConflictModal(false)
+    reset()
+  }
+
+  const handleSave = () => {
+    if (!parseResult?.entries.length || parseResult.error) return
+
+    // Resolve X entries to their final labels before storing
+    const newEntries: ShiftEntry[] = parseResult.entries.map(e => ({
+      date: e.date, shiftTypes: [resolvedShift(e)],
+    }))
+
+    // Build effective existing map (last schedule wins per date, matching uploadedShift logic)
+    const existingMap = new Map<string, string[]>()
+    const sorted = [...schedules]
+      .filter(s => s.id !== 'manual_shifts')
+      .sort((a, b) => a.uploadDate.localeCompare(b.uploadDate))
+    for (const sched of sorted)
+      for (const entry of sched.entries)
+        existingMap.set(entry.date, entry.shiftTypes)
+
+    // Detect conflicts (existing date with different shift)
+    const detected: ConflictEntry[] = []
+    for (const entry of newEntries) {
+      const current = existingMap.get(entry.date)
+      if (current && [...current].sort().join(',') !== [...entry.shiftTypes].sort().join(',')) {
+        detected.push({ date: entry.date, currentShifts: current, newShifts: entry.shiftTypes, accept: true })
+      }
+    }
+
+    // Detect pure duplicate (all new entries match existing exactly, nothing net-new)
+    const allMatch = newEntries.every(e => {
+      const cur = existingMap.get(e.date)
+      return cur && [...e.shiftTypes].sort().join(',') === [...cur].sort().join(',')
+    })
+    const hasNewDates = newEntries.some(e => !existingMap.has(e.date))
+
+    setPendingEntries(newEntries)
+
+    if (allMatch && !hasNewDates && detected.length === 0) {
+      setIsDuplicate(true)
+      return
+    }
+
+    if (detected.length > 0) {
+      setConflicts(detected)
+      setShowConflictModal(true)
+    } else {
+      doSave(newEntries, [])
+    }
+  }
+
+  const handleApplyConflicts = async () => {
+    const rejected = conflicts.filter(c => !c.accept).map(c => c.date)
+    await doSave(pendingEntries, rejected)
+  }
+
+  const monthStr = `${year}-${String(month).padStart(2, '0')}`
+
+  return (
+    <div className="space-y-6">
+      {saved && (
+        <div className="bg-emerald-900/30 border border-emerald-800 rounded-lg px-4 py-3 text-sm text-emerald-400">
+          Schedule saved — {MONTH_ABBREVS[month - 1]} {year} entries imported.
+        </div>
+      )}
+
+      {isDuplicate && (
+        <div className="bg-amber-900/20 border border-amber-700/50 rounded-lg px-4 py-4">
+          <div className="flex items-start gap-3">
+            <svg className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <div className="flex-1">
+              <p className="text-sm font-medium text-amber-300 mb-1">Duplicate schedule detected</p>
+              <p className="text-xs text-amber-400/80 mb-3">
+                All {pendingEntries.length} entries are identical to shifts already imported. No new or changed dates were found.
+              </p>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => { setIsDuplicate(false); doSave(pendingEntries, []) }}
+                  className="px-3 py-1.5 bg-amber-700 hover:bg-amber-600 text-white text-xs rounded-md font-medium transition-colors"
+                >
+                  Import Anyway
+                </button>
+                <button
+                  onClick={() => { setIsDuplicate(false); reset() }}
+                  className="text-xs text-gray-500 hover:text-gray-300"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Step 1 — Month */}
+      <div>
+        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Step 1 — Select Month</p>
+        <MonthPicker
+          value={monthStr}
+          onChange={v => {
+            if (!v) return
+            const [y, m] = v.split('-').map(Number)
+            setYear(y); setMonth(m)
+            reset(); setSaved(false)
+          }}
+        />
+      </div>
+
+      {/* Step 2 — Active weekends */}
+      <div>
+        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">Step 2 — Active Weekends</p>
+        <p className="text-xs text-gray-600 mb-3">
+          Toggle each weekend block that appears in the schedule grid, including "\" (blocked) entries.
+        </p>
+        {weekendPairs.length > 0 ? (
+          <div className="flex flex-wrap gap-2">
+            {weekendPairs.map(pair => {
+              const key = pair.dates[0]
+              const isActive = activeWeekends.has(key)
+              return (
+                <button
+                  key={key}
+                  onClick={() => toggleWeekend(key)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
+                    isActive
+                      ? 'bg-indigo-600 border-indigo-500 text-white'
+                      : 'bg-gray-900 border-gray-700 text-gray-400 hover:border-gray-600 hover:text-gray-200'
+                  }`}
+                >
+                  {MONTH_ABBREVS[month - 1]} {pair.label}
+                </button>
+              )
+            })}
+          </div>
+        ) : (
+          <p className="text-xs text-gray-600">No weekends in this month.</p>
+        )}
+        <p className="text-xs text-gray-600 mt-2">
+          Expected entries: <span className={`font-mono ${parseResult?.error ? 'text-red-400' : 'text-gray-400'}`}>{dayList.length}</span>
+        </p>
+      </div>
+
+      {/* Step 3 — Paste */}
+      <div>
+        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Step 3 — Paste Your Row</p>
+        <textarea
+          value={pasteText}
+          onChange={e => { setPasteText(e.target.value); setSaved(false) }}
+          placeholder="Paste the row from the schedule grid here…"
+          rows={3}
+          className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2.5 text-sm text-gray-100 font-mono placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-indigo-500 resize-none"
+        />
+        {pasteText.trim() && (
+          <div className="mt-1.5">
+            {parseResult?.error ? (
+              <p className="text-xs text-red-400">{parseResult.error}</p>
+            ) : parseResult && parseResult.entries.length > 0 ? (
+              <p className="text-xs text-emerald-400">✓ {parseResult.entries.length} shift entries parsed</p>
+            ) : null}
+          </div>
+        )}
+      </div>
+
+      {/* Preview table */}
+      {parseResult && !parseResult.error && parseResult.entries.length > 0 && (
+        <div>
+          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Preview</p>
+          <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden max-h-64 overflow-y-auto">
+            <table className="w-full text-sm">
+              <thead className="sticky top-0 bg-gray-900 border-b border-gray-800">
+                <tr>
+                  {['Date', 'Day', 'Shift'].map(h => (
+                    <th key={h} className="px-4 py-2.5 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {parseResult.entries.map(e => {
+                  const dow = new Date(e.date + 'T12:00:00').getDay()
+                  const dowStr = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][dow]
+                  const label = resolvedShift(e)
+                  const isUnresolved = e.shift.trim().toUpperCase() === 'X' && label === e.shift
+                  return (
+                    <tr key={e.date} className="border-b border-gray-800/50">
+                      <td className="px-4 py-2 text-xs text-gray-300">{formatDateFull(e.date)}</td>
+                      <td className="px-4 py-2 text-xs text-gray-500">{dowStr}</td>
+                      <td className="px-4 py-2">
+                        <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${isUnresolved ? 'bg-amber-900/40 text-amber-400' : shiftBadgeClass(label)}`}>{label}</span>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* X resolution — shown when any X entries need a label */}
+      {unresolvedXDates.length > 0 && (
+        <div className="bg-amber-900/20 border border-amber-700/50 rounded-xl p-4">
+          <div className="flex items-center gap-2 mb-3">
+            <svg className="w-4 h-4 text-amber-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <p className="text-xs font-semibold text-amber-300 uppercase tracking-wider">Clarify these "X" days to proceed</p>
+          </div>
+          <div className="space-y-2">
+            {unresolvedXDates.map(date => (
+              <div key={date} className="flex items-center justify-between bg-amber-950/30 border border-amber-800/40 rounded-lg px-3 py-2">
+                <span className="text-xs text-amber-200">{formatDateFull(date)}</span>
+                <div className="flex items-center gap-1">
+                  {(['H', 'V', 'Postcall'] as const).map(opt => (
+                    <button
+                      key={opt}
+                      onClick={() => setXResolutions(prev => ({ ...prev, [date]: opt }))}
+                      className={`px-2 py-0.5 text-xs rounded transition-colors ${
+                        xResolutions[date] === opt
+                          ? 'bg-indigo-600 text-white'
+                          : 'bg-gray-700 text-gray-400 hover:bg-gray-600 hover:text-gray-200'
+                      }`}
+                    >
+                      {opt}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <button
+        onClick={handleSave}
+        disabled={!parseResult?.entries.length || !!parseResult?.error || saving || !allXResolved}
+        className="w-full py-2.5 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-500 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+      >
+        {saving ? 'Saving…' : `Save ${MONTH_ABBREVS[month - 1]} ${year} Schedule`}
+      </button>
+
+      {/* Conflict modal */}
+      {showConflictModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+          <div className="bg-gray-900 border border-gray-700 rounded-2xl p-6 w-full max-w-2xl shadow-2xl max-h-[80vh] flex flex-col">
+            <h3 className="text-base font-semibold text-gray-100 mb-1">Resolve Conflicts</h3>
+            <p className="text-xs text-gray-500 mb-4">
+              {conflicts.length} date{conflicts.length !== 1 ? 's' : ''} already have shift assignments. Choose which to overwrite.
+            </p>
+            <div className="flex-1 overflow-y-auto mb-4">
+              <table className="w-full text-sm">
+                <thead className="sticky top-0 bg-gray-900">
+                  <tr className="border-b border-gray-800">
+                    {['Date', 'Current', 'New', 'Accept'].map(h => (
+                      <th key={h} className="px-3 py-2 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {conflicts.map((c, i) => (
+                    <tr key={c.date} className="border-b border-gray-800">
+                      <td className="px-3 py-2.5 text-gray-300">{formatDateFull(c.date)}</td>
+                      <td className="px-3 py-2.5">
+                        <span className="font-mono text-xs bg-gray-800 text-gray-400 px-2 py-0.5 rounded">{c.currentShifts.join(', ')}</span>
+                      </td>
+                      <td className="px-3 py-2.5">
+                        <span className="font-mono text-xs bg-indigo-900/40 text-indigo-400 px-2 py-0.5 rounded">{c.newShifts.join(', ')}</span>
+                      </td>
+                      <td className="px-3 py-2.5">
+                        <input
+                          type="checkbox"
+                          checked={c.accept}
+                          onChange={e => setConflicts(prev => prev.map((x, j) => j === i ? { ...x, accept: e.target.checked } : x))}
+                          className="accent-indigo-500"
+                        />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="flex items-center gap-3 border-t border-gray-800 pt-4">
+              <button onClick={() => setConflicts(p => p.map(c => ({ ...c, accept: true })))} className="text-xs text-indigo-400 hover:text-indigo-300">Accept all</button>
+              <button onClick={() => setConflicts(p => p.map(c => ({ ...c, accept: false })))} className="text-xs text-gray-500 hover:text-gray-300">Reject all</button>
+              <div className="flex-1" />
+              <button onClick={() => setShowConflictModal(false)} className="px-4 py-2 text-gray-400 hover:text-gray-200 text-sm">Cancel</button>
+              <button onClick={handleApplyConflicts} className="px-5 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-500 transition-colors">
+                Apply Selected Changes
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── Main Upload page ─────────────────────────────────────────────────────────
 
 export default function Upload() {
-  const [tab, setTab] = useState<'pcr' | 'schedule' | 'stipend'>('pcr')
+  const [tab, setTab] = useState<'pcr' | 'schedule' | 'paste' | 'stipend'>('pcr')
 
   const tabCls = (t: typeof tab) =>
     `px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
@@ -1297,12 +1721,14 @@ export default function Upload() {
 
       <div className="flex border-b border-gray-800 mb-6">
         <button className={tabCls('pcr')} onClick={() => setTab('pcr')}>PCR Report</button>
-        <button className={tabCls('schedule')} onClick={() => setTab('schedule')}>Schedule</button>
+        <button className={tabCls('schedule')} onClick={() => setTab('schedule')}>Schedule ICS</button>
+        <button className={tabCls('paste')} onClick={() => setTab('paste')}>Grid Paste</button>
         <button className={tabCls('stipend')} onClick={() => setTab('stipend')}>Stipend Rates</button>
       </div>
 
       {tab === 'pcr' && <PcrUploadTab />}
       {tab === 'schedule' && <ScheduleUploadTab />}
+      {tab === 'paste' && <SchedulePasteTab />}
       {tab === 'stipend' && <StipendRatesTab />}
     </div>
   )

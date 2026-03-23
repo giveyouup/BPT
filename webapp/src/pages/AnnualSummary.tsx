@@ -8,10 +8,10 @@ import {
 import { useData } from '../context/DataContext'
 import { computeCalendarYearStats, getStipendForDay, getApplicableMapping } from '../utils/calculations'
 import {
-  formatCurrency, formatCurrencyFull, formatDateFull, formatHours, formatMonthYear, getMonthName,
+  formatCurrency, formatCurrencyFull, formatDateFull, formatHours, formatMonthYear, getMonthName, MONTH_ABBREVS,
 } from '../utils/dateUtils'
 import StatCard from '../components/StatCard'
-import { isOffDayShift, getFixedShiftKey, isCallShift, resolveShiftAlias } from '../utils/shiftUtils'
+import { isOffDayShift, getFixedShiftKey, isCallShift, resolveShiftAlias, computeFederalHolidays, isVacationShift, isHolidayOffShift, isPostcallShift } from '../utils/shiftUtils'
 import type { MonthlyStats, StipendMapping } from '../types'
 
 function shiftSortKey(shift: string): string {
@@ -151,8 +151,10 @@ export default function AnnualSummary() {
   const [whatIfMappingId, setWhatIfMappingId] = useState<string | null>(null)
   const [whatIfUnitRate, setWhatIfUnitRate] = useState<number | null>(null)
   const [showWhatIfPopover, setShowWhatIfPopover] = useState(false)
+  const [showWeeksPopover, setShowWeeksPopover] = useState(false)
   const [showYoY, setShowYoY] = useState(false)
   const popoverRef = useRef<HTMLDivElement>(null)
+  const weeksPopoverRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (!showWhatIfPopover) return
@@ -165,6 +167,18 @@ export default function AnnualSummary() {
     document.addEventListener('keydown', keyHandler)
     return () => { document.removeEventListener('mousedown', handler); document.removeEventListener('keydown', keyHandler) }
   }, [showWhatIfPopover])
+
+  useEffect(() => {
+    if (!showWeeksPopover) return
+    const handler = (e: MouseEvent) => {
+      if (weeksPopoverRef.current && !weeksPopoverRef.current.contains(e.target as Node))
+        setShowWeeksPopover(false)
+    }
+    const keyHandler = (e: KeyboardEvent) => { if (e.key === 'Escape') setShowWeeksPopover(false) }
+    document.addEventListener('mousedown', handler)
+    document.addEventListener('keydown', keyHandler)
+    return () => { document.removeEventListener('mousedown', handler); document.removeEventListener('keydown', keyHandler) }
+  }, [showWeeksPopover])
   const { year: yearParam } = useParams<{ year: string }>()
   const navigate = useNavigate()
 
@@ -251,16 +265,89 @@ export default function AnnualSummary() {
     for (const sched of [...allSchedules].sort((a, b) => a.uploadDate.localeCompare(b.uploadDate))) {
       for (const entry of sched.entries) dateMap.set(entry.date, entry.shiftTypes)
     }
-    let vacation = 0, holiday = 0, postcall = 0
+
+    // Count off-day types for the selected year
     const prefix = `${year}-`
+    let vacation = 0, holiday = 0, postcall = 0
     for (const [date, shiftTypes] of dateMap) {
       if (!date.startsWith(prefix)) continue
       if (!shiftTypes.every(isOffDayShift)) continue
-      if (shiftTypes.some((s) => s.toUpperCase() === 'V')) vacation++
-      else if (shiftTypes.some((s) => s.toUpperCase() === 'H')) holiday++
-      else if (shiftTypes.some((s) => s.toUpperCase() === 'POSTCALL')) postcall++
+      if (shiftTypes.some(isVacationShift)) vacation++
+      else if (shiftTypes.some(isHolidayOffShift)) holiday++
+      else if (shiftTypes.some(isPostcallShift)) postcall++
     }
-    return { vacation, holiday, postcall, total: vacation + holiday + postcall }
+
+    // ── Full-week detection ──────────────────────────────────────────────────
+    const toStr = (d: Date) =>
+      `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+
+    // Holiday sets for this year and adjacent years (for cross-year spans)
+    const holidaySetFor = (y: number) =>
+      new Set<string>(settings.holidays[y] ?? computeFederalHolidays(y))
+    const holidaySets = new Map<number, Set<string>>([
+      [year - 1, holidaySetFor(year - 1)],
+      [year,     holidaySetFor(year)],
+      [year + 1, holidaySetFor(year + 1)],
+    ])
+    const getHolidaySet = (y: number) => holidaySets.get(y) ?? holidaySetFor(y)
+
+    // A day is non-working if:
+    //  - explicitly scheduled as all off-day shifts (V/H/Postcall), OR
+    //  - blank AND is a weekend or holiday
+    //  - a day with any working shift always breaks the streak
+    const isNonWorking = (date: string): boolean => {
+      const [y, m, d] = date.split('-').map(Number)
+      const dow = new Date(y, m - 1, d).getDay()
+      const shifts = dateMap.get(date) ?? []
+      if (shifts.length > 0 && !shifts.every(isOffDayShift)) return false              // working shift
+      if (shifts.some(isPostcallShift)) return false                                    // postcall breaks streak
+      if (shifts.length > 0) return true                                                // V or H
+      return dow === 0 || dow === 6 || getHolidaySet(y).has(date)                     // blank: weekend or holiday
+    }
+
+    // Format a span label, handling same-month, same-year, and cross-year
+    const fmtSpan = (start: string, end: string): string => {
+      const [sy, sm, sd] = start.split('-').map(Number)
+      const [ey, em, ed] = end.split('-').map(Number)
+      if (sy === ey && sm === em) return `${MONTH_ABBREVS[sm-1]} ${sd}–${ed}`
+      if (sy === ey) return `${MONTH_ABBREVS[sm-1]} ${sd}–${MONTH_ABBREVS[em-1]} ${ed}`
+      return `${MONTH_ABBREVS[sm-1]} ${sd} '${String(sy).slice(2)}–${MONTH_ABBREVS[em-1]} ${ed} '${String(ey).slice(2)}`
+    }
+
+    // Walk extended range (±10 days around year boundaries) to catch cross-year spans
+    const fullWeekSpans: { label: string; weeks: number }[] = []
+    let spanDates: string[] = []
+
+    const flushSpan = () => {
+      if (spanDates.length >= 5) {
+        // Require ≥3 V days anywhere in the span
+        const vDaysInSpan = spanDates.filter(d => dateMap.get(d)?.some(isVacationShift)).length
+        // Only attribute to this year if it contains ≥1 V or H day in the selected year
+        const hasYearOffDay = spanDates.some(d => {
+          if (!d.startsWith(prefix)) return false
+          const shifts = dateMap.get(d) ?? []
+          return shifts.length > 0 && shifts.every(isOffDayShift)
+        })
+        if (vDaysInSpan >= 3 && hasYearOffDay) {
+          const weeks = Math.max(1, Math.floor(spanDates.length / 7))
+          fullWeekSpans.push({ label: fmtSpan(spanDates[0], spanDates[spanDates.length - 1]), weeks })
+        }
+      }
+      spanDates = []
+    }
+
+    const cur = new Date(year - 1, 11, 22)  // Dec 22 of prior year
+    const rangeEnd = new Date(year + 1, 0, 10) // Jan 10 of next year
+    while (cur <= rangeEnd) {
+      const d = toStr(cur)
+      if (isNonWorking(d)) spanDates.push(d)
+      else flushSpan()
+      cur.setDate(cur.getDate() + 1)
+    }
+    flushSpan()
+
+    const fullWeekCount = fullWeekSpans.reduce((s, w) => s + w.weeks, 0)
+    return { vacation, holiday, postcall, total: vacation + holiday + postcall, fullWeekSpans, fullWeekCount }
   })()
 
   // ── Shift analytics ───────────────────────────────────────────────────────
@@ -625,17 +712,52 @@ export default function AnnualSummary() {
           color="amber"
           private
         />
-        <StatCard
-          label="YTD Days Off"
-          value={offDays.total > 0 ? String(offDays.total) : '—'}
-          sub={offDays.total > 0
-            ? [
-                offDays.postcall > 0 ? `${offDays.postcall} postcall` : '',
-                offDays.holiday > 0 ? `${offDays.holiday} holiday` : '',
-                offDays.vacation > 0 ? `${offDays.vacation} vacation` : '',
-              ].filter(Boolean).join(' · ')
-            : undefined}
-        />
+        {/* YTD Days Off — inline card with full-week chip */}
+        <div className="bg-gray-900 rounded-xl border border-gray-800 px-5 py-4">
+          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">YTD Days Off</p>
+          <p className="text-2xl font-bold text-gray-100">{offDays.total > 0 ? offDays.total : '—'}</p>
+          {offDays.total > 0 && (
+            <div className="mt-1 space-y-1">
+              <p className="text-xs text-gray-600">
+                {[
+                  offDays.vacation > 0 ? `${offDays.vacation} vacation` : '',
+                  offDays.holiday > 0  ? `${offDays.holiday} holiday`  : '',
+                  offDays.postcall > 0 ? `${offDays.postcall} postcall` : '',
+                ].filter(Boolean).join(' · ')}
+              </p>
+              {offDays.fullWeekCount > 0 && (
+                <div ref={weeksPopoverRef} className="relative w-fit">
+                  <button
+                    onClick={() => setShowWeeksPopover(o => !o)}
+                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border transition-colors ${
+                      showWeeksPopover
+                        ? 'bg-indigo-700/60 border-indigo-500/70 text-indigo-200'
+                        : 'bg-indigo-900/50 border-indigo-700/50 text-indigo-300 hover:bg-indigo-800/50'
+                    }`}
+                  >
+                    <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                    </svg>
+                    {offDays.fullWeekCount} full wk{offDays.fullWeekCount !== 1 ? 's' : ''}
+                  </button>
+                  {showWeeksPopover && (
+                    <div className="absolute bottom-full left-0 mb-1.5 z-50 w-max max-w-[220px] bg-gray-800 border border-gray-700 rounded-lg px-3 py-2.5 shadow-xl">
+                      <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-1.5">Consecutive time-off spans</p>
+                      {offDays.fullWeekSpans.map(({ label, weeks }) => (
+                        <div key={label} className="flex items-center justify-between gap-4 py-0.5">
+                          <span className="text-xs text-gray-200">{label}</span>
+                          <span className="text-[10px] text-indigo-400 font-semibold whitespace-nowrap">
+                            {weeks} wk{weeks !== 1 ? 's' : ''}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
         <StatCard
           label="Days Scheduled"
           value={daysScheduled > 0 ? String(daysScheduled) : '—'}

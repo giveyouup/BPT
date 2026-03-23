@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, useState, useMemo } from 'react'
 import type { MonthlyReport, Schedule, Settings, StipendMapping, CptRange } from '../types'
 import { api } from '../api'
 import { parseShiftSummary } from '../utils/shiftUtils'
+import { lastDayOfMonth } from '../utils/dateUtils'
 
 const DEFAULT_SETTINGS: Settings = {
   defaultPaddingMinutes: 30,
@@ -22,15 +23,9 @@ function normalizeReport(r: MonthlyReport): MonthlyReport {
 
 function normalizeStipendMapping(m: StipendMapping): StipendMapping {
   const endDate = m.endDate?.endsWith('-01')
-    ? lastDayOfMonth(m.endDate.slice(0, 7))
+    ? lastDayOfMonth(...m.endDate.slice(0, 7).split('-').map(Number) as [number, number])
     : m.endDate
   return { ...m, name: m.name ?? m.filename, endDate }
-}
-
-function lastDayOfMonth(ym: string): string {
-  const [y, mo] = ym.split('-').map(Number)
-  const d = new Date(y, mo, 0)
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
 interface DataContextValue {

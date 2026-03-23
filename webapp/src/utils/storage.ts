@@ -1,5 +1,6 @@
 import type { MonthlyReport, Settings, Schedule, StipendMapping } from '../types'
 import { parseShiftSummary } from './shiftUtils'
+import { lastDayOfMonth } from './dateUtils'
 
 const REPORTS_KEY = 'pcr_reports'
 const SETTINGS_KEY = 'pcr_settings'
@@ -144,11 +145,6 @@ export function deleteSchedule(id: string): void {
   localStorage.setItem(SCHEDULES_KEY, JSON.stringify(schedules))
 }
 
-function lastDayOfMonthDate(ym: string): string {
-  const [y, mo] = ym.split('-').map(Number)
-  const d = new Date(y, mo, 0)
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-}
 
 export function getStipendMappings(): StipendMapping[] {
   try {
@@ -159,7 +155,7 @@ export function getStipendMappings(): StipendMapping[] {
       // Backward-compat: back-fill name from filename for old records
       name: m.name ?? m.filename,
       // Migrate old endDates stored as YYYY-MM-01 (first of month) to last day of that month
-      endDate: m.endDate?.endsWith('-01') ? lastDayOfMonthDate(m.endDate.slice(0, 7)) : m.endDate,
+      endDate: m.endDate?.endsWith('-01') ? lastDayOfMonth(...m.endDate.slice(0, 7).split('-').map(Number) as [number, number]) : m.endDate,
     }))
   } catch {
     return []

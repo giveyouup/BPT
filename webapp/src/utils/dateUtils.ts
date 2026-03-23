@@ -9,16 +9,26 @@ export function excelSerialToISODate(serial: number): string {
 }
 
 export function timeToMinutes(time: string): number {
-  const [h, m] = time.split(':').map(Number)
+  const parts = time.split(':')
+  const h = Number(parts[0])
+  const m = Number(parts[1])
+  if (isNaN(h) || isNaN(m)) return NaN
   return h * 60 + m
 }
 
-// Returns duration in minutes, handles overnight (end < start)
+// Returns duration in minutes, handles overnight (end < start). Returns 0 for invalid inputs.
 export function durationMinutes(startTime: string, endTime: string): number {
   const start = timeToMinutes(startTime)
   let end = timeToMinutes(endTime)
+  if (isNaN(start) || isNaN(end)) return 0
   if (end <= start) end += 24 * 60
-  return end - start
+  const duration = end - start
+  return Math.min(duration, 24 * 60) // sanity cap: no case spans more than 24h
+}
+
+export function lastDayOfMonth(year: number, month: number): string {
+  const d = new Date(year, month, 0)
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
 export function formatHours(hours: number): string {
@@ -50,6 +60,8 @@ const MONTH_NAMES = [
   'January', 'February', 'March', 'April', 'May', 'June',
   'July', 'August', 'September', 'October', 'November', 'December',
 ]
+
+export const MONTH_ABBREVS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
 
 export function formatMonthYear(year: number, month: number): string {
   return `${MONTH_NAMES[month - 1]} ${year}`

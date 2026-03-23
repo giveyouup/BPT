@@ -9,7 +9,7 @@ import type {
   Settings,
   StipendMapping,
 } from '../types'
-import { timeToMinutes, durationMinutes } from './dateUtils'
+import { timeToMinutes, durationMinutes, lastDayOfMonth } from './dateUtils'
 import {
   getFixedShiftKey,
   isCallShift,
@@ -21,11 +21,6 @@ import {
 } from './shiftUtils'
 
 // ─── Stipend helpers ──────────────────────────────────────────────────────────
-
-function lastDayOfMonth(year: number, month: number): string {
-  const d = new Date(year, month, 0)
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-}
 
 export function getApplicableMapping(
   year: number,

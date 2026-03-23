@@ -6,8 +6,11 @@ import {
 import { useData } from '../context/DataContext'
 import {
   shiftBadgeClass, isOffDayShift, resolveShiftAlias, computeFederalHolidays,
+  isVacationShift, isHolidayOffShift, isPostcallShift,
 } from '../utils/shiftUtils'
-import { getMonthName, formatDateFull } from '../utils/dateUtils'
+import { getMonthName, formatDateFull, lastDayOfMonth } from '../utils/dateUtils'
+import { generateICS, downloadICS } from '../utils/generateICS'
+import type { ICSEvent } from '../utils/generateICS'
 
 const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
@@ -53,11 +56,26 @@ export default function ScheduleCalendar() {
 
   const [year, setYear] = useState(navState?.year ?? now.getFullYear())
   const [month, setMonth] = useState(navState?.month ?? now.getMonth() + 1)
+  const [viewMode, setViewMode] = useState<'month' | 'year'>('month')
   const [summaryYear, setSummaryYear] = useState(now.getFullYear())
   const [summaryView, setSummaryView] = useState<'cards' | 'chart'>('cards')
   const [chartGroup, setChartGroup] = useState<'G' | 'Special' | 'FS' | 'Other'>('G')
   const [popover, setPopover] = useState<{ date: string; input: string } | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+
+  // ── ICS export ────────────────────────────────────────────────────────────
+  const [showExportModal, setShowExportModal] = useState(false)
+  const [exportStart, setExportStart] = useState('')
+  const [exportEnd,   setExportEnd]   = useState('')
+  const [xResolutions, setXResolutions] = useState<Record<string, 'H' | 'V' | 'Postcall'>>({})
+
+  const openExportModal = () => {
+    const pad = (n: number) => String(n).padStart(2, '0')
+    setExportStart(`${year}-${pad(month)}-01`)
+    setExportEnd(lastDayOfMonth(year, month))
+    setXResolutions({})
+    setShowExportModal(true)
+  }
 
   useEffect(() => {
     if (popover) setTimeout(() => inputRef.current?.focus(), 0)
@@ -97,6 +115,17 @@ export default function ScheduleCalendar() {
 
   function effectiveShift(date: string): string[] {
     return manualOverrides[date] ?? uploadedShift(date)
+  }
+
+  /** Returns the display label for a shift on a given date.
+   *  X following a G1/G2 day is shown as "Postcall". */
+  function displayShift(date: string, shift: string): string {
+    if (shift.trim().toUpperCase() !== 'X') return shift
+    const [y, m, d] = date.split('-').map(Number)
+    const prev = new Date(y, m - 1, d - 1)
+    const prevStr = `${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, '0')}-${String(prev.getDate()).padStart(2, '0')}`
+    const hasPrevG1G2 = effectiveShift(prevStr).some(s => { const v = s.trim().toUpperCase(); return v === 'G1' || v === 'G2' })
+    return hasPrevG1G2 ? 'Postcall' : shift
   }
 
   async function handleSave() {
@@ -155,8 +184,19 @@ export default function ScheduleCalendar() {
     const byShift = new Map<string, { total: number; wd: number; we: number }>()
 
     for (const date of allDates) {
-      const shifts = eff(date)
-      if (shifts.length === 0) continue
+      const rawShifts = eff(date)
+      if (rawShifts.length === 0) continue
+
+      // Resolve X → Postcall when the previous calendar day had G1/G2
+      const shifts = rawShifts.map(s => {
+        if (s.trim().toUpperCase() !== 'X') return s
+        const [y, m, d] = date.split('-').map(Number)
+        const prev = new Date(y, m - 1, d - 1)
+        const prevStr = `${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, '0')}-${String(prev.getDate()).padStart(2, '0')}`
+        return eff(prevStr).some(p => { const v = p.trim().toUpperCase(); return v === 'G1' || v === 'G2' })
+          ? 'Postcall'
+          : s
+      })
 
       const allOff = shifts.every(s => isOffDayShift(s))
       const [y, m, d] = date.split('-').map(Number)
@@ -167,9 +207,9 @@ export default function ScheduleCalendar() {
 
       if (allOff) {
         daysOff++
-        if (shifts.some(s => s.toUpperCase() === 'V')) vacation++
-        if (shifts.some(s => s.toUpperCase() === 'H')) holidayOff++
-        if (shifts.some(s => s.toUpperCase() === 'POSTCALL')) postcall++
+        if (shifts.some(isVacationShift)) vacation++
+        if (shifts.some(isHolidayOffShift)) holidayOff++
+        if (shifts.some(isPostcallShift)) postcall++
       } else {
         totalWorking++
         if (isOnHoliday) holidayWorking++
@@ -235,11 +275,55 @@ export default function ScheduleCalendar() {
 
   const cells = buildCalendarCells(year, month)
 
+  // ── Export entries (recomputed when modal open or date range changes) ──────
+  const exportEntries = useMemo(() => {
+    if (!showExportModal || !exportStart || !exportEnd || exportStart > exportEnd) return []
+    const result: { date: string; rawShift: string; autoLabel: string | null }[] = []
+    const cur = new Date(exportStart + 'T12:00:00')
+    const end = new Date(exportEnd + 'T12:00:00')
+    while (cur <= end) {
+      const dateStr = cur.toISOString().slice(0, 10)
+      for (const shift of effectiveShift(dateStr)) {
+        const u = shift.trim().toUpperCase()
+        if (u === '\\') continue
+        if (u === 'X') {
+          const prev = new Date(cur); prev.setDate(prev.getDate() - 1)
+          const prevStr = prev.toISOString().slice(0, 10)
+          const hasPrevG1G2 = effectiveShift(prevStr).some(s => { const v = s.trim().toUpperCase(); return v === 'G1' || v === 'G2' })
+          result.push({ date: dateStr, rawShift: shift, autoLabel: hasPrevG1G2 ? 'Postcall' : null })
+        } else {
+          result.push({ date: dateStr, rawShift: shift, autoLabel: shift })
+        }
+      }
+      cur.setDate(cur.getDate() + 1)
+    }
+    return result
+  }, [showExportModal, exportStart, exportEnd, schedules]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const unresolvedXDates = useMemo(
+    () => exportEntries.filter(e => e.autoLabel === null).map(e => e.date),
+    [exportEntries],
+  )
+
+  const allResolved = unresolvedXDates.every(d => xResolutions[d])
+
+  const handleExportDownload = () => {
+    const events: ICSEvent[] = exportEntries.map(e => ({
+      date: e.date,
+      title: e.autoLabel ?? xResolutions[e.date] ?? e.rawShift,
+    }))
+    const filename = exportStart === exportEnd
+      ? `schedule-${exportStart}.ics`
+      : `schedule-${exportStart}-to-${exportEnd}.ics`
+    downloadICS(filename, generateICS(events))
+    setShowExportModal(false)
+  }
+
   return (
     <div className="p-4 md:p-8">
       {/* Header */}
       <div className="mb-6">
-        {/* Row 1: title + year nav + Today */}
+        {/* Row 1: title + year nav + Today + view toggle */}
         <div className="flex items-center gap-3 mb-3 flex-wrap">
           <h2 className="text-2xl font-bold text-gray-100">Schedule</h2>
           <div className="flex items-center gap-1 ml-4">
@@ -269,144 +353,299 @@ export default function ScheduleCalendar() {
               Today
             </button>
           </div>
+          <div className="ml-auto flex items-center gap-2">
+            <button
+              onClick={openExportModal}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-400 hover:text-gray-200 border border-gray-700 rounded-lg hover:border-gray-600 transition-colors"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+              </svg>
+              Export .ics
+            </button>
+            <div className="flex items-center gap-0.5 bg-gray-900 border border-gray-800 rounded-lg p-0.5">
+              {(['month', 'year'] as const).map(v => (
+                <button
+                  key={v}
+                  onClick={() => setViewMode(v)}
+                  className={`px-3 py-1 text-xs font-medium rounded-md transition-colors capitalize ${
+                    viewMode === v ? 'bg-gray-700 text-gray-100' : 'text-gray-500 hover:text-gray-300'
+                  }`}
+                >
+                  {v}
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
 
-        {/* Row 2: month pills */}
-        <div className="flex gap-1 flex-wrap">
-          {['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'].map((abbr, i) => {
-            const m = i + 1
-            const isActive = m === month
-            return (
-              <button
-                key={m}
-                onClick={() => setMonth(m)}
-                className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
-                  isActive
-                    ? 'bg-indigo-600 text-white'
-                    : 'text-gray-500 hover:bg-gray-800 hover:text-gray-200'
-                }`}
-              >
-                {abbr}
-              </button>
-            )
-          })}
-        </div>
-      </div>
-
-      {/* Calendar */}
-      <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-visible" onClick={() => setPopover(null)}>
-        {/* Day-of-week header */}
-        <div className="grid grid-cols-7 border-b border-gray-800">
-          {DOW.map(d => (
-            <div key={d} className="py-2 text-center text-xs font-semibold text-gray-600 uppercase tracking-wider">{d}</div>
-          ))}
-        </div>
-
-        {/* Day cells */}
-        <div className="grid grid-cols-7">
-          {cells.map((date, i) => {
-            const col = i % 7
-            const row = Math.floor(i / 7)
-            const totalRows = Math.floor(cells.length / 7)
-            const isLastRow = row === totalRows - 1
-            const isLastCol = col === 6
-
-            if (!date) {
+        {/* Row 2: month pills — only in month view */}
+        {viewMode === 'month' && (
+          <div className="flex gap-1 flex-wrap">
+            {['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'].map((abbr, i) => {
+              const m = i + 1
+              const isActive = m === month
               return (
-                <div
-                  key={`empty-${i}`}
-                  className={`min-h-[72px] bg-gray-950/30 ${isLastCol ? '' : 'border-r border-gray-800'} ${isLastRow ? '' : 'border-b border-gray-800'}`}
-                />
+                <button
+                  key={m}
+                  onClick={() => setMonth(m)}
+                  className={`px-3 py-1 text-xs font-medium rounded-md transition-colors ${
+                    isActive
+                      ? 'bg-indigo-600 text-white'
+                      : 'text-gray-500 hover:bg-gray-800 hover:text-gray-200'
+                  }`}
+                >
+                  {abbr}
+                </button>
               )
-            }
+            })}
+          </div>
+        )}
+      </div>
 
-            const shifts = effectiveShift(date)
-            const isOverride = !!manualOverrides[date]
-            const isToday = date === todayStr
-            const isOpen = popover?.date === date
-            const dayNum = parseInt(date.split('-')[2])
-            const uploaded = uploadedShift(date)
-            const popoverY = row >= totalRows - 2 ? 'bottom-full mb-1' : 'top-full mt-1'
-            const popoverX = col >= 5 ? 'right-0' : 'left-0'
+      {/* ── Month view ── */}
+      {viewMode === 'month' && (
+        <>
+          <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-visible" onClick={() => setPopover(null)}>
+            <div className="grid grid-cols-7 border-b border-gray-800">
+              {DOW.map(d => (
+                <div key={d} className="py-2 text-center text-xs font-semibold text-gray-600 uppercase tracking-wider">{d}</div>
+              ))}
+            </div>
+            <div className="grid grid-cols-7">
+              {cells.map((date, i) => {
+                const col = i % 7
+                const row = Math.floor(i / 7)
+                const totalRows = Math.floor(cells.length / 7)
+                const isLastRow = row === totalRows - 1
+                const isLastCol = col === 6
 
-            return (
-              <div
-                key={date}
-                className={`relative min-h-[72px] p-1.5 cursor-pointer transition-colors
-                  ${isLastCol ? '' : 'border-r border-gray-800'}
-                  ${isLastRow ? '' : 'border-b border-gray-800'}
-                  ${isOpen ? 'bg-indigo-950/50 ring-1 ring-inset ring-indigo-500/40 z-10' : 'hover:bg-gray-800/50'}
-                  ${isOverride && !isOpen ? 'ring-1 ring-inset ring-amber-500/50 bg-amber-950/20' : ''}
-                `}
-                onClick={e => {
-                  e.stopPropagation()
-                  if (isOpen) { setPopover(null); return }
-                  setPopover({ date, input: effectiveShift(date).join(' ') })
-                }}
-              >
-                <div className="flex items-center justify-between mb-1">
-                  <span className={`text-xs font-semibold w-5 h-5 flex items-center justify-center rounded-full ${isToday ? 'bg-indigo-600 text-white' : 'text-gray-500'}`}>
-                    {dayNum}
-                  </span>
-                  {isOverride && (
-                    <span
-                      title="Manual override"
-                      className="w-2 h-2 rounded-full bg-amber-400 flex-shrink-0 ring-1 ring-amber-300/30"
+                if (!date) {
+                  return (
+                    <div
+                      key={`empty-${i}`}
+                      className={`min-h-[72px] bg-gray-950/30 ${isLastCol ? '' : 'border-r border-gray-800'} ${isLastRow ? '' : 'border-b border-gray-800'}`}
                     />
-                  )}
-                </div>
+                  )
+                }
 
-                <div className="flex flex-wrap gap-0.5">
-                  {shifts.map(st => (
-                    <span key={st} className={`text-[10px] font-mono px-1 py-0.5 rounded leading-tight ${shiftBadgeClass(st)}`}>{st}</span>
-                  ))}
-                </div>
+                const shifts = effectiveShift(date)
+                const isOverride = !!manualOverrides[date]
+                const isToday = date === todayStr
+                const isOpen = popover?.date === date
+                const isOffDay = shifts.length > 0 && shifts.every(isOffDayShift)
+                const dayNum = parseInt(date.split('-')[2])
+                const uploaded = uploadedShift(date)
+                const popoverY = row >= totalRows - 2 ? 'bottom-full mb-1' : 'top-full mt-1'
+                const popoverX = col >= 5 ? 'right-0' : 'left-0'
 
-                {isOpen && (
+                return (
                   <div
-                    className={`absolute ${popoverY} ${popoverX} z-50 w-56 bg-gray-800 border border-gray-700 rounded-lg shadow-2xl p-3`}
-                    onClick={e => e.stopPropagation()}
+                    key={date}
+                    className={`relative min-h-[72px] p-1.5 cursor-pointer transition-colors
+                      ${isLastCol ? '' : 'border-r border-gray-800'}
+                      ${isLastRow ? '' : 'border-b border-gray-800'}
+                      ${isOpen ? 'bg-indigo-950/50 ring-1 ring-inset ring-indigo-500/40 z-10' : isOffDay ? 'bg-emerald-950/30 hover:bg-emerald-950/50' : 'hover:bg-gray-800/50'}
+                      ${isOverride && !isOpen ? 'ring-1 ring-inset ring-amber-500/50' : ''}
+                    `}
+                    onClick={e => {
+                      e.stopPropagation()
+                      if (isOpen) { setPopover(null); return }
+                      setPopover({ date, input: effectiveShift(date).join(' ') })
+                    }}
                   >
-                    <p className="text-xs font-semibold text-gray-200 mb-2">{formatDateFull(date)}</p>
-                    <p className="text-[10px] text-gray-600 mb-2">
-                      {isOverride
-                        ? `Uploaded: ${uploaded.join(' ') || '(none)'}`
-                        : uploaded.length > 0
-                          ? `From schedule: ${uploaded.join(' ')}`
-                          : 'No uploaded schedule for this day'}
-                    </p>
-                    <input
-                      ref={inputRef}
-                      type="text"
-                      value={popover.input}
-                      onChange={e => setPopover(p => p ? { ...p, input: e.target.value } : null)}
-                      onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter') handleSave() }}
-                      placeholder="Leave blank to mark as no shift"
-                      className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-xs text-gray-100 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-indigo-500 mb-2.5"
-                    />
-                    <div className="flex items-center gap-1.5">
-                      <button onClick={handleSave} className="flex-1 px-2 py-1.5 bg-indigo-600 text-white text-xs rounded-md hover:bg-indigo-500 transition-colors font-medium">Save</button>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className={`text-xs font-semibold w-5 h-5 flex items-center justify-center rounded-full ${isToday ? 'bg-indigo-600 text-white' : 'text-gray-500'}`}>
+                        {dayNum}
+                      </span>
                       {isOverride && (
-                        <button onClick={handleRevert} className="px-2 py-1.5 text-xs text-amber-400 hover:text-amber-300 border border-gray-700 rounded-md transition-colors" title="Remove override and restore uploaded schedule">Revert</button>
+                        <span title="Manual override" className="w-2 h-2 rounded-full bg-amber-400 flex-shrink-0 ring-1 ring-amber-300/30" />
                       )}
-                      <button onClick={() => setPopover(null)} className="px-2 py-1.5 text-xs text-gray-500 hover:text-gray-300 transition-colors">Cancel</button>
                     </div>
+                    <div className="flex flex-wrap gap-0.5">
+                      {shifts.map(st => {
+                        const label = displayShift(date, st)
+                        return <span key={st} className={`text-[10px] font-mono px-1 py-0.5 rounded leading-tight ${shiftBadgeClass(label)}`}>{label}</span>
+                      })}
+                    </div>
+                    {isOpen && (
+                      <div
+                        className={`absolute ${popoverY} ${popoverX} z-50 w-56 bg-gray-800 border border-gray-700 rounded-lg shadow-2xl p-3`}
+                        onClick={e => e.stopPropagation()}
+                      >
+                        <p className="text-xs font-semibold text-gray-200 mb-2">{formatDateFull(date)}</p>
+                        <p className="text-[10px] text-gray-600 mb-2">
+                          {isOverride
+                            ? `Uploaded: ${uploaded.join(' ') || '(none)'}`
+                            : uploaded.length > 0
+                              ? `From schedule: ${uploaded.join(' ')}`
+                              : 'No uploaded schedule for this day'}
+                        </p>
+                        <input
+                          ref={inputRef}
+                          type="text"
+                          value={popover.input}
+                          onChange={e => setPopover(p => p ? { ...p, input: e.target.value } : null)}
+                          onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter') handleSave() }}
+                          placeholder="Leave blank to mark as no shift"
+                          className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-xs text-gray-100 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-indigo-500 mb-2.5"
+                        />
+                        <div className="flex items-center gap-1.5">
+                          <button onClick={handleSave} className="flex-1 px-2 py-1.5 bg-indigo-600 text-white text-xs rounded-md hover:bg-indigo-500 transition-colors font-medium">Save</button>
+                          {isOverride && (
+                            <button onClick={handleRevert} className="px-2 py-1.5 text-xs text-amber-400 hover:text-amber-300 border border-gray-700 rounded-md transition-colors" title="Remove override and restore uploaded schedule">Revert</button>
+                          )}
+                          <button onClick={() => setPopover(null)} className="px-2 py-1.5 text-xs text-gray-500 hover:text-gray-300 transition-colors">Cancel</button>
+                        </div>
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
-            )
-          })}
-        </div>
-      </div>
+                )
+              })}
+            </div>
+          </div>
+          <div className="flex items-center gap-5 mt-3 text-xs text-gray-600">
+            <span className="flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+              Manual override
+            </span>
+            <span className="text-gray-700">Click any day to edit · Multiple shifts space-separated · Leave blank and save to mark as no shift · Revert removes the override entirely</span>
+          </div>
+        </>
+      )}
 
-      {/* Legend */}
-      <div className="flex items-center gap-5 mt-3 text-xs text-gray-600">
-        <span className="flex items-center gap-1.5">
-          <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
-          Manual override
-        </span>
-<span className="text-gray-700">Click any day to edit · Multiple shifts space-separated · Leave blank and save to mark as no shift · Revert removes the override entirely</span>
-      </div>
+      {/* ── Year view ── */}
+      {viewMode === 'year' && (
+        <>
+          <div
+            className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4"
+            onClick={() => setPopover(null)}
+          >
+            {Array.from({ length: 12 }, (_, i) => i + 1).map(m => {
+              const miniCells = buildCalendarCells(year, m)
+              const totalRows = Math.floor(miniCells.length / 7)
+              const monthAbbr = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][m - 1]
+
+              return (
+                <div key={m} className="bg-gray-900 rounded-xl border border-gray-800 overflow-visible">
+                  {/* Month name + jump-to-month-view link */}
+                  <div className="flex items-center justify-between px-3 py-2 border-b border-gray-800">
+                    <span className="text-xs font-semibold text-gray-300">{monthAbbr}</span>
+                    <button
+                      onClick={e => { e.stopPropagation(); setMonth(m); setViewMode('month') }}
+                      className="text-[10px] text-indigo-500 hover:text-indigo-300 transition-colors"
+                    >
+                      Details →
+                    </button>
+                  </div>
+                  {/* DOW headers */}
+                  <div className="grid grid-cols-7 border-b border-gray-800">
+                    {DOW.map(d => (
+                      <div key={d} className="py-1 text-center text-[9px] font-semibold text-gray-700 uppercase">{d[0]}</div>
+                    ))}
+                  </div>
+                  {/* Day cells */}
+                  <div className="grid grid-cols-7">
+                    {miniCells.map((date, i) => {
+                      const col = i % 7
+                      const row = Math.floor(i / 7)
+                      const isLastRow = row === totalRows - 1
+                      const isLastCol = col === 6
+
+                      if (!date) {
+                        return (
+                          <div
+                            key={`empty-${i}`}
+                            className={`min-h-[38px] bg-gray-950/30 ${isLastCol ? '' : 'border-r border-gray-800'} ${isLastRow ? '' : 'border-b border-gray-800'}`}
+                          />
+                        )
+                      }
+
+                      const shifts = effectiveShift(date)
+                      const isOverride = !!manualOverrides[date]
+                      const isToday = date === todayStr
+                      const isOpen = popover?.date === date
+                      const isOffDay = shifts.length > 0 && shifts.every(isOffDayShift)
+                      const dayNum = parseInt(date.split('-')[2])
+                      const uploaded = uploadedShift(date)
+                      const popoverY = row >= totalRows - 2 ? 'bottom-full mb-1' : 'top-full mt-1'
+                      const popoverX = col >= 4 ? 'right-0' : 'left-0'
+
+                      return (
+                        <div
+                          key={date}
+                          className={`relative min-h-[38px] p-0.5 cursor-pointer transition-colors
+                            ${isLastCol ? '' : 'border-r border-gray-800'}
+                            ${isLastRow ? '' : 'border-b border-gray-800'}
+                            ${isOpen ? 'bg-indigo-950/50 ring-1 ring-inset ring-indigo-500/40 z-10' : isOffDay ? 'bg-emerald-950/30 hover:bg-emerald-950/50' : 'hover:bg-gray-800/50'}
+                            ${isOverride && !isOpen ? 'ring-1 ring-inset ring-amber-500/50' : ''}
+                          `}
+                          onClick={e => {
+                            e.stopPropagation()
+                            if (isOpen) { setPopover(null); return }
+                            setPopover({ date, input: effectiveShift(date).join(' ') })
+                          }}
+                        >
+                          <div className="flex items-center justify-between mb-0.5">
+                            <span className={`text-[9px] font-semibold w-4 h-4 flex items-center justify-center rounded-full leading-none ${isToday ? 'bg-indigo-600 text-white' : 'text-gray-600'}`}>
+                              {dayNum}
+                            </span>
+                            {isOverride && <span className="w-1 h-1 rounded-full bg-amber-400 flex-shrink-0" />}
+                          </div>
+                          <div className="flex flex-wrap gap-px">
+                            {shifts.map(st => {
+                              const label = displayShift(date, st)
+                              return <span key={st} className={`text-[8px] font-mono px-0.5 rounded leading-tight ${shiftBadgeClass(label)}`}>{label}</span>
+                            })}
+                          </div>
+                          {isOpen && (
+                            <div
+                              className={`absolute ${popoverY} ${popoverX} z-50 w-56 bg-gray-800 border border-gray-700 rounded-lg shadow-2xl p-3`}
+                              onClick={e => e.stopPropagation()}
+                            >
+                              <p className="text-xs font-semibold text-gray-200 mb-2">{formatDateFull(date)}</p>
+                              <p className="text-[10px] text-gray-600 mb-2">
+                                {isOverride
+                                  ? `Uploaded: ${uploaded.join(' ') || '(none)'}`
+                                  : uploaded.length > 0
+                                    ? `From schedule: ${uploaded.join(' ')}`
+                                    : 'No uploaded schedule for this day'}
+                              </p>
+                              <input
+                                ref={inputRef}
+                                type="text"
+                                value={popover.input}
+                                onChange={e => setPopover(p => p ? { ...p, input: e.target.value } : null)}
+                                onKeyDown={e => { e.stopPropagation(); if (e.key === 'Enter') handleSave() }}
+                                placeholder="Leave blank to mark as no shift"
+                                className="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-xs text-gray-100 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-indigo-500 mb-2.5"
+                              />
+                              <div className="flex items-center gap-1.5">
+                                <button onClick={handleSave} className="flex-1 px-2 py-1.5 bg-indigo-600 text-white text-xs rounded-md hover:bg-indigo-500 transition-colors font-medium">Save</button>
+                                {isOverride && (
+                                  <button onClick={handleRevert} className="px-2 py-1.5 text-xs text-amber-400 hover:text-amber-300 border border-gray-700 rounded-md transition-colors" title="Remove override and restore uploaded schedule">Revert</button>
+                                )}
+                                <button onClick={() => setPopover(null)} className="px-2 py-1.5 text-xs text-gray-500 hover:text-gray-300 transition-colors">Cancel</button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+          <div className="flex items-center gap-5 mt-3 text-xs text-gray-600">
+            <span className="flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+              Manual override
+            </span>
+            <span className="text-gray-700">Click any day to edit · Click Details → to jump to that month</span>
+          </div>
+        </>
+      )}
 
       {/* ── Shift Summary ──────────────────────────────────────────────────── */}
       <div className="mt-10 pt-8 border-t border-gray-800">
@@ -745,6 +984,91 @@ export default function ScheduleCalendar() {
           )}
         </div>
       </div>
+
+      {/* ── Export .ics modal ── */}
+      {showExportModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+          onClick={() => setShowExportModal(false)}
+        >
+          <div
+            className="bg-gray-900 border border-gray-700 rounded-2xl p-6 w-full max-w-md shadow-2xl flex flex-col max-h-[80vh]"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-base font-semibold text-gray-100">Export Schedule</h3>
+              <button onClick={() => setShowExportModal(false)} className="text-gray-600 hover:text-gray-300 transition-colors">
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            {/* Date range */}
+            <div className="grid grid-cols-2 gap-4 mb-5">
+              <div>
+                <label className="block text-xs font-semibold text-gray-400 mb-1.5">From</label>
+                <input
+                  type="date"
+                  value={exportStart}
+                  onChange={e => { setExportStart(e.target.value); setXResolutions({}) }}
+                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-gray-400 mb-1.5">To</label>
+                <input
+                  type="date"
+                  value={exportEnd}
+                  onChange={e => { setExportEnd(e.target.value); setXResolutions({}) }}
+                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+            </div>
+
+            {/* X resolution */}
+            {unresolvedXDates.length > 0 && (
+              <div className="mb-5 flex-1 overflow-y-auto">
+                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">Resolve "X" days</p>
+                <div className="space-y-2">
+                  {unresolvedXDates.map(date => (
+                    <div key={date} className="flex items-center justify-between bg-gray-800 rounded-lg px-3 py-2">
+                      <span className="text-xs text-gray-300">{formatDateFull(date)}</span>
+                      <div className="flex items-center gap-1">
+                        {(['H', 'V', 'Postcall'] as const).map(opt => (
+                          <button
+                            key={opt}
+                            onClick={() => setXResolutions(prev => ({ ...prev, [date]: opt }))}
+                            className={`px-2 py-0.5 text-xs rounded transition-colors ${
+                              xResolutions[date] === opt
+                                ? 'bg-indigo-600 text-white'
+                                : 'bg-gray-700 text-gray-400 hover:bg-gray-600 hover:text-gray-200'
+                            }`}
+                          >
+                            {opt}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <p className="text-xs text-gray-500 mb-4">
+              {exportEntries.length} event{exportEntries.length !== 1 ? 's' : ''} will be exported
+            </p>
+
+            <button
+              onClick={handleExportDownload}
+              disabled={exportEntries.length === 0 || !allResolved}
+              className="w-full py-2.5 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-500 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              Download .ics
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

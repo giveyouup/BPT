@@ -45,6 +45,18 @@ export function isOffDayShift(shiftType: string): boolean {
   return normalized === 'V' || normalized === 'H' || normalized === 'POSTCALL'
 }
 
+export function isVacationShift(s: string): boolean {
+  return s.trim().toUpperCase() === 'V'
+}
+
+export function isHolidayOffShift(s: string): boolean {
+  return s.trim().toUpperCase() === 'H'
+}
+
+export function isPostcallShift(s: string): boolean {
+  return s.trim().toUpperCase().replace(/[-\s]/g, '') === 'POSTCALL'
+}
+
 export function isWeekendOrHoliday(date: string, holidayList: string[]): boolean {
   const [y, m, d] = date.split('-').map(Number)
   const dt = new Date(y, m - 1, d)
@@ -57,6 +69,7 @@ export function shiftBadgeClass(shiftType: string): string {
   const key = getFixedShiftKey(shiftType)
   if (key) return 'bg-amber-900/40 text-amber-400'
   if (isCallShift(shiftType)) return 'bg-rose-900/40 text-rose-400'
+  if (isOffDayShift(shiftType)) return 'bg-emerald-900/50 text-emerald-400'
   return 'bg-indigo-900/30 text-indigo-400'
 }
 
@@ -94,8 +107,11 @@ function observed(isoDate: string): string {
   return dateToISO(d)
 }
 
+const _federalHolidayCache = new Map<number, string[]>()
+
 export function computeFederalHolidays(year: number): string[] {
-  return [...new Set([
+  if (_federalHolidayCache.has(year)) return _federalHolidayCache.get(year)!
+  const result = [...new Set([
     observed(`${year}-01-01`),       // New Year's Day
     nthWeekday(year, 1, 1, 3),       // MLK Day: 3rd Mon Jan
     nthWeekday(year, 2, 1, 3),       // Presidents' Day: 3rd Mon Feb
@@ -108,6 +124,8 @@ export function computeFederalHolidays(year: number): string[] {
     nthWeekday(year, 11, 4, 4),      // Thanksgiving: 4th Thu Nov
     observed(`${year}-12-25`),       // Christmas Day
   ])].sort()
+  _federalHolidayCache.set(year, result)
+  return result
 }
 
 // Returns labels for each computed federal holiday date for a year

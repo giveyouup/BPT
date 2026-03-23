@@ -3,7 +3,7 @@ import { api, type MaintenanceResult } from '../api'
 import { useNavigate } from 'react-router-dom'
 import { useData } from '../context/DataContext'
 import { computeFederalHolidays, getFederalHolidayLabels } from '../utils/shiftUtils'
-import { formatDateFull, formatMonthYear } from '../utils/dateUtils'
+import { formatDateFull, formatMonthYear, lastDayOfMonth, MONTH_ABBREVS } from '../utils/dateUtils'
 import { parseStipendMapping } from '../utils/stipendMappingParser'
 import type { StipendMapping, StipendRate } from '../types'
 
@@ -29,15 +29,7 @@ function prevMonthLastDay(yyyyMmDd: string): string {
 const inputCls = 'bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 w-24'
 const selectCls = 'bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500'
 
-const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
 const PICKER_YEARS = Array.from({ length: 10 }, (_, i) => new Date().getFullYear() - 3 + i)
-
-// Returns "YYYY-MM-DD" for the last day of the given "YYYY-MM" string
-function lastDayOfMonthStr(ym: string): string {
-  const [y, m] = ym.split('-').map(Number)
-  const d = new Date(y, m, 0) // day 0 of next month = last day of this month
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-}
 
 // value: "YYYY-MM" | "", onChange: (val: "YYYY-MM" | "") => void
 function MonthPicker({ value, onChange, placeholder = 'Select' }: {
@@ -63,7 +55,7 @@ function MonthPicker({ value, onChange, placeholder = 'Select' }: {
     <div className="flex items-center gap-1">
       <select value={month} onChange={(e) => setMonth(e.target.value)} className={selectCls}>
         <option value="">{placeholder}</option>
-        {MONTHS.map((name, i) => (
+        {MONTH_ABBREVS.map((name, i) => (
           <option key={i + 1} value={i + 1}>{name}</option>
         ))}
       </select>
@@ -90,6 +82,7 @@ export default function Settings() {
 
   const [settings, setSettings] = useState(apiSettings)
   const [saved, setSaved] = useState(false)
+  const [defaultsOpen, setDefaultsOpen] = useState(false)
 
   // ── Maintenance ────────────────────────────────────────────────────────────
   const [maintState, setMaintState] = useState<'idle' | 'running' | 'done' | 'error'>('idle')
@@ -392,86 +385,107 @@ export default function Settings() {
         )}
       </div>
 
-      {/* Shift Hours */}
-      <section className="bg-gray-900 rounded-xl border border-gray-800 p-6 mb-6">
-        <h3 className="text-sm font-semibold text-gray-300 mb-1">Fixed-Hour Shift Defaults</h3>
-        <p className="text-xs text-gray-600 mb-4">
-          APS, BR, and NIR shifts use these hours regardless of case times. Override per day via the pencil icon.
-        </p>
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-          {([
-            { key: 'APS', label: 'APS Weekday' },
-            { key: 'APS_weekend', label: 'APS Wknd/Holiday' },
-            { key: 'BR', label: 'BR' },
-            { key: 'NIR', label: 'NIR' },
-          ] as const).map(({ key, label }) => (
-            <div key={key}>
-              <label className="block text-xs font-semibold text-gray-400 mb-1.5">{label} (hours)</label>
-              <input
-                type="number"
-                step="0.5"
-                value={settings.shiftHours[key]}
-                onChange={(e) =>
-                  setSettings((s) => ({
-                    ...s,
-                    shiftHours: { ...s.shiftHours, [key]: parseFloat(e.target.value) || 0 },
-                  }))
-                }
-                className={inputCls}
-              />
-            </div>
-          ))}
-        </div>
-      </section>
+      {/* Defaults (collapsible) */}
+      <section className="bg-gray-900 rounded-xl border border-gray-800 mb-6">
+        <button
+          type="button"
+          onClick={() => setDefaultsOpen((o) => !o)}
+          className="w-full flex items-center justify-between px-6 py-4 text-left"
+        >
+          <span className="text-sm font-semibold text-gray-300">Defaults</span>
+          <svg
+            className={`w-4 h-4 text-gray-500 transition-transform ${defaultsOpen ? 'rotate-180' : ''}`}
+            fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+          </svg>
+        </button>
 
-      {/* Global defaults */}
-      <section className="bg-gray-900 rounded-xl border border-gray-800 p-6 mb-6">
-        <h3 className="text-sm font-semibold text-gray-300 mb-4">Global Defaults</h3>
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label className="block text-xs font-semibold text-gray-400 mb-1.5">
-              Hours Padding (minutes)
-            </label>
-            <input
-              type="number"
-              value={settings.defaultPaddingMinutes}
-              onChange={(e) =>
-                setSettings((s) => ({ ...s, defaultPaddingMinutes: parseInt(e.target.value) || 0 }))
-              }
-              className={inputCls}
-            />
-            <p className="text-xs text-gray-600 mt-1">Added to timed days (new reports use this default)</p>
+        {defaultsOpen && (
+          <div className="px-6 pb-6 border-t border-gray-800 pt-5 space-y-6">
+            {/* Fixed-shift hours */}
+            <div>
+              <h4 className="text-xs font-semibold text-gray-400 mb-1">Fixed-Hour Shift Defaults</h4>
+              <p className="text-xs text-gray-600 mb-3">
+                APS, BR, and NIR shifts use these hours regardless of case times. Override per day via the pencil icon.
+              </p>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                {([
+                  { key: 'APS', label: 'APS Weekday' },
+                  { key: 'APS_weekend', label: 'APS Wknd/Holiday' },
+                  { key: 'BR', label: 'BR' },
+                  { key: 'NIR', label: 'NIR' },
+                ] as const).map(({ key, label }) => (
+                  <div key={key}>
+                    <label className="block text-xs font-semibold text-gray-400 mb-1.5">{label} (hours)</label>
+                    <input
+                      type="number"
+                      step="0.5"
+                      value={settings.shiftHours[key]}
+                      onChange={(e) =>
+                        setSettings((s) => ({
+                          ...s,
+                          shiftHours: { ...s.shiftHours, [key]: parseFloat(e.target.value) || 0 },
+                        }))
+                      }
+                      className={inputCls}
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Global defaults */}
+            <div>
+              <h4 className="text-xs font-semibold text-gray-400 mb-3">Global Defaults</h4>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-gray-400 mb-1.5">
+                    Hours Padding (minutes)
+                  </label>
+                  <input
+                    type="number"
+                    value={settings.defaultPaddingMinutes}
+                    onChange={(e) =>
+                      setSettings((s) => ({ ...s, defaultPaddingMinutes: parseInt(e.target.value) || 0 }))
+                    }
+                    className={inputCls}
+                  />
+                  <p className="text-xs text-gray-600 mt-1">Added to timed days (new reports use this default)</p>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-gray-400 mb-1.5">
+                    Default Hours (no-time days)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.5"
+                    value={settings.defaultNoTimeHours}
+                    onChange={(e) =>
+                      setSettings((s) => ({ ...s, defaultNoTimeHours: parseFloat(e.target.value) || 0 }))
+                    }
+                    className={inputCls}
+                  />
+                  <p className="text-xs text-gray-600 mt-1">For variable-shift days with no case times</p>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-gray-400 mb-1.5">
+                    Clinical Day Start
+                  </label>
+                  <input
+                    type="time"
+                    value={settings.clinicalDayStart}
+                    onChange={(e) =>
+                      setSettings((s) => ({ ...s, clinicalDayStart: e.target.value || '06:30' }))
+                    }
+                    className={inputCls}
+                  />
+                  <p className="text-xs text-gray-600 mt-1">After-midnight cases before this time are attributed to the prior call date</p>
+                </div>
+              </div>
+            </div>
           </div>
-          <div>
-            <label className="block text-xs font-semibold text-gray-400 mb-1.5">
-              Default Hours (no-time days)
-            </label>
-            <input
-              type="number"
-              step="0.5"
-              value={settings.defaultNoTimeHours}
-              onChange={(e) =>
-                setSettings((s) => ({ ...s, defaultNoTimeHours: parseFloat(e.target.value) || 0 }))
-              }
-              className={inputCls}
-            />
-            <p className="text-xs text-gray-600 mt-1">For variable-shift days with no case times</p>
-          </div>
-          <div>
-            <label className="block text-xs font-semibold text-gray-400 mb-1.5">
-              Clinical Day Start
-            </label>
-            <input
-              type="time"
-              value={settings.clinicalDayStart}
-              onChange={(e) =>
-                setSettings((s) => ({ ...s, clinicalDayStart: e.target.value || '06:30' }))
-              }
-              className={inputCls}
-            />
-            <p className="text-xs text-gray-600 mt-1">After-midnight cases before this time are attributed to the prior call date</p>
-          </div>
-        </div>
+        )}
       </section>
 
       {/* Federal Holidays */}
@@ -483,21 +497,15 @@ export default function Settings() {
               Used to classify G1/G2 call shifts as weekday vs. weekend/holiday.
             </p>
           </div>
-          <div className="flex gap-1">
+          <select
+            value={holidayYear}
+            onChange={(e) => setHolidayYear(Number(e.target.value))}
+            className={selectCls}
+          >
             {years.map((y) => (
-              <button
-                key={y}
-                onClick={() => setHolidayYear(y)}
-                className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
-                  y === holidayYear
-                    ? 'bg-indigo-600 text-white'
-                    : 'text-gray-400 hover:bg-gray-800 hover:text-gray-200'
-                }`}
-              >
-                {y}
-              </button>
+              <option key={y} value={y}>{y}</option>
             ))}
-          </div>
+          </select>
         </div>
 
         <div className="space-y-1 mb-4">
@@ -558,7 +566,38 @@ export default function Settings() {
       <section className="bg-gray-900 rounded-xl border border-gray-800 p-6 mb-6">
         <div className="flex items-center justify-between mb-4">
           <div>
-            <h3 className="text-sm font-semibold text-gray-300">Stipend Rate Schedules</h3>
+            <div className="flex items-center gap-1.5">
+              <h3 className="text-sm font-semibold text-gray-300">Stipend Rate Schedules</h3>
+              <div className="relative group">
+                <button
+                  type="button"
+                  className="w-4 h-4 rounded-full border border-gray-600 text-gray-500 hover:border-gray-400 hover:text-gray-300 transition-colors flex items-center justify-center text-[10px] font-bold leading-none"
+                  tabIndex={-1}
+                >
+                  i
+                </button>
+                <div className="absolute left-0 top-6 z-50 hidden group-hover:block w-72 bg-gray-800 border border-gray-700 rounded-lg p-3 shadow-xl text-xs text-gray-300 space-y-2">
+                  <p className="font-semibold text-gray-200 mb-1">Rate Key Format</p>
+                  <p>Each row has a <span className="font-mono text-indigo-300">shiftType</span> key and a dollar amount. Keys are case-insensitive.</p>
+                  <div className="space-y-1">
+                    <p className="font-semibold text-gray-400 uppercase tracking-wide text-[10px]">Weekday / Weekend variants</p>
+                    <p>Append <span className="font-mono text-amber-300">_weekday</span> or <span className="font-mono text-amber-300">_weekend</span> to a shift name to set day-type-specific rates (e.g. <span className="font-mono text-gray-400">G1_weekday</span>, <span className="font-mono text-gray-400">G1_weekend</span>). If only a plain key exists it applies to both.</p>
+                  </div>
+                  <div className="space-y-1">
+                    <p className="font-semibold text-gray-400 uppercase tracking-wide text-[10px]">Call shifts (G1 / G2)</p>
+                    <p>Always resolved using <span className="font-mono text-amber-300">_weekday</span> / <span className="font-mono text-amber-300">_weekend</span> suffix based on federal holiday calendar.</p>
+                  </div>
+                  <div className="space-y-1">
+                    <p className="font-semibold text-gray-400 uppercase tracking-wide text-[10px]">GI / ENDO</p>
+                    <p><span className="font-mono text-gray-400">ENDO</span> is an alias for <span className="font-mono text-gray-400">GI</span>. GI always uses the <span className="font-mono text-amber-300">_weekend</span> rate regardless of day.</p>
+                  </div>
+                  <div className="space-y-1">
+                    <p className="font-semibold text-gray-400 uppercase tracking-wide text-[10px]">Fixed-hour shifts</p>
+                    <p><span className="font-mono text-gray-400">APS</span>, <span className="font-mono text-gray-400">BR</span>, and <span className="font-mono text-gray-400">NIR</span> support plain or <span className="font-mono text-amber-300">_weekday</span>/<span className="font-mono text-amber-300">_weekend</span> variants.</p>
+                  </div>
+                </div>
+              </div>
+            </div>
             <p className="text-xs text-gray-600 mt-0.5">
               Each schedule applies from its effective month until the next one begins.
             </p>
@@ -696,7 +735,7 @@ export default function Settings() {
                         <div className="flex items-center gap-2">
                           <MonthPicker
                             value={draft.endDate ? draft.endDate.slice(0, 7) : ''}
-                            onChange={(v) => setStipendDraft({ ...draft, endDate: v ? lastDayOfMonthStr(v) : undefined })}
+                            onChange={(v) => setStipendDraft({ ...draft, endDate: v ? lastDayOfMonth(...v.split('-').map(Number) as [number, number]) : undefined })}
                             placeholder="—"
                           />
                           {draft.endDate && (
