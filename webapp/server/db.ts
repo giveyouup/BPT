@@ -329,6 +329,7 @@ export function importDatabase(data: DatabaseExport): void {
 // ─── Maintenance ──────────────────────────────────────────────────────────────
 
 export interface MaintenanceResult {
+  walBusy: boolean
   walPagesCheckpointed: number
   walPagesRemaining: number
   dbSizeBefore: number
@@ -355,6 +356,7 @@ export function runMaintenance(): MaintenanceResult {
   const backupExists = fs.existsSync(DB_PATH + '.bak')
 
   return {
+    walBusy: cp.busy === 1,
     walPagesCheckpointed: cp.checkpointed,
     walPagesRemaining: Math.max(0, cp.log - cp.checkpointed),
     dbSizeBefore,

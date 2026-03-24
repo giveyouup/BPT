@@ -1149,12 +1149,13 @@ export default function Settings() {
             <p className="mt-2 text-xs text-red-400">{maintError}</p>
           )}
           {maintState === 'done' && maintResult && (
+            <>
             <div className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-3">
               {[
                 {
-                  label: 'WAL checkpointed',
-                  value: `${maintResult.walPagesCheckpointed} pages`,
-                  ok: maintResult.walPagesRemaining === 0,
+                  label: 'Checkpoint blocked',
+                  value: maintResult.walBusy ? 'Yes — active reader' : 'No',
+                  ok: !maintResult.walBusy,
                 },
                 {
                   label: 'WAL remaining',
@@ -1178,6 +1179,12 @@ export default function Settings() {
                 </div>
               ))}
             </div>
+            {maintResult.walBusy && (
+              <p className="mt-2 text-xs text-amber-400">
+                WAL could not be fully truncated — a read transaction was active. Try again in a moment.
+              </p>
+            )}
+            </>
           )}
           {maintState === 'done' && maintResult && (
             <p className="mt-2 text-xs text-gray-600">
