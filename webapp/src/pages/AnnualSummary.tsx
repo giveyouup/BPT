@@ -143,6 +143,21 @@ function deltaLabel(actual: number, projected: number): string {
 }
 
 const FIXED_BAR_COLOR = '#475569'
+const ET_BAR_GAP = 3
+
+function VarBarShape(props: { x?: number; y?: number; width?: number; height?: number; payload?: EndTimeBucket }) {
+  const { x = 0, y = 0, width = 0, height = 0, payload } = props
+  if (height <= 0 || !payload) return null
+  // Expand to full category width when this bucket has no fixed shifts
+  const w = payload.fixedCount > 0 ? width : width * 2 + ET_BAR_GAP
+  return <rect x={x} y={y} width={Math.max(w, 0)} height={height} fill={payload.color} rx={4} ry={4} />
+}
+
+function FixedBarShape(props: { x?: number; y?: number; width?: number; height?: number; payload?: EndTimeBucket }) {
+  const { x = 0, y = 0, width = 0, height = 0, payload } = props
+  if (!payload?.fixedCount || height <= 0) return null
+  return <rect x={x} y={y} width={width} height={height} fill={FIXED_BAR_COLOR} rx={4} ry={4} />
+}
 
 type EndTimeBucket = {
   label: string; color: string
@@ -1060,17 +1075,13 @@ export default function AnnualSummary() {
               </span>
             </div>
             <ResponsiveContainer width="100%" height={200}>
-              <BarChart data={etBuckets} margin={{ top: 0, right: 8, bottom: 0, left: -10 }} barCategoryGap="25%" barGap={3}>
+              <BarChart data={etBuckets} margin={{ top: 0, right: 8, bottom: 0, left: -10 }} barCategoryGap="25%" barGap={ET_BAR_GAP}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
                 <XAxis dataKey="label" {...AXIS_PROPS} />
                 <YAxis {...AXIS_PROPS} allowDecimals={false} />
                 <Tooltip content={<EndTimeTooltip />} cursor={{ fill: 'rgba(255,255,255,0.04)' }} wrapperStyle={{ zIndex: 50 }} />
-                <Bar dataKey="count" radius={[4, 4, 0, 0]} minPointSize={0}>
-                  {etBuckets.map((b) => (
-                    <Cell key={b.label} fill={b.color} />
-                  ))}
-                </Bar>
-                <Bar dataKey="fixedCount" fill={FIXED_BAR_COLOR} radius={[4, 4, 0, 0]} minPointSize={0} />
+                <Bar dataKey="count" shape={<VarBarShape />} />
+                <Bar dataKey="fixedCount" shape={<FixedBarShape />} />
               </BarChart>
             </ResponsiveContainer>
             <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1">
