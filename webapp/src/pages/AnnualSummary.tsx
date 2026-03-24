@@ -418,6 +418,37 @@ export default function AnnualSummary() {
       })
   }, [yearStats])
 
+  // ── End-of-day time distribution ──────────────────────────────────────────
+  const endTimeDistribution = useMemo(() => {
+    const buckets = [
+      { label: 'Before 3pm', color: '#10b981', count: 0 },
+      { label: '3 – 5pm',    color: '#6366f1', count: 0 },
+      { label: '5 – 7pm',    color: '#8b5cf6', count: 0 },
+      { label: '7 – 9pm',    color: '#f59e0b', count: 0 },
+      { label: '9 – 11pm',   color: '#f97316', count: 0 },
+      { label: 'Past 11pm',  color: '#ef4444', count: 0 },
+    ]
+    for (const month of yearStats) {
+      for (const day of month.workingDays) {
+        if (!day.lastEndTime) continue
+        const hasVariable = day.shiftTypes.some(
+          (s) => !isOffDayShift(s) && !isFixedShift(resolveShiftAlias(s.toUpperCase()), settings.shiftHours)
+        )
+        if (!hasVariable) continue
+        const match = day.lastEndTime.match(/^(\d{1,2}):(\d{2})/)
+        if (!match) continue
+        const mins = parseInt(match[1]) * 60 + parseInt(match[2])
+        if      (mins < 15 * 60) buckets[0].count++
+        else if (mins < 17 * 60) buckets[1].count++
+        else if (mins < 19 * 60) buckets[2].count++
+        else if (mins < 21 * 60) buckets[3].count++
+        else if (mins < 23 * 60) buckets[4].count++
+        else                     buckets[5].count++
+      }
+    }
+    return buckets
+  }, [yearStats, settings.shiftHours])
+
   // ── Per-shift day map (mirrors buildShiftStats attribution logic exactly) ────
   const shiftDayMap = useMemo(() => {
     type DayEntry = { day: import('../types').WorkingDayStats; hours: number; pay: number }
@@ -899,6 +930,46 @@ export default function AnnualSummary() {
           })()}
         </div>
       </div>
+
+      {/* End-of-Day Distribution */}
+      {endTimeDistribution.some((b) => b.count > 0) && (() => {
+        const total = endTimeDistribution.reduce((s, b) => s + b.count, 0)
+        return (
+          <div className="bg-gray-900 rounded-xl border border-gray-800 p-5 mb-8">
+            <div className="flex items-center justify-between mb-1">
+              <h3 className="text-sm font-semibold text-gray-300">End-of-Day Distribution</h3>
+              <span className="text-xs text-gray-600">{total} days with time data</span>
+            </div>
+            <p className="text-xs text-gray-600 mb-4">Last case end time — variable-shift days only</p>
+            <ResponsiveContainer width="100%" height={200}>
+              <BarChart data={endTimeDistribution} margin={{ top: 0, right: 8, bottom: 0, left: -10 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
+                <XAxis dataKey="label" {...AXIS_PROPS} />
+                <YAxis {...AXIS_PROPS} allowDecimals={false} />
+                <Tooltip
+                  formatter={(v: number) => [`${v} day${v !== 1 ? 's' : ''}`, 'Count']}
+                  {...CHART_STYLE}
+                />
+                <Bar dataKey="count" radius={[4, 4, 0, 0]}>
+                  {endTimeDistribution.map((b) => (
+                    <Cell key={b.label} fill={b.color} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+            <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1">
+              {endTimeDistribution.filter((b) => b.count > 0).map((b) => (
+                <span key={b.label} className="text-xs text-gray-500">
+                  <span className="font-medium" style={{ color: b.color }}>{b.label}</span>
+                  {' '}{b.count} day{b.count !== 1 ? 's' : ''}
+                  {' '}
+                  <span className="text-gray-700">({Math.round(b.count / total * 100)}%)</span>
+                </span>
+              ))}
+            </div>
+          </div>
+        )
+      })()}
 
       {/* Shift Type Analytics */}
       {shiftStatsData.length > 0 && (() => {
