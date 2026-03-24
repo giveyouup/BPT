@@ -142,26 +142,35 @@ function deltaLabel(actual: number, projected: number): string {
   return (diff >= 0 ? '+' : '') + formatCurrency(diff)
 }
 
-type EndTimeBucket = { label: string; color: string; count: number; shiftCounts: Record<string, number> }
+const FIXED_BAR_COLOR = '#475569'
 
-function EndTimeTooltip({ active, payload }: { active?: boolean; payload?: Array<{ payload: EndTimeBucket }> }) {
+type EndTimeBucket = {
+  label: string; color: string
+  count: number; shiftCounts: Record<string, number>
+  fixedCount: number; fixedShiftCounts: Record<string, number>
+}
+
+function EndTimeTooltip({ active, payload }: { active?: boolean; payload?: Array<{ payload: EndTimeBucket; dataKey: string }> }) {
   if (!active || !payload?.length) return null
-  const { label, count, shiftCounts, color } = payload[0].payload
-  const entries = Object.entries(shiftCounts).sort((a, b) => b[1] - a[1])
-  return (
-    <div style={{ fontSize: 12, borderRadius: 8, border: '1px solid #1f2937', backgroundColor: '#111827', color: '#f3f4f6', padding: '8px 12px', minWidth: 140 }}>
-      <p style={{ color, fontWeight: 600, marginBottom: 4 }}>{label}</p>
-      <p style={{ color: '#f3f4f6', marginBottom: entries.length > 0 ? 6 : 0 }}>{count} day{count !== 1 ? 's' : ''}</p>
-      {entries.length > 0 && (
-        <div style={{ borderTop: '1px solid #1f2937', paddingTop: 6 }}>
-          {entries.map(([shift, n]) => (
-            <div key={shift} style={{ display: 'flex', justifyContent: 'space-between', gap: 16 }}>
-              <span style={{ color: '#9ca3af' }}>{shift}</span>
-              <span style={{ color: '#d1d5db' }}>{n}×</span>
-            </div>
-          ))}
+  const { label, count, shiftCounts, fixedCount, fixedShiftCounts, color } = payload[0].payload
+  const varEntries  = Object.entries(shiftCounts).sort((a, b) => b[1] - a[1])
+  const fixEntries  = Object.entries(fixedShiftCounts).sort((a, b) => b[1] - a[1])
+  const section = (title: string, titleColor: string, days: number, entries: [string, number][]) => (
+    <div style={{ marginBottom: 6 }}>
+      <p style={{ color: titleColor, fontWeight: 600, marginBottom: 2 }}>{title} — {days} day{days !== 1 ? 's' : ''}</p>
+      {entries.map(([shift, n]) => (
+        <div key={shift} style={{ display: 'flex', justifyContent: 'space-between', gap: 16, paddingLeft: 8 }}>
+          <span style={{ color: '#9ca3af' }}>{shift}</span>
+          <span style={{ color: '#d1d5db' }}>{n}×</span>
         </div>
-      )}
+      ))}
+    </div>
+  )
+  return (
+    <div style={{ fontSize: 12, borderRadius: 8, border: '1px solid #1f2937', backgroundColor: '#111827', color: '#f3f4f6', padding: '8px 12px', minWidth: 150 }}>
+      <p style={{ color, fontWeight: 700, marginBottom: 6 }}>{label}</p>
+      {count > 0 && section('Variable', color, count, varEntries)}
+      {fixedCount > 0 && section('Fixed', FIXED_BAR_COLOR, fixedCount, fixEntries)}
     </div>
   )
 }
@@ -459,13 +468,14 @@ export default function AnnualSummary() {
 
   // ── End-of-day time distribution ──────────────────────────────────────────
   const endTimeDistribution = useMemo(() => {
+    const mk = () => ({ shiftCounts: {} as Record<string, number>, fixedShiftCounts: {} as Record<string, number> })
     const buckets = [
-      { label: 'Before 3pm', color: '#10b981', count: 0, shiftCounts: {} as Record<string, number> },
-      { label: '3 – 5pm',    color: '#6366f1', count: 0, shiftCounts: {} as Record<string, number> },
-      { label: '5 – 7pm',    color: '#8b5cf6', count: 0, shiftCounts: {} as Record<string, number> },
-      { label: '7 – 9pm',    color: '#f59e0b', count: 0, shiftCounts: {} as Record<string, number> },
-      { label: '9 – 11pm',   color: '#f97316', count: 0, shiftCounts: {} as Record<string, number> },
-      { label: 'Past 11pm',  color: '#ef4444', count: 0, shiftCounts: {} as Record<string, number> },
+      { label: 'Before 3pm', color: '#10b981', count: 0, fixedCount: 0, ...mk() },
+      { label: '3 – 5pm',    color: '#6366f1', count: 0, fixedCount: 0, ...mk() },
+      { label: '5 – 7pm',    color: '#8b5cf6', count: 0, fixedCount: 0, ...mk() },
+      { label: '7 – 9pm',    color: '#f59e0b', count: 0, fixedCount: 0, ...mk() },
+      { label: '9 – 11pm',   color: '#f97316', count: 0, fixedCount: 0, ...mk() },
+      { label: 'Past 11pm',  color: '#ef4444', count: 0, fixedCount: 0, ...mk() },
     ]
 
     const [startH, startM] = settings.clinicalDayStart.split(':').map(Number)
@@ -506,15 +516,18 @@ export default function AnnualSummary() {
           endMins <= 19 * 60 ? 2 :
           endMins <= 21 * 60 ? 3 :
           endMins <= 23 * 60 ? 4 : 5
-        buckets[bi].count++
-        // Only credit the shifts that determined the end time:
-        // mixed/variable days → variable shifts only; fixed-only days → fixed shifts
-        const shiftsToCredit = hasVariable
-          ? activeShifts.filter((s) => !isFixedShift(resolveShiftAlias(s.toUpperCase()), settings.shiftHours))
-          : activeShifts
-        for (const s of shiftsToCredit) {
-          const canonical = resolveShiftAlias(s.toUpperCase())
-          buckets[bi].shiftCounts[canonical] = (buckets[bi].shiftCounts[canonical] ?? 0) + 1
+        if (hasVariable) {
+          buckets[bi].count++
+          for (const s of activeShifts.filter((s) => !isFixedShift(resolveShiftAlias(s.toUpperCase()), settings.shiftHours))) {
+            const canonical = resolveShiftAlias(s.toUpperCase())
+            buckets[bi].shiftCounts[canonical] = (buckets[bi].shiftCounts[canonical] ?? 0) + 1
+          }
+        } else {
+          buckets[bi].fixedCount++
+          for (const s of activeShifts) {
+            const canonical = resolveShiftAlias(s.toUpperCase())
+            buckets[bi].fixedShiftCounts[canonical] = (buckets[bi].fixedShiftCounts[canonical] ?? 0) + 1
+          }
         }
       }
     }
@@ -1006,7 +1019,7 @@ export default function AnnualSummary() {
       {/* End-of-Day Distribution */}
       {endTimeDistribution.buckets.some((b) => b.count > 0) && (() => {
         const { buckets: etBuckets, excludedDays: etExcluded } = endTimeDistribution
-        const total = etBuckets.reduce((s, b) => s + b.count, 0)
+        const total = etBuckets.reduce((s, b) => s + b.count + b.fixedCount, 0)
         return (
           <div className="bg-gray-900 rounded-xl border border-gray-800 p-5 mb-8">
             <div className="flex items-center justify-between mb-1">
@@ -1036,26 +1049,38 @@ export default function AnnualSummary() {
               )}
             </div>
             <p className="text-xs text-gray-600 mb-4">Variable days: last case end time · Fixed days (APS/BR/NIR): start + shift hours</p>
+            <div className="flex items-center gap-4 mb-3">
+              <span className="flex items-center gap-1.5 text-xs text-gray-500">
+                <span className="inline-block w-2.5 h-2.5 rounded-sm bg-indigo-500" />
+                Variable
+              </span>
+              <span className="flex items-center gap-1.5 text-xs text-gray-500">
+                <span className="inline-block w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: FIXED_BAR_COLOR }} />
+                Fixed (APS / BR / NIR)
+              </span>
+            </div>
             <ResponsiveContainer width="100%" height={200}>
-              <BarChart data={etBuckets} margin={{ top: 0, right: 8, bottom: 0, left: -10 }}>
+              <BarChart data={etBuckets} margin={{ top: 0, right: 8, bottom: 0, left: -10 }} barCategoryGap="25%" barGap={3}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
                 <XAxis dataKey="label" {...AXIS_PROPS} />
                 <YAxis {...AXIS_PROPS} allowDecimals={false} />
                 <Tooltip content={<EndTimeTooltip />} cursor={{ fill: 'rgba(255,255,255,0.04)' }} wrapperStyle={{ zIndex: 50 }} />
-                <Bar dataKey="count" radius={[4, 4, 0, 0]}>
+                <Bar dataKey="count" radius={[4, 4, 0, 0]} minPointSize={0}>
                   {etBuckets.map((b) => (
                     <Cell key={b.label} fill={b.color} />
                   ))}
                 </Bar>
+                <Bar dataKey="fixedCount" fill={FIXED_BAR_COLOR} radius={[4, 4, 0, 0]} minPointSize={0} />
               </BarChart>
             </ResponsiveContainer>
             <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1">
-              {etBuckets.filter((b) => b.count > 0).map((b) => (
+              {etBuckets.filter((b) => b.count + b.fixedCount > 0).map((b) => (
                 <span key={b.label} className="text-xs text-gray-500">
                   <span className="font-medium" style={{ color: b.color }}>{b.label}</span>
-                  {' '}{b.count} day{b.count !== 1 ? 's' : ''}
+                  {b.count > 0 && <> {b.count}v</>}
+                  {b.fixedCount > 0 && <span style={{ color: FIXED_BAR_COLOR }}> {b.fixedCount}f</span>}
                   {' '}
-                  <span className="text-gray-700">({Math.round(b.count / total * 100)}%)</span>
+                  <span className="text-gray-700">({Math.round((b.count + b.fixedCount) / total * 100)}%)</span>
                 </span>
               ))}
             </div>
