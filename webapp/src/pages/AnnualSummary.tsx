@@ -431,6 +431,7 @@ export default function AnnualSummary() {
 
     const [startH, startM] = settings.clinicalDayStart.split(':').map(Number)
     const dayStartMins = startH * 60 + (startM ?? 0)
+    let excluded = 0
 
     for (const month of yearStats) {
       for (const day of month.workingDays) {
@@ -445,9 +446,9 @@ export default function AnnualSummary() {
 
         if (hasVariable) {
           // Variable or mixed day: use actual last case end time
-          if (!day.lastEndTime) continue
+          if (!day.lastEndTime) { excluded++; continue }
           const match = day.lastEndTime.match(/^(\d{1,2}):(\d{2})/)
-          if (!match) continue
+          if (!match) { excluded++; continue }
           endMins = parseInt(match[1]) * 60 + parseInt(match[2])
         } else {
           // Fixed-shift-only day: estimate end as clinicalDayStart + longest shift
@@ -455,7 +456,7 @@ export default function AnnualSummary() {
             const canonical = resolveShiftAlias(s.toUpperCase())
             return getFixedHours(canonical, day.isCallWeekend, settings.shiftHours) ?? 0
           }))
-          if (maxHours === 0) continue
+          if (maxHours === 0) { excluded++; continue }
           endMins = dayStartMins + maxHours * 60
         }
 
@@ -467,7 +468,7 @@ export default function AnnualSummary() {
         else                        buckets[5].count++
       }
     }
-    return buckets
+    return { buckets, excluded }
   }, [yearStats, settings.shiftHours, settings.clinicalDayStart])
 
   // ── Per-shift day map (mirrors buildShiftStats attribution logic exactly) ────
@@ -953,17 +954,20 @@ export default function AnnualSummary() {
       </div>
 
       {/* End-of-Day Distribution */}
-      {endTimeDistribution.some((b) => b.count > 0) && (() => {
-        const total = endTimeDistribution.reduce((s, b) => s + b.count, 0)
+      {endTimeDistribution.buckets.some((b) => b.count > 0) && (() => {
+        const { buckets: etBuckets, excluded: etExcluded } = endTimeDistribution
+        const total = etBuckets.reduce((s, b) => s + b.count, 0)
         return (
           <div className="bg-gray-900 rounded-xl border border-gray-800 p-5 mb-8">
             <div className="flex items-center justify-between mb-1">
               <h3 className="text-sm font-semibold text-gray-300">End-of-Day Distribution</h3>
-              <span className="text-xs text-gray-600">{total} days with time data</span>
+              {etExcluded > 0 && (
+                <span className="text-xs text-gray-600">{etExcluded} day{etExcluded !== 1 ? 's' : ''} excluded (no time data)</span>
+              )}
             </div>
             <p className="text-xs text-gray-600 mb-4">Variable days: last case end time · Fixed days (APS/BR/NIR): start + shift hours</p>
             <ResponsiveContainer width="100%" height={200}>
-              <BarChart data={endTimeDistribution} margin={{ top: 0, right: 8, bottom: 0, left: -10 }}>
+              <BarChart data={etBuckets} margin={{ top: 0, right: 8, bottom: 0, left: -10 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
                 <XAxis dataKey="label" {...AXIS_PROPS} />
                 <YAxis {...AXIS_PROPS} allowDecimals={false} />
@@ -972,14 +976,14 @@ export default function AnnualSummary() {
                   {...CHART_STYLE}
                 />
                 <Bar dataKey="count" radius={[4, 4, 0, 0]}>
-                  {endTimeDistribution.map((b) => (
+                  {etBuckets.map((b) => (
                     <Cell key={b.label} fill={b.color} />
                   ))}
                 </Bar>
               </BarChart>
             </ResponsiveContainer>
             <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1">
-              {endTimeDistribution.filter((b) => b.count > 0).map((b) => (
+              {etBuckets.filter((b) => b.count > 0).map((b) => (
                 <span key={b.label} className="text-xs text-gray-500">
                   <span className="font-medium" style={{ color: b.color }}>{b.label}</span>
                   {' '}{b.count} day{b.count !== 1 ? 's' : ''}
