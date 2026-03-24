@@ -11,7 +11,7 @@ import {
   formatCurrency, formatCurrencyFull, formatDateFull, formatHours, formatMonthYear, getMonthName, MONTH_ABBREVS,
 } from '../utils/dateUtils'
 import StatCard from '../components/StatCard'
-import { isOffDayShift, isFixedShift, getFixedHours, isCallShift, resolveShiftAlias, computeFederalHolidays, isVacationShift, isHolidayOffShift, isPostcallShift } from '../utils/shiftUtils'
+import { isOffDayShift, isFixedShift, getFixedHours, isCallShift, resolveShiftAlias, computeFederalHolidays, isVacationShift, isHolidayOffShift, isPostcallShift, shiftBadgeClass } from '../utils/shiftUtils'
 import type { MonthlyStats, StipendMapping } from '../types'
 
 function shiftSortKey(shift: string): string {
@@ -145,6 +145,16 @@ function deltaLabel(actual: number, projected: number): string {
 const FIXED_BAR_COLOR = '#475569'
 const ET_BAR_GAP = 3
 
+type BucketDayRecord = { stats: import('../types').WorkingDayStats; endTime: string; isFixed: boolean }
+
+function minsToTimeStr(mins: number): string {
+  const h = Math.floor(mins / 60) % 24
+  const m = mins % 60
+  const period = h >= 12 ? 'pm' : 'am'
+  const h12 = h % 12 === 0 ? 12 : h % 12
+  return `${h12}:${String(m).padStart(2, '0')} ${period}`
+}
+
 function VarBarShape(props: { x?: number; y?: number; width?: number; height?: number; payload?: EndTimeBucket }) {
   const { x = 0, y = 0, width = 0, height = 0, payload } = props
   if (height <= 0 || !payload) return null
@@ -163,6 +173,7 @@ type EndTimeBucket = {
   label: string; color: string
   count: number; shiftCounts: Record<string, number>
   fixedCount: number; fixedShiftCounts: Record<string, number>
+  varDays: BucketDayRecord[]; fixedDays: BucketDayRecord[]
 }
 
 function EndTimeTooltip({ active, payload }: { active?: boolean; payload?: Array<{ payload: EndTimeBucket; dataKey: string }> }) {
@@ -200,6 +211,7 @@ export default function AnnualSummary() {
   const [showWhatIfPopover, setShowWhatIfPopover] = useState(false)
   const [showWeeksPopover, setShowWeeksPopover] = useState(false)
   const [showExcludedPopover, setShowExcludedPopover] = useState(false)
+  const [selectedBucketIdx, setSelectedBucketIdx] = useState<number | null>(null)
   const [showYoY, setShowYoY] = useState(false)
   const popoverRef = useRef<HTMLDivElement>(null)
   const weeksPopoverRef = useRef<HTMLDivElement>(null)
@@ -483,7 +495,12 @@ export default function AnnualSummary() {
 
   // ── End-of-day time distribution ──────────────────────────────────────────
   const endTimeDistribution = useMemo(() => {
-    const mk = () => ({ shiftCounts: {} as Record<string, number>, fixedShiftCounts: {} as Record<string, number> })
+    const mk = () => ({
+      shiftCounts: {} as Record<string, number>,
+      fixedShiftCounts: {} as Record<string, number>,
+      varDays: [] as BucketDayRecord[],
+      fixedDays: [] as BucketDayRecord[],
+    })
     const buckets = [
       { label: 'Before 3pm', color: '#10b981', count: 0, fixedCount: 0, ...mk() },
       { label: '3 – 5pm',    color: '#6366f1', count: 0, fixedCount: 0, ...mk() },
@@ -531,14 +548,17 @@ export default function AnnualSummary() {
           endMins <= 19 * 60 ? 2 :
           endMins <= 21 * 60 ? 3 :
           endMins <= 23 * 60 ? 4 : 5
+        const endTimeStr = minsToTimeStr(endMins)
         if (hasVariable) {
           buckets[bi].count++
+          buckets[bi].varDays.push({ stats: day, endTime: endTimeStr, isFixed: false })
           for (const s of activeShifts.filter((s) => !isFixedShift(resolveShiftAlias(s.toUpperCase()), settings.shiftHours))) {
             const canonical = resolveShiftAlias(s.toUpperCase())
             buckets[bi].shiftCounts[canonical] = (buckets[bi].shiftCounts[canonical] ?? 0) + 1
           }
         } else {
           buckets[bi].fixedCount++
+          buckets[bi].fixedDays.push({ stats: day, endTime: `${endTimeStr} (est.)`, isFixed: true })
           for (const s of activeShifts) {
             const canonical = resolveShiftAlias(s.toUpperCase())
             buckets[bi].fixedShiftCounts[canonical] = (buckets[bi].fixedShiftCounts[canonical] ?? 0) + 1
@@ -602,7 +622,7 @@ export default function AnnualSummary() {
         {years.length > 1 && (
           <div className="flex gap-2 ml-4">
             {years.map((y) => (
-              <button key={y} onClick={() => { navigate(`/annual/${y}`); setWhatIfMappingId(null); setWhatIfUnitRate(null); setShowYoY(false) }}
+              <button key={y} onClick={() => { navigate(`/annual/${y}`); setWhatIfMappingId(null); setWhatIfUnitRate(null); setShowYoY(false); setSelectedBucketIdx(null) }}
                 className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
                   y === year ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-gray-200'
                 }`}>
@@ -1080,10 +1100,44 @@ export default function AnnualSummary() {
                 <XAxis dataKey="label" {...AXIS_PROPS} />
                 <YAxis {...AXIS_PROPS} allowDecimals={false} />
                 <Tooltip content={<EndTimeTooltip />} cursor={{ fill: 'rgba(255,255,255,0.04)' }} wrapperStyle={{ zIndex: 50 }} />
-                <Bar dataKey="count" shape={<VarBarShape />} />
-                <Bar dataKey="fixedCount" shape={<FixedBarShape />} />
+                <Bar dataKey="count" shape={<VarBarShape />} style={{ cursor: 'pointer' }}
+                  onClick={(_d, i) => setSelectedBucketIdx(i === selectedBucketIdx ? null : i)} />
+                <Bar dataKey="fixedCount" shape={<FixedBarShape />} style={{ cursor: 'pointer' }}
+                  onClick={(_d, i) => setSelectedBucketIdx(i === selectedBucketIdx ? null : i)} />
               </BarChart>
             </ResponsiveContainer>
+            {selectedBucketIdx !== null && (() => {
+              const sel = etBuckets[selectedBucketIdx]
+              const allDays = [...sel.varDays, ...sel.fixedDays].sort((a, b) => a.stats.date.localeCompare(b.stats.date))
+              return (
+                <div className="mt-4 border border-gray-700 rounded-xl overflow-hidden">
+                  <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-700" style={{ backgroundColor: sel.color + '18' }}>
+                    <span className="text-sm font-semibold" style={{ color: sel.color }}>{sel.label}</span>
+                    <span className="text-xs text-gray-500 mr-auto ml-3">{allDays.length} day{allDays.length !== 1 ? 's' : ''}</span>
+                    <button onClick={() => setSelectedBucketIdx(null)} className="text-gray-600 hover:text-gray-300 transition-colors">
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  </div>
+                  <div className="divide-y divide-gray-800 max-h-72 overflow-y-auto">
+                    {allDays.map(({ stats: d, endTime, isFixed }) => (
+                      <div key={d.date} className="flex items-center gap-3 px-4 py-2.5 hover:bg-gray-800/50 transition-colors">
+                        <span className="text-xs text-gray-400 w-28 shrink-0">{formatDateFull(d.date)}</span>
+                        <div className="flex flex-wrap gap-1 flex-1">
+                          {d.shiftTypes.filter(s => !isOffDayShift(s)).map(s => (
+                            <span key={s} className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${shiftBadgeClass(s, settings.shiftHours)}`}>{s}</span>
+                          ))}
+                        </div>
+                        <span className="text-xs tabular-nums shrink-0" style={{ color: isFixed ? FIXED_BAR_COLOR : sel.color }}>{endTime}</span>
+                        {d.hours > 0 && <span className="text-xs text-gray-600 shrink-0">{d.hours.toFixed(1)}h</span>}
+                        {d.caseCount > 0 && <span className="text-xs text-gray-600 shrink-0">{d.caseCount} case{d.caseCount !== 1 ? 's' : ''}</span>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )
+            })()}
             <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1">
               {etBuckets.filter((b) => b.count + b.fixedCount > 0).map((b) => (
                 <span key={b.label} className="text-xs text-gray-500">
