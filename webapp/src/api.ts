@@ -1,6 +1,7 @@
 import type { MonthlyReport, Schedule, Settings, StipendMapping, CptRange, Physician } from './types'
 
 export interface MaintenanceResult {
+  walBusy: boolean
   walPagesCheckpointed: number
   walPagesRemaining: number
   dbSizeBefore: number
