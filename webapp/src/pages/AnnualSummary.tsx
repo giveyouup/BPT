@@ -499,14 +499,20 @@ export default function AnnualSummary() {
           endMins = dayStartMins + maxHours * 60
         }
 
+        // Use <= on upper bounds so exact boundary times (e.g. 17:00) belong to the earlier bucket
         const bi =
-          endMins < 15 * 60 ? 0 :
-          endMins < 17 * 60 ? 1 :
-          endMins < 19 * 60 ? 2 :
-          endMins < 21 * 60 ? 3 :
-          endMins < 23 * 60 ? 4 : 5
+          endMins <= 15 * 60 ? 0 :
+          endMins <= 17 * 60 ? 1 :
+          endMins <= 19 * 60 ? 2 :
+          endMins <= 21 * 60 ? 3 :
+          endMins <= 23 * 60 ? 4 : 5
         buckets[bi].count++
-        for (const s of activeShifts) {
+        // Only credit the shifts that determined the end time:
+        // mixed/variable days → variable shifts only; fixed-only days → fixed shifts
+        const shiftsToCredit = hasVariable
+          ? activeShifts.filter((s) => !isFixedShift(resolveShiftAlias(s.toUpperCase()), settings.shiftHours))
+          : activeShifts
+        for (const s of shiftsToCredit) {
           const canonical = resolveShiftAlias(s.toUpperCase())
           buckets[bi].shiftCounts[canonical] = (buckets[bi].shiftCounts[canonical] ?? 0) + 1
         }
