@@ -11,7 +11,7 @@ import {
   formatCurrency, formatCurrencyFull, formatDateFull, formatHours, formatMonthYear, getMonthName, MONTH_ABBREVS,
 } from '../utils/dateUtils'
 import StatCard from '../components/StatCard'
-import { isOffDayShift, isFixedShift, isCallShift, resolveShiftAlias, computeFederalHolidays, isVacationShift, isHolidayOffShift, isPostcallShift } from '../utils/shiftUtils'
+import { isOffDayShift, isFixedShift, getFixedHours, isCallShift, resolveShiftAlias, computeFederalHolidays, isVacationShift, isHolidayOffShift, isPostcallShift } from '../utils/shiftUtils'
 import type { MonthlyStats, StipendMapping } from '../types'
 
 function shiftSortKey(shift: string): string {
@@ -428,26 +428,47 @@ export default function AnnualSummary() {
       { label: '9 – 11pm',   color: '#f97316', count: 0 },
       { label: 'Past 11pm',  color: '#ef4444', count: 0 },
     ]
+
+    const [startH, startM] = settings.clinicalDayStart.split(':').map(Number)
+    const dayStartMins = startH * 60 + (startM ?? 0)
+
     for (const month of yearStats) {
       for (const day of month.workingDays) {
-        if (!day.lastEndTime) continue
-        const hasVariable = day.shiftTypes.some(
-          (s) => !isOffDayShift(s) && !isFixedShift(resolveShiftAlias(s.toUpperCase()), settings.shiftHours)
+        const activeShifts = day.shiftTypes.filter((s) => !isOffDayShift(s))
+        if (activeShifts.length === 0) continue
+
+        const hasVariable = activeShifts.some(
+          (s) => !isFixedShift(resolveShiftAlias(s.toUpperCase()), settings.shiftHours)
         )
-        if (!hasVariable) continue
-        const match = day.lastEndTime.match(/^(\d{1,2}):(\d{2})/)
-        if (!match) continue
-        const mins = parseInt(match[1]) * 60 + parseInt(match[2])
-        if      (mins < 15 * 60) buckets[0].count++
-        else if (mins < 17 * 60) buckets[1].count++
-        else if (mins < 19 * 60) buckets[2].count++
-        else if (mins < 21 * 60) buckets[3].count++
-        else if (mins < 23 * 60) buckets[4].count++
-        else                     buckets[5].count++
+
+        let endMins: number | null = null
+
+        if (hasVariable) {
+          // Variable or mixed day: use actual last case end time
+          if (!day.lastEndTime) continue
+          const match = day.lastEndTime.match(/^(\d{1,2}):(\d{2})/)
+          if (!match) continue
+          endMins = parseInt(match[1]) * 60 + parseInt(match[2])
+        } else {
+          // Fixed-shift-only day: estimate end as clinicalDayStart + longest shift
+          const maxHours = Math.max(...activeShifts.map((s) => {
+            const canonical = resolveShiftAlias(s.toUpperCase())
+            return getFixedHours(canonical, day.isCallWeekend, settings.shiftHours) ?? 0
+          }))
+          if (maxHours === 0) continue
+          endMins = dayStartMins + maxHours * 60
+        }
+
+        if      (endMins < 15 * 60) buckets[0].count++
+        else if (endMins < 17 * 60) buckets[1].count++
+        else if (endMins < 19 * 60) buckets[2].count++
+        else if (endMins < 21 * 60) buckets[3].count++
+        else if (endMins < 23 * 60) buckets[4].count++
+        else                        buckets[5].count++
       }
     }
     return buckets
-  }, [yearStats, settings.shiftHours])
+  }, [yearStats, settings.shiftHours, settings.clinicalDayStart])
 
   // ── Per-shift day map (mirrors buildShiftStats attribution logic exactly) ────
   const shiftDayMap = useMemo(() => {
@@ -940,7 +961,7 @@ export default function AnnualSummary() {
               <h3 className="text-sm font-semibold text-gray-300">End-of-Day Distribution</h3>
               <span className="text-xs text-gray-600">{total} days with time data</span>
             </div>
-            <p className="text-xs text-gray-600 mb-4">Last case end time — variable-shift days only</p>
+            <p className="text-xs text-gray-600 mb-4">Variable days: last case end time · Fixed days (APS/BR/NIR): start + shift hours</p>
             <ResponsiveContainer width="100%" height={200}>
               <BarChart data={endTimeDistribution} margin={{ top: 0, right: 8, bottom: 0, left: -10 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
