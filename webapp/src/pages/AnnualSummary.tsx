@@ -11,7 +11,7 @@ import {
   formatCurrency, formatCurrencyFull, formatDateFull, formatHours, formatMonthYear, getMonthName, MONTH_ABBREVS,
 } from '../utils/dateUtils'
 import StatCard from '../components/StatCard'
-import { isOffDayShift, isFixedShift, isCallShift, resolveShiftAlias, computeFederalHolidays, isVacationShift, isHolidayOffShift, isPostcallShift } from '../utils/shiftUtils'
+import { isOffDayShift, isFixedShift, getFixedHours, isCallShift, resolveShiftAlias, computeFederalHolidays, isVacationShift, isHolidayOffShift, isPostcallShift } from '../utils/shiftUtils'
 import type { MonthlyStats, StipendMapping } from '../types'
 
 function shiftSortKey(shift: string): string {
@@ -142,6 +142,30 @@ function deltaLabel(actual: number, projected: number): string {
   return (diff >= 0 ? '+' : '') + formatCurrency(diff)
 }
 
+type EndTimeBucket = { label: string; color: string; count: number; shiftCounts: Record<string, number> }
+
+function EndTimeTooltip({ active, payload }: { active?: boolean; payload?: Array<{ payload: EndTimeBucket }> }) {
+  if (!active || !payload?.length) return null
+  const { label, count, shiftCounts, color } = payload[0].payload
+  const entries = Object.entries(shiftCounts).sort((a, b) => b[1] - a[1])
+  return (
+    <div style={{ fontSize: 12, borderRadius: 8, border: '1px solid #1f2937', backgroundColor: '#111827', color: '#f3f4f6', padding: '8px 12px', minWidth: 140 }}>
+      <p style={{ color, fontWeight: 600, marginBottom: 4 }}>{label}</p>
+      <p style={{ color: '#f3f4f6', marginBottom: entries.length > 0 ? 6 : 0 }}>{count} day{count !== 1 ? 's' : ''}</p>
+      {entries.length > 0 && (
+        <div style={{ borderTop: '1px solid #1f2937', paddingTop: 6 }}>
+          {entries.map(([shift, n]) => (
+            <div key={shift} style={{ display: 'flex', justifyContent: 'space-between', gap: 16 }}>
+              <span style={{ color: '#9ca3af' }}>{shift}</span>
+              <span style={{ color: '#d1d5db' }}>{n}×</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function AnnualSummary() {
   const [hoursView, setHoursView] = useState<'month' | 'week'>('month')
   const [expandedShift, setExpandedShift] = useState<string | null>(null)
@@ -151,9 +175,11 @@ export default function AnnualSummary() {
   const [whatIfUnitRate, setWhatIfUnitRate] = useState<number | null>(null)
   const [showWhatIfPopover, setShowWhatIfPopover] = useState(false)
   const [showWeeksPopover, setShowWeeksPopover] = useState(false)
+  const [showExcludedPopover, setShowExcludedPopover] = useState(false)
   const [showYoY, setShowYoY] = useState(false)
   const popoverRef = useRef<HTMLDivElement>(null)
   const weeksPopoverRef = useRef<HTMLDivElement>(null)
+  const excludedPopoverRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (!showWhatIfPopover) return
@@ -178,6 +204,19 @@ export default function AnnualSummary() {
     document.addEventListener('keydown', keyHandler)
     return () => { document.removeEventListener('mousedown', handler); document.removeEventListener('keydown', keyHandler) }
   }, [showWeeksPopover])
+
+  useEffect(() => {
+    if (!showExcludedPopover) return
+    const handler = (e: MouseEvent) => {
+      if (excludedPopoverRef.current && !excludedPopoverRef.current.contains(e.target as Node))
+        setShowExcludedPopover(false)
+    }
+    const keyHandler = (e: KeyboardEvent) => { if (e.key === 'Escape') setShowExcludedPopover(false) }
+    document.addEventListener('mousedown', handler)
+    document.addEventListener('keydown', keyHandler)
+    return () => { document.removeEventListener('mousedown', handler); document.removeEventListener('keydown', keyHandler) }
+  }, [showExcludedPopover])
+
   const { year: yearParam } = useParams<{ year: string }>()
   const navigate = useNavigate()
 
@@ -417,6 +456,64 @@ export default function AnnualSummary() {
         return { week: `${getMonthName(m).slice(0, 3)} ${d}`, hours: Math.round(hours * 10) / 10 }
       })
   }, [yearStats])
+
+  // ── End-of-day time distribution ──────────────────────────────────────────
+  const endTimeDistribution = useMemo(() => {
+    const buckets = [
+      { label: 'Before 3pm', color: '#10b981', count: 0, shiftCounts: {} as Record<string, number> },
+      { label: '3 – 5pm',    color: '#6366f1', count: 0, shiftCounts: {} as Record<string, number> },
+      { label: '5 – 7pm',    color: '#8b5cf6', count: 0, shiftCounts: {} as Record<string, number> },
+      { label: '7 – 9pm',    color: '#f59e0b', count: 0, shiftCounts: {} as Record<string, number> },
+      { label: '9 – 11pm',   color: '#f97316', count: 0, shiftCounts: {} as Record<string, number> },
+      { label: 'Past 11pm',  color: '#ef4444', count: 0, shiftCounts: {} as Record<string, number> },
+    ]
+
+    const [startH, startM] = settings.clinicalDayStart.split(':').map(Number)
+    const dayStartMins = startH * 60 + (startM ?? 0)
+    const excludedDays: { date: string; shiftTypes: string[] }[] = []
+
+    for (const month of yearStats) {
+      for (const day of month.workingDays) {
+        const activeShifts = day.shiftTypes.filter((s) => !isOffDayShift(s))
+        if (activeShifts.length === 0) continue
+
+        const hasVariable = activeShifts.some(
+          (s) => !isFixedShift(resolveShiftAlias(s.toUpperCase()), settings.shiftHours)
+        )
+
+        let endMins: number | null = null
+
+        if (hasVariable) {
+          // Variable or mixed day: use actual last case end time
+          if (!day.lastEndTime) { excludedDays.push({ date: day.date, shiftTypes: activeShifts }); continue }
+          const match = day.lastEndTime.match(/^(\d{1,2}):(\d{2})/)
+          if (!match) { excludedDays.push({ date: day.date, shiftTypes: activeShifts }); continue }
+          endMins = parseInt(match[1]) * 60 + parseInt(match[2])
+        } else {
+          // Fixed-shift-only day: estimate end as clinicalDayStart + longest shift
+          const maxHours = Math.max(...activeShifts.map((s) => {
+            const canonical = resolveShiftAlias(s.toUpperCase())
+            return getFixedHours(canonical, day.isCallWeekend, settings.shiftHours) ?? 0
+          }))
+          if (maxHours === 0) { excludedDays.push({ date: day.date, shiftTypes: activeShifts }); continue }
+          endMins = dayStartMins + maxHours * 60
+        }
+
+        const bi =
+          endMins < 15 * 60 ? 0 :
+          endMins < 17 * 60 ? 1 :
+          endMins < 19 * 60 ? 2 :
+          endMins < 21 * 60 ? 3 :
+          endMins < 23 * 60 ? 4 : 5
+        buckets[bi].count++
+        for (const s of activeShifts) {
+          const canonical = resolveShiftAlias(s.toUpperCase())
+          buckets[bi].shiftCounts[canonical] = (buckets[bi].shiftCounts[canonical] ?? 0) + 1
+        }
+      }
+    }
+    return { buckets, excludedDays }
+  }, [yearStats, settings.shiftHours, settings.clinicalDayStart])
 
   // ── Per-shift day map (mirrors buildShiftStats attribution logic exactly) ────
   const shiftDayMap = useMemo(() => {
@@ -899,6 +996,66 @@ export default function AnnualSummary() {
           })()}
         </div>
       </div>
+
+      {/* End-of-Day Distribution */}
+      {endTimeDistribution.buckets.some((b) => b.count > 0) && (() => {
+        const { buckets: etBuckets, excludedDays: etExcluded } = endTimeDistribution
+        const total = etBuckets.reduce((s, b) => s + b.count, 0)
+        return (
+          <div className="bg-gray-900 rounded-xl border border-gray-800 p-5 mb-8">
+            <div className="flex items-center justify-between mb-1">
+              <h3 className="text-sm font-semibold text-gray-300">End-of-Day Distribution</h3>
+              {etExcluded.length > 0 && (
+                <div className="relative" ref={excludedPopoverRef}>
+                  <button
+                    onClick={() => setShowExcludedPopover((v) => !v)}
+                    className="text-xs text-gray-600 hover:text-gray-400 transition-colors underline decoration-dotted underline-offset-2"
+                  >
+                    {etExcluded.length} day{etExcluded.length !== 1 ? 's' : ''} excluded (no time data)
+                  </button>
+                  {showExcludedPopover && (
+                    <div className="absolute right-0 top-full mt-1.5 z-50 w-64 bg-gray-800 border border-gray-700 rounded-lg shadow-2xl p-3">
+                      <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-2">Days without time data</p>
+                      <div className="space-y-1 max-h-48 overflow-y-auto">
+                        {etExcluded.map((d) => (
+                          <div key={d.date} className="flex items-center justify-between gap-3">
+                            <span className="text-xs text-gray-300">{formatDateFull(d.date)}</span>
+                            <span className="text-[10px] text-gray-500 shrink-0">{d.shiftTypes.join(', ')}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+            <p className="text-xs text-gray-600 mb-4">Variable days: last case end time · Fixed days (APS/BR/NIR): start + shift hours</p>
+            <ResponsiveContainer width="100%" height={200}>
+              <BarChart data={etBuckets} margin={{ top: 0, right: 8, bottom: 0, left: -10 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
+                <XAxis dataKey="label" {...AXIS_PROPS} />
+                <YAxis {...AXIS_PROPS} allowDecimals={false} />
+                <Tooltip content={<EndTimeTooltip />} cursor={{ fill: 'rgba(255,255,255,0.04)' }} />
+                <Bar dataKey="count" radius={[4, 4, 0, 0]}>
+                  {etBuckets.map((b) => (
+                    <Cell key={b.label} fill={b.color} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+            <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1">
+              {etBuckets.filter((b) => b.count > 0).map((b) => (
+                <span key={b.label} className="text-xs text-gray-500">
+                  <span className="font-medium" style={{ color: b.color }}>{b.label}</span>
+                  {' '}{b.count} day{b.count !== 1 ? 's' : ''}
+                  {' '}
+                  <span className="text-gray-700">({Math.round(b.count / total * 100)}%)</span>
+                </span>
+              ))}
+            </div>
+          </div>
+        )
+      })()}
 
       {/* Shift Type Analytics */}
       {shiftStatsData.length > 0 && (() => {
