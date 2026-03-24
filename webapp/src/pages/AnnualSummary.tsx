@@ -151,9 +151,11 @@ export default function AnnualSummary() {
   const [whatIfUnitRate, setWhatIfUnitRate] = useState<number | null>(null)
   const [showWhatIfPopover, setShowWhatIfPopover] = useState(false)
   const [showWeeksPopover, setShowWeeksPopover] = useState(false)
+  const [showExcludedPopover, setShowExcludedPopover] = useState(false)
   const [showYoY, setShowYoY] = useState(false)
   const popoverRef = useRef<HTMLDivElement>(null)
   const weeksPopoverRef = useRef<HTMLDivElement>(null)
+  const excludedPopoverRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (!showWhatIfPopover) return
@@ -178,6 +180,19 @@ export default function AnnualSummary() {
     document.addEventListener('keydown', keyHandler)
     return () => { document.removeEventListener('mousedown', handler); document.removeEventListener('keydown', keyHandler) }
   }, [showWeeksPopover])
+
+  useEffect(() => {
+    if (!showExcludedPopover) return
+    const handler = (e: MouseEvent) => {
+      if (excludedPopoverRef.current && !excludedPopoverRef.current.contains(e.target as Node))
+        setShowExcludedPopover(false)
+    }
+    const keyHandler = (e: KeyboardEvent) => { if (e.key === 'Escape') setShowExcludedPopover(false) }
+    document.addEventListener('mousedown', handler)
+    document.addEventListener('keydown', keyHandler)
+    return () => { document.removeEventListener('mousedown', handler); document.removeEventListener('keydown', keyHandler) }
+  }, [showExcludedPopover])
+
   const { year: yearParam } = useParams<{ year: string }>()
   const navigate = useNavigate()
 
@@ -431,7 +446,7 @@ export default function AnnualSummary() {
 
     const [startH, startM] = settings.clinicalDayStart.split(':').map(Number)
     const dayStartMins = startH * 60 + (startM ?? 0)
-    let excluded = 0
+    const excludedDays: { date: string; shiftTypes: string[] }[] = []
 
     for (const month of yearStats) {
       for (const day of month.workingDays) {
@@ -446,9 +461,9 @@ export default function AnnualSummary() {
 
         if (hasVariable) {
           // Variable or mixed day: use actual last case end time
-          if (!day.lastEndTime) { excluded++; continue }
+          if (!day.lastEndTime) { excludedDays.push({ date: day.date, shiftTypes: activeShifts }); continue }
           const match = day.lastEndTime.match(/^(\d{1,2}):(\d{2})/)
-          if (!match) { excluded++; continue }
+          if (!match) { excludedDays.push({ date: day.date, shiftTypes: activeShifts }); continue }
           endMins = parseInt(match[1]) * 60 + parseInt(match[2])
         } else {
           // Fixed-shift-only day: estimate end as clinicalDayStart + longest shift
@@ -456,7 +471,7 @@ export default function AnnualSummary() {
             const canonical = resolveShiftAlias(s.toUpperCase())
             return getFixedHours(canonical, day.isCallWeekend, settings.shiftHours) ?? 0
           }))
-          if (maxHours === 0) { excluded++; continue }
+          if (maxHours === 0) { excludedDays.push({ date: day.date, shiftTypes: activeShifts }); continue }
           endMins = dayStartMins + maxHours * 60
         }
 
@@ -468,7 +483,7 @@ export default function AnnualSummary() {
         else                        buckets[5].count++
       }
     }
-    return { buckets, excluded }
+    return { buckets, excludedDays }
   }, [yearStats, settings.shiftHours, settings.clinicalDayStart])
 
   // ── Per-shift day map (mirrors buildShiftStats attribution logic exactly) ────
@@ -955,14 +970,34 @@ export default function AnnualSummary() {
 
       {/* End-of-Day Distribution */}
       {endTimeDistribution.buckets.some((b) => b.count > 0) && (() => {
-        const { buckets: etBuckets, excluded: etExcluded } = endTimeDistribution
+        const { buckets: etBuckets, excludedDays: etExcluded } = endTimeDistribution
         const total = etBuckets.reduce((s, b) => s + b.count, 0)
         return (
           <div className="bg-gray-900 rounded-xl border border-gray-800 p-5 mb-8">
             <div className="flex items-center justify-between mb-1">
               <h3 className="text-sm font-semibold text-gray-300">End-of-Day Distribution</h3>
-              {etExcluded > 0 && (
-                <span className="text-xs text-gray-600">{etExcluded} day{etExcluded !== 1 ? 's' : ''} excluded (no time data)</span>
+              {etExcluded.length > 0 && (
+                <div className="relative" ref={excludedPopoverRef}>
+                  <button
+                    onClick={() => setShowExcludedPopover((v) => !v)}
+                    className="text-xs text-gray-600 hover:text-gray-400 transition-colors underline decoration-dotted underline-offset-2"
+                  >
+                    {etExcluded.length} day{etExcluded.length !== 1 ? 's' : ''} excluded (no time data)
+                  </button>
+                  {showExcludedPopover && (
+                    <div className="absolute right-0 top-full mt-1.5 z-50 w-64 bg-gray-800 border border-gray-700 rounded-lg shadow-2xl p-3">
+                      <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide mb-2">Days without time data</p>
+                      <div className="space-y-1 max-h-48 overflow-y-auto">
+                        {etExcluded.map((d) => (
+                          <div key={d.date} className="flex items-center justify-between gap-3">
+                            <span className="text-xs text-gray-300">{formatDateFull(d.date)}</span>
+                            <span className="text-[10px] text-gray-500 shrink-0">{d.shiftTypes.join(', ')}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
               )}
             </div>
             <p className="text-xs text-gray-600 mb-4">Variable days: last case end time · Fixed days (APS/BR/NIR): start + shift hours</p>
