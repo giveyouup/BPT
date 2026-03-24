@@ -1041,7 +1041,7 @@ export default function AnnualSummary() {
                 <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
                 <XAxis dataKey="label" {...AXIS_PROPS} />
                 <YAxis {...AXIS_PROPS} allowDecimals={false} />
-                <Tooltip content={<EndTimeTooltip />} cursor={{ fill: 'rgba(255,255,255,0.04)' }} />
+                <Tooltip content={<EndTimeTooltip />} cursor={{ fill: 'rgba(255,255,255,0.04)' }} wrapperStyle={{ zIndex: 50 }} />
                 <Bar dataKey="count" radius={[4, 4, 0, 0]}>
                   {etBuckets.map((b) => (
                     <Cell key={b.label} fill={b.color} />
