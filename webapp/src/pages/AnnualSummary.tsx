@@ -142,6 +142,30 @@ function deltaLabel(actual: number, projected: number): string {
   return (diff >= 0 ? '+' : '') + formatCurrency(diff)
 }
 
+type EndTimeBucket = { label: string; color: string; count: number; shiftCounts: Record<string, number> }
+
+function EndTimeTooltip({ active, payload }: { active?: boolean; payload?: Array<{ payload: EndTimeBucket }> }) {
+  if (!active || !payload?.length) return null
+  const { label, count, shiftCounts, color } = payload[0].payload
+  const entries = Object.entries(shiftCounts).sort((a, b) => b[1] - a[1])
+  return (
+    <div style={{ fontSize: 12, borderRadius: 8, border: '1px solid #1f2937', backgroundColor: '#111827', color: '#f3f4f6', padding: '8px 12px', minWidth: 140 }}>
+      <p style={{ color, fontWeight: 600, marginBottom: 4 }}>{label}</p>
+      <p style={{ color: '#f3f4f6', marginBottom: entries.length > 0 ? 6 : 0 }}>{count} day{count !== 1 ? 's' : ''}</p>
+      {entries.length > 0 && (
+        <div style={{ borderTop: '1px solid #1f2937', paddingTop: 6 }}>
+          {entries.map(([shift, n]) => (
+            <div key={shift} style={{ display: 'flex', justifyContent: 'space-between', gap: 16 }}>
+              <span style={{ color: '#9ca3af' }}>{shift}</span>
+              <span style={{ color: '#d1d5db' }}>{n}×</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function AnnualSummary() {
   const [hoursView, setHoursView] = useState<'month' | 'week'>('month')
   const [expandedShift, setExpandedShift] = useState<string | null>(null)
@@ -436,12 +460,12 @@ export default function AnnualSummary() {
   // ── End-of-day time distribution ──────────────────────────────────────────
   const endTimeDistribution = useMemo(() => {
     const buckets = [
-      { label: 'Before 3pm', color: '#10b981', count: 0 },
-      { label: '3 – 5pm',    color: '#6366f1', count: 0 },
-      { label: '5 – 7pm',    color: '#8b5cf6', count: 0 },
-      { label: '7 – 9pm',    color: '#f59e0b', count: 0 },
-      { label: '9 – 11pm',   color: '#f97316', count: 0 },
-      { label: 'Past 11pm',  color: '#ef4444', count: 0 },
+      { label: 'Before 3pm', color: '#10b981', count: 0, shiftCounts: {} as Record<string, number> },
+      { label: '3 – 5pm',    color: '#6366f1', count: 0, shiftCounts: {} as Record<string, number> },
+      { label: '5 – 7pm',    color: '#8b5cf6', count: 0, shiftCounts: {} as Record<string, number> },
+      { label: '7 – 9pm',    color: '#f59e0b', count: 0, shiftCounts: {} as Record<string, number> },
+      { label: '9 – 11pm',   color: '#f97316', count: 0, shiftCounts: {} as Record<string, number> },
+      { label: 'Past 11pm',  color: '#ef4444', count: 0, shiftCounts: {} as Record<string, number> },
     ]
 
     const [startH, startM] = settings.clinicalDayStart.split(':').map(Number)
@@ -475,12 +499,17 @@ export default function AnnualSummary() {
           endMins = dayStartMins + maxHours * 60
         }
 
-        if      (endMins < 15 * 60) buckets[0].count++
-        else if (endMins < 17 * 60) buckets[1].count++
-        else if (endMins < 19 * 60) buckets[2].count++
-        else if (endMins < 21 * 60) buckets[3].count++
-        else if (endMins < 23 * 60) buckets[4].count++
-        else                        buckets[5].count++
+        const bi =
+          endMins < 15 * 60 ? 0 :
+          endMins < 17 * 60 ? 1 :
+          endMins < 19 * 60 ? 2 :
+          endMins < 21 * 60 ? 3 :
+          endMins < 23 * 60 ? 4 : 5
+        buckets[bi].count++
+        for (const s of activeShifts) {
+          const canonical = resolveShiftAlias(s.toUpperCase())
+          buckets[bi].shiftCounts[canonical] = (buckets[bi].shiftCounts[canonical] ?? 0) + 1
+        }
       }
     }
     return { buckets, excludedDays }
@@ -1006,10 +1035,7 @@ export default function AnnualSummary() {
                 <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
                 <XAxis dataKey="label" {...AXIS_PROPS} />
                 <YAxis {...AXIS_PROPS} allowDecimals={false} />
-                <Tooltip
-                  formatter={(v: number) => [`${v} day${v !== 1 ? 's' : ''}`, 'Count']}
-                  {...CHART_STYLE}
-                />
+                <Tooltip content={<EndTimeTooltip />} cursor={{ fill: 'rgba(255,255,255,0.04)' }} />
                 <Bar dataKey="count" radius={[4, 4, 0, 0]}>
                   {etBuckets.map((b) => (
                     <Cell key={b.label} fill={b.color} />
