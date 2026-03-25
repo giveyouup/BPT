@@ -166,3 +166,11 @@ export interface MonthlyExpenses {
   recurring: Record<string, number>  // category key -> monthly amount
   entries: ExpenseEntry[]            // free-form additional entries
 }
+
+export interface AnnualExpenses {
+  id: string   // "YYYY"
+  year: number
+  physicianId?: string
+  recurring: Record<string, number>  // category key -> annual amount
+  entries: ExpenseEntry[]            // free-form additional entries
+}

@@ -9,6 +9,7 @@ import {
   getStipendMappings, upsertStipendMapping, deleteStipendMapping,
   getCptRanges, upsertCptRange, deleteCptRange as deleteCptRangeDb, resetCptRanges,
   getMonthlyExpenses, upsertMonthlyExpenses, deleteMonthlyExpenses,
+  getAnnualExpenses, upsertAnnualExpenses, deleteAnnualExpenses,
   exportDatabase, importDatabase, runMaintenance,
 } from './db'
 
@@ -147,6 +148,20 @@ app.put('/api/expenses/:id', (req, res) => {
 
 app.delete('/api/expenses/:id', (req, res) => {
   deleteMonthlyExpenses(req.params.id)
+  res.json({ ok: true })
+})
+
+// ─── Annual Expenses ──────────────────────────────────────────────────────────
+
+app.get('/api/annual-expenses', (req, res) => {
+  res.json(getAnnualExpenses(req.query.physicianId as string | undefined))
+})
+app.put('/api/annual-expenses/:id', (req, res) => {
+  upsertAnnualExpenses(req.body)
+  res.json({ ok: true })
+})
+app.delete('/api/annual-expenses/:id', (req, res) => {
+  deleteAnnualExpenses(req.params.id)
   res.json({ ok: true })
 })
 

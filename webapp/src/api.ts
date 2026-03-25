@@ -1,4 +1,4 @@
-import type { MonthlyReport, Schedule, Settings, StipendMapping, CptRange, Physician, MonthlyExpenses } from './types'
+import type { MonthlyReport, Schedule, Settings, StipendMapping, CptRange, Physician, MonthlyExpenses, AnnualExpenses } from './types'
 
 export interface MaintenanceResult {
   walBusy: boolean
@@ -60,6 +60,14 @@ export const api = {
     list: (physicianId: string) => req<MonthlyExpenses[]>('GET', `/expenses?physicianId=${encodeURIComponent(physicianId)}`),
     upsert: (r: MonthlyExpenses) => req<void>('PUT', `/expenses/${r.id}`, r),
     delete: (id: string) => req<void>('DELETE', `/expenses/${id}`),
+  },
+  annualExpenses: {
+    list: (physicianId?: string) =>
+      fetch(`/api/annual-expenses${physicianId ? `?physicianId=${physicianId}` : ''}`).then(r => r.json()) as Promise<AnnualExpenses[]>,
+    upsert: (record: AnnualExpenses) =>
+      fetch(`/api/annual-expenses/${record.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(record) }).then(r => r.json()),
+    delete: (id: string) =>
+      fetch(`/api/annual-expenses/${id}`, { method: 'DELETE' }).then(r => r.json()),
   },
   db: {
     maintenance: () => req<MaintenanceResult>('POST', '/db/maintenance'),
