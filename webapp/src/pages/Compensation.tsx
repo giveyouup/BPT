@@ -37,7 +37,7 @@ const RETIREMENT_KEYS = new Set(RETIREMENT_LEAVES.map(l => l.key))
 const ACTIVE_KEYS     = new Set([...BUSINESS_KEYS, ...BENEFITS_KEYS, ...RETIREMENT_KEYS])
 const ALL_LEAVES      = [...BUSINESS_LEAVES, ...BENEFITS_LEAVES, ...RETIREMENT_LEAVES]
 
-type Section = 'business' | 'benefits' | 'retirement'
+type Section = 'business' | 'benefits' | 'retirement' // used by handleDeleteEntry
 
 function initDraft(rec: AnnualExpenses | undefined, annualGross: number): Record<string, string> {
   const draft: Record<string, string> = {}
@@ -82,15 +82,6 @@ function AmountInput({ value, onChange, onBlur }: {
   )
 }
 
-interface EntryFormProps {
-  entries: ExpenseEntry[]
-  form: { cat: string; amt: string; note: string }
-  onFormChange: (field: 'cat' | 'amt' | 'note', val: string) => void
-  onAdd: () => void
-  datalistId: string
-  suggestions: string[]
-}
-
 function EntryList({ entries, onDelete }: { entries: ExpenseEntry[]; onDelete: (id: string) => void }) {
   if (entries.length === 0) return null
   return (
@@ -114,56 +105,7 @@ function EntryList({ entries, onDelete }: { entries: ExpenseEntry[]; onDelete: (
   )
 }
 
-function AddEntryForm({ form, onFormChange, onAdd, datalistId, suggestions }: EntryFormProps) {
-  return (
-    <div className="flex flex-wrap items-end gap-2 pt-2">
-      <div className="flex-1 min-w-[130px]">
-        <label className="block text-[10px] text-gray-600 mb-1 uppercase tracking-wider">Category</label>
-        <input
-          list={datalistId}
-          value={form.cat}
-          onChange={e => onFormChange('cat', e.target.value)}
-          onKeyDown={e => { if (e.key === 'Enter') onAdd() }}
-          placeholder="Description"
-          className="w-full bg-gray-800 border border-gray-700 rounded px-2.5 py-1.5 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-        />
-        <datalist id={datalistId}>
-          {suggestions.map(s => <option key={s} value={s} />)}
-        </datalist>
-      </div>
-      <div className="w-28">
-        <label className="block text-[10px] text-gray-600 mb-1 uppercase tracking-wider">Amount</label>
-        <input
-          type="number" step="1" value={form.amt} placeholder="0"
-          onChange={e => onFormChange('amt', e.target.value)}
-          onKeyDown={e => { if (e.key === 'Enter') onAdd() }}
-          className="w-full bg-gray-800 border border-gray-700 rounded px-2.5 py-1.5 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-        />
-      </div>
-      <div className="flex-1 min-w-[90px]">
-        <label className="block text-[10px] text-gray-600 mb-1 uppercase tracking-wider">Note</label>
-        <input
-          value={form.note}
-          onChange={e => onFormChange('note', e.target.value)}
-          onKeyDown={e => { if (e.key === 'Enter') onAdd() }}
-          placeholder="optional"
-          className="w-full bg-gray-800 border border-gray-700 rounded px-2.5 py-1.5 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-        />
-      </div>
-      <button
-        onClick={onAdd}
-        disabled={!form.cat.trim() || !form.amt}
-        className="px-3 py-1.5 bg-indigo-600 text-white text-sm rounded-md hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors font-medium"
-      >
-        Add
-      </button>
-    </div>
-  )
-}
-
 // ─── Main component ────────────────────────────────────────────────────────────
-
-const EMPTY_FORM = { cat: '', amt: '', note: '' }
 
 export default function Compensation() {
   const { reports, schedules, settings, stipendMappings, annualExpenses, saveAnnualExpenses, deleteAnnualExpenses } = useData()
@@ -182,9 +124,9 @@ export default function Compensation() {
   const [draft, setDraft] = useState<Record<string, string>>({})
   const draftInitializedForYear = useRef<number | null>(null)
 
-  const [forms, setForms] = useState<Record<Section, typeof EMPTY_FORM>>({
-    business: EMPTY_FORM, benefits: EMPTY_FORM, retirement: EMPTY_FORM,
-  })
+  const [bizCat, setBizCat] = useState(''); const [bizAmt, setBizAmt] = useState(''); const [bizNote, setBizNote] = useState('')
+  const [benCat, setBenCat] = useState(''); const [benAmt, setBenAmt] = useState(''); const [benNote, setBenNote] = useState('')
+  const [retCat, setRetCat] = useState(''); const [retAmt, setRetAmt] = useState(''); const [retNote, setRetNote] = useState('')
 
   const yearStats = useMemo(
     () => computeCalendarYearStats(selectedYear, reports, schedules, settings, stipendMappings),
@@ -236,31 +178,31 @@ export default function Compensation() {
     }
   }
 
-  function updateForm(section: Section, field: 'cat' | 'amt' | 'note', val: string) {
-    setForms(f => ({ ...f, [section]: { ...f[section], [field]: val } }))
+  async function handleAddBiz() {
+    const amt = parseFloat(bizAmt)
+    if (!bizCat.trim() || isNaN(amt) || amt === 0) return
+    const record = getOrCreate()
+    const entry: ExpenseEntry = { id: crypto.randomUUID(), category: bizCat.trim(), amount: amt, note: bizNote.trim() || undefined }
+    await saveAnnualExpenses({ ...record, entries: [...(record.entries ?? []), entry] })
+    setBizCat(''); setBizAmt(''); setBizNote('')
   }
 
-  async function handleAddEntry(section: Section) {
-    const form = forms[section]
-    const amt = parseFloat(form.amt)
-    if (!form.cat.trim() || isNaN(amt) || amt === 0) return
+  async function handleAddBen() {
+    const amt = parseFloat(benAmt)
+    if (!benCat.trim() || isNaN(amt) || amt === 0) return
     const record = getOrCreate()
-    const entry: ExpenseEntry = {
-      id: crypto.randomUUID(),
-      category: form.cat.trim(),
-      amount: amt,
-      note: form.note.trim() || undefined,
-    }
-    let updated: AnnualExpenses
-    if (section === 'business') {
-      updated = { ...record, entries: [...(record.entries ?? []), entry] }
-    } else if (section === 'benefits') {
-      updated = { ...record, benefitsEntries: [...(record.benefitsEntries ?? []), entry] }
-    } else {
-      updated = { ...record, retirementEntries: [...(record.retirementEntries ?? []), entry] }
-    }
-    await saveAnnualExpenses(updated)
-    setForms(f => ({ ...f, [section]: EMPTY_FORM }))
+    const entry: ExpenseEntry = { id: crypto.randomUUID(), category: benCat.trim(), amount: amt, note: benNote.trim() || undefined }
+    await saveAnnualExpenses({ ...record, benefitsEntries: [...(record.benefitsEntries ?? []), entry] })
+    setBenCat(''); setBenAmt(''); setBenNote('')
+  }
+
+  async function handleAddRet() {
+    const amt = parseFloat(retAmt)
+    if (!retCat.trim() || isNaN(amt) || amt === 0) return
+    const record = getOrCreate()
+    const entry: ExpenseEntry = { id: crypto.randomUUID(), category: retCat.trim(), amount: amt, note: retNote.trim() || undefined }
+    await saveAnnualExpenses({ ...record, retirementEntries: [...(record.retirementEntries ?? []), entry] })
+    setRetCat(''); setRetAmt(''); setRetNote('')
   }
 
   async function handleDeleteEntry(section: Section, entryId: string) {
@@ -375,18 +317,23 @@ export default function Compensation() {
                 </div>
               ))}
             </div>
-            <EntryList
-              entries={currentRecord?.entries ?? []}
-              onDelete={id => handleDeleteEntry('business', id)}
-            />
-            <AddEntryForm
-              entries={currentRecord?.entries ?? []}
-              form={forms.business}
-              onFormChange={(f, v) => updateForm('business', f, v)}
-              onAdd={() => handleAddEntry('business')}
-              datalistId="biz-categories"
-              suggestions={['Accounting & Legal', 'Office & Subscriptions', 'Business Travel', 'Medical Equipment', 'Other']}
-            />
+            <EntryList entries={currentRecord?.entries ?? []} onDelete={id => handleDeleteEntry('business', id)} />
+            <div className="flex flex-wrap items-end gap-2 pt-2">
+              <div className="flex-1 min-w-[130px]">
+                <label className="block text-[10px] text-gray-600 mb-1 uppercase tracking-wider">Category</label>
+                <input list="biz-cats" value={bizCat} onChange={e => setBizCat(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') handleAddBiz() }} placeholder="Description" className="w-full bg-gray-800 border border-gray-700 rounded px-2.5 py-1.5 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-indigo-500" />
+                <datalist id="biz-cats">{['Accounting & Legal','Office & Subscriptions','Business Travel','Medical Equipment','Other'].map(s => <option key={s} value={s} />)}</datalist>
+              </div>
+              <div className="w-28">
+                <label className="block text-[10px] text-gray-600 mb-1 uppercase tracking-wider">Amount</label>
+                <input type="number" step="1" value={bizAmt} onChange={e => setBizAmt(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') handleAddBiz() }} placeholder="0" className="w-full bg-gray-800 border border-gray-700 rounded px-2.5 py-1.5 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-indigo-500" />
+              </div>
+              <div className="flex-1 min-w-[90px]">
+                <label className="block text-[10px] text-gray-600 mb-1 uppercase tracking-wider">Note</label>
+                <input value={bizNote} onChange={e => setBizNote(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') handleAddBiz() }} placeholder="optional" className="w-full bg-gray-800 border border-gray-700 rounded px-2.5 py-1.5 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-indigo-500" />
+              </div>
+              <button onClick={handleAddBiz} disabled={!bizCat.trim() || !bizAmt} className="px-3 py-1.5 bg-indigo-600 text-white text-sm rounded-md hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors font-medium">Add</button>
+            </div>
             <div className="flex items-center justify-between pt-3 mt-3 border-t border-gray-800">
               <span className="text-sm text-gray-500">Business Expenses Total</span>
               <span className="text-sm font-bold text-red-400 tabular-nums">{formatCurrency(businessExpenses)}</span>
@@ -428,18 +375,23 @@ export default function Compensation() {
               ))}
             </div>
 
-            <EntryList
-              entries={currentRecord?.benefitsEntries ?? []}
-              onDelete={id => handleDeleteEntry('benefits', id)}
-            />
-            <AddEntryForm
-              entries={currentRecord?.benefitsEntries ?? []}
-              form={forms.benefits}
-              onFormChange={(f, v) => updateForm('benefits', f, v)}
-              onAdd={() => handleAddEntry('benefits')}
-              datalistId="ben-categories"
-              suggestions={['Medical Licensing & DEA', 'Professional Dues', 'Conference Registration', 'Other']}
-            />
+            <EntryList entries={currentRecord?.benefitsEntries ?? []} onDelete={id => handleDeleteEntry('benefits', id)} />
+            <div className="flex flex-wrap items-end gap-2 pt-2">
+              <div className="flex-1 min-w-[130px]">
+                <label className="block text-[10px] text-gray-600 mb-1 uppercase tracking-wider">Category</label>
+                <input list="ben-cats" value={benCat} onChange={e => setBenCat(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') handleAddBen() }} placeholder="Description" className="w-full bg-gray-800 border border-gray-700 rounded px-2.5 py-1.5 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-indigo-500" />
+                <datalist id="ben-cats">{['Medical Licensing & DEA','Professional Dues','Conference Registration','Other'].map(s => <option key={s} value={s} />)}</datalist>
+              </div>
+              <div className="w-28">
+                <label className="block text-[10px] text-gray-600 mb-1 uppercase tracking-wider">Amount</label>
+                <input type="number" step="1" value={benAmt} onChange={e => setBenAmt(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') handleAddBen() }} placeholder="0" className="w-full bg-gray-800 border border-gray-700 rounded px-2.5 py-1.5 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-indigo-500" />
+              </div>
+              <div className="flex-1 min-w-[90px]">
+                <label className="block text-[10px] text-gray-600 mb-1 uppercase tracking-wider">Note</label>
+                <input value={benNote} onChange={e => setBenNote(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') handleAddBen() }} placeholder="optional" className="w-full bg-gray-800 border border-gray-700 rounded px-2.5 py-1.5 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-indigo-500" />
+              </div>
+              <button onClick={handleAddBen} disabled={!benCat.trim() || !benAmt} className="px-3 py-1.5 bg-indigo-600 text-white text-sm rounded-md hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors font-medium">Add</button>
+            </div>
             <div className="flex items-center justify-between pt-3 mt-3 border-t border-gray-800">
               <span className="text-sm text-gray-500">Benefits Total</span>
               <span className="text-sm font-bold text-sky-400 tabular-nums">{formatCurrency(benefitsTotal)}</span>
@@ -461,18 +413,23 @@ export default function Compensation() {
                 </div>
               ))}
             </div>
-            <EntryList
-              entries={currentRecord?.retirementEntries ?? []}
-              onDelete={id => handleDeleteEntry('retirement', id)}
-            />
-            <AddEntryForm
-              entries={currentRecord?.retirementEntries ?? []}
-              form={forms.retirement}
-              onFormChange={(f, v) => updateForm('retirement', f, v)}
-              onAdd={() => handleAddEntry('retirement')}
-              datalistId="ret-categories"
-              suggestions={['IRA Contribution', 'HSA Contribution', 'Other']}
-            />
+            <EntryList entries={currentRecord?.retirementEntries ?? []} onDelete={id => handleDeleteEntry('retirement', id)} />
+            <div className="flex flex-wrap items-end gap-2 pt-2">
+              <div className="flex-1 min-w-[130px]">
+                <label className="block text-[10px] text-gray-600 mb-1 uppercase tracking-wider">Category</label>
+                <input list="ret-cats" value={retCat} onChange={e => setRetCat(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') handleAddRet() }} placeholder="Description" className="w-full bg-gray-800 border border-gray-700 rounded px-2.5 py-1.5 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-indigo-500" />
+                <datalist id="ret-cats">{['IRA Contribution','HSA Contribution','Other'].map(s => <option key={s} value={s} />)}</datalist>
+              </div>
+              <div className="w-28">
+                <label className="block text-[10px] text-gray-600 mb-1 uppercase tracking-wider">Amount</label>
+                <input type="number" step="1" value={retAmt} onChange={e => setRetAmt(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') handleAddRet() }} placeholder="0" className="w-full bg-gray-800 border border-gray-700 rounded px-2.5 py-1.5 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-indigo-500" />
+              </div>
+              <div className="flex-1 min-w-[90px]">
+                <label className="block text-[10px] text-gray-600 mb-1 uppercase tracking-wider">Note</label>
+                <input value={retNote} onChange={e => setRetNote(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') handleAddRet() }} placeholder="optional" className="w-full bg-gray-800 border border-gray-700 rounded px-2.5 py-1.5 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-indigo-500" />
+              </div>
+              <button onClick={handleAddRet} disabled={!retCat.trim() || !retAmt} className="px-3 py-1.5 bg-indigo-600 text-white text-sm rounded-md hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors font-medium">Add</button>
+            </div>
             <div className="flex items-center justify-between pt-3 mt-3 border-t border-gray-800">
               <span className="text-sm text-gray-500">Retirement Total</span>
               <span className="text-sm font-bold text-teal-400 tabular-nums">{formatCurrency(retirementTotal)}</span>
