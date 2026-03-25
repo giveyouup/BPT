@@ -154,7 +154,7 @@ function PcrUploadTab() {
         setYear(detected.year)
         const existingId = `${detected.year}-${String(detected.month).padStart(2, '0')}`
         const existingReport = reports.find((r) => r.id === existingId)
-        if (existingReport) setUnitValue(existingReport.unitDollarValue.toFixed(2))
+        if (existingReport) setUnitValue((existingReport.unitDollarValue ?? 0).toFixed(2))
       }
       const raw = isRawXlsx(buffer)
       setWasRaw(raw)

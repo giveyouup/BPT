@@ -404,7 +404,7 @@ export function computeMonthlyStats(
   const rawUnits = lineItems.reduce((s, li) => s + li.totalDistributableUnits, 0)
   const unitCorrection = report.unitCorrection ?? 0
   const totalDistributableUnits = rawUnits + unitCorrection
-  const unitCompensation = totalDistributableUnits * unitDollarValue
+  const unitCompensation = totalDistributableUnits * (unitDollarValue ?? 0)
 
   const shiftMap = allSchedules?.length ? buildShiftMap(allSchedules) : undefined
   const holidayList = settings

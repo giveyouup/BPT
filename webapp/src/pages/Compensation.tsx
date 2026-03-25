@@ -18,9 +18,10 @@ const BUSINESS_LEAVES: Leaf[] = [
 ]
 
 const BENEFITS_LEAVES: BenefitsLeaf[] = [
-  { key: 'healthDental',  label: 'Dental',           subGroup: 'Health Insurance' },
-  { key: 'healthMedical', label: 'Medical',          subGroup: 'Health Insurance' },
-  { key: 'healthVision',  label: 'Vision',           subGroup: 'Health Insurance' },
+  { key: 'healthDental',   label: 'Dental',           subGroup: 'Health Insurance' },
+  { key: 'healthMedical',  label: 'Medical',          subGroup: 'Health Insurance' },
+  { key: 'healthVision',   label: 'Vision',           subGroup: 'Health Insurance' },
+  { key: 'healthBenicomp', label: 'Benicomp',         subGroup: 'Health Insurance' },
   { key: 'licensesDues',  label: 'Licenses & Dues'  },
   { key: 'cme',           label: 'CME'              },
   { key: 'phoneInternet', label: 'Phone / Internet' },
@@ -31,11 +32,12 @@ const RETIREMENT_LEAVES: Leaf[] = [
   { key: 'cashBalance',   label: 'Cash Balance'   },
 ]
 
-const BUSINESS_KEYS   = new Set(BUSINESS_LEAVES.map(l => l.key))
-const BENEFITS_KEYS   = new Set(BENEFITS_LEAVES.map(l => l.key))
-const RETIREMENT_KEYS = new Set(RETIREMENT_LEAVES.map(l => l.key))
-const ACTIVE_KEYS     = new Set([...BUSINESS_KEYS, ...BENEFITS_KEYS, ...RETIREMENT_KEYS])
-const ALL_LEAVES      = [...BUSINESS_LEAVES, ...BENEFITS_LEAVES, ...RETIREMENT_LEAVES]
+const BUSINESS_KEYS    = new Set(BUSINESS_LEAVES.map(l => l.key))
+const BENEFITS_KEYS    = new Set(BENEFITS_LEAVES.map(l => l.key))
+const RETIREMENT_KEYS  = new Set(RETIREMENT_LEAVES.map(l => l.key))
+const HEALTHCARE_KEYS  = new Set(['healthDental', 'healthMedical', 'healthVision', 'healthBenicomp'])
+const ACTIVE_KEYS      = new Set([...BUSINESS_KEYS, ...BENEFITS_KEYS, ...RETIREMENT_KEYS])
+const ALL_LEAVES       = [...BUSINESS_LEAVES, ...BENEFITS_LEAVES, ...RETIREMENT_LEAVES]
 
 type Section = 'business' | 'benefits' | 'retirement' // used by handleDeleteEntry
 
@@ -122,7 +124,7 @@ export default function Compensation() {
 
   const [selectedYear, setSelectedYear] = useState<number>(years[0] ?? currentYear)
   const [draft, setDraft] = useState<Record<string, string>>({})
-  const draftInitializedForYear = useRef<number | null>(null)
+  const draftKey = useRef<string>('')
 
   const [bizCat, setBizCat] = useState(''); const [bizAmt, setBizAmt] = useState(''); const [bizNote, setBizNote] = useState('')
   const [benCat, setBenCat] = useState(''); const [benAmt, setBenAmt] = useState(''); const [benNote, setBenNote] = useState('')
@@ -144,8 +146,16 @@ export default function Compensation() {
   )
 
   useEffect(() => {
-    if (selectedYear === draftInitializedForYear.current) return
-    draftInitializedForYear.current = selectedYear
+    // Re-initialize the draft when:
+    //   (a) the year changes, OR
+    //   (b) gross data first becomes available for a year that had no saved record
+    // Do NOT re-initialize when currentRecord changes (e.g. user saves an entry mid-edit).
+    const hasData = annualGross > 0 || !!currentRecord
+    const key = `${selectedYear}:${hasData}`
+    if (key === draftKey.current) return
+    // Don't downgrade from a richer key — keeps draft stable if data briefly disappears
+    if (!hasData && draftKey.current === `${selectedYear}:true`) return
+    draftKey.current = key
     setDraft(initDraft(currentRecord, annualGross))
   }, [selectedYear, currentRecord, annualGross])
 
@@ -230,6 +240,7 @@ export default function Compensation() {
 
   const businessExpenses = recurringSum(BUSINESS_KEYS) + (currentRecord?.entries?.reduce((s, e) => s + e.amount, 0) ?? 0)
   const benefitsTotal    = recurringSum(BENEFITS_KEYS) + (currentRecord?.benefitsEntries?.reduce((s, e) => s + e.amount, 0) ?? 0)
+  const healthcareTotal  = recurringSum(HEALTHCARE_KEYS)
   const retirementTotal  = recurringSum(RETIREMENT_KEYS) + (currentRecord?.retirementEntries?.reduce((s, e) => s + e.amount, 0) ?? 0)
   const netIncome        = annualGross - businessExpenses - benefitsTotal - retirementTotal
   const totalComp        = netIncome + benefitsTotal + retirementTotal
@@ -282,16 +293,21 @@ export default function Compensation() {
 
       {/* Stat cards — row 2: personal comp */}
       <div className="grid grid-cols-3 gap-3 mb-8">
-        {([
-          { label: 'Benefits',           value: formatCurrency(benefitsTotal),   color: 'text-sky-400' },
-          { label: 'Retirement',         value: formatCurrency(retirementTotal), color: 'text-teal-400' },
-          { label: 'Total Compensation', value: formatCurrency(totalComp),       color: totalComp >= 0 ? 'text-violet-400' : 'text-red-400' },
-        ] as const).map(({ label, value, color }) => (
-          <div key={label} className="bg-gray-900 border border-gray-800 rounded-xl p-4">
-            <p className="text-xs text-gray-500 mb-1">{label}</p>
-            <p className={`text-lg font-bold ${color}`}>{value}</p>
-          </div>
-        ))}
+        <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
+          <p className="text-xs text-gray-500 mb-1">Benefits</p>
+          <p className="text-lg font-bold text-sky-400">{formatCurrency(benefitsTotal)}</p>
+          {healthcareTotal > 0 && (
+            <p className="text-xs text-sky-700 mt-1">Healthcare {formatCurrency(healthcareTotal)}</p>
+          )}
+        </div>
+        <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
+          <p className="text-xs text-gray-500 mb-1">Retirement</p>
+          <p className="text-lg font-bold text-teal-400">{formatCurrency(retirementTotal)}</p>
+        </div>
+        <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
+          <p className="text-xs text-gray-500 mb-1">Total Compensation</p>
+          <p className={`text-lg font-bold ${totalComp >= 0 ? 'text-violet-400' : 'text-red-400'}`}>{formatCurrency(totalComp)}</p>
+        </div>
       </div>
 
       {/* Expense form */}
