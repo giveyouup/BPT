@@ -207,6 +207,7 @@ function PcrUploadTab() {
       lineItems: parsed,
       workingDayOverrides: existing?.workingDayOverrides ?? {},
       dayStipends: existing?.dayStipends ?? {},
+      dayNotes: existing?.dayNotes ?? {},
       stipends: existing?.stipends ?? [],
     }
     await saveReport(report)
@@ -246,6 +247,7 @@ function PcrUploadTab() {
           lineItems: items,
           workingDayOverrides: existingReport?.workingDayOverrides ?? {},
           dayStipends: existingReport?.dayStipends ?? {},
+          dayNotes: existingReport?.dayNotes ?? {},
           stipends: existingReport?.stipends ?? [],
           autoSplit: true,
         })
