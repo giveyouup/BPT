@@ -21,7 +21,8 @@ export function durationMinutes(startTime: string, endTime: string): number {
   const start = timeToMinutes(startTime)
   let end = timeToMinutes(endTime)
   if (isNaN(start) || isNaN(end)) return 0
-  if (end <= start) end += 24 * 60
+  if (end === start) return 0
+  if (end < start) end += 24 * 60
   const duration = end - start
   return Math.min(duration, 24 * 60) // sanity cap: no case spans more than 24h
 }
@@ -34,6 +35,7 @@ export function lastDayOfMonth(year: number, month: number): string {
 export function formatHours(hours: number): string {
   const h = Math.floor(hours)
   const m = Math.round((hours - h) * 60)
+  if (m === 60) return `${h + 1}h`
   if (m === 0) return `${h}h`
   return `${h}h ${m}m`
 }

@@ -1,4 +1,4 @@
-import type { MonthlyReport, Schedule, Settings, StipendMapping, CptRange, Physician } from './types'
+import type { MonthlyReport, Schedule, Settings, StipendMapping, CptRange, Physician, MonthlyExpenses } from './types'
 
 export interface MaintenanceResult {
   walBusy: boolean
@@ -55,6 +55,11 @@ export const api = {
     upsert: (r: CptRange) => req<void>('PUT', `/cpt-ranges/${r.id}`, r),
     delete: (id: string) => req<void>('DELETE', `/cpt-ranges/${id}`),
     reset: () => req<CptRange[]>('POST', '/cpt-ranges/reset'),
+  },
+  expenses: {
+    list: (physicianId: string) => req<MonthlyExpenses[]>('GET', `/expenses?physicianId=${encodeURIComponent(physicianId)}`),
+    upsert: (r: MonthlyExpenses) => req<void>('PUT', `/expenses/${r.id}`, r),
+    delete: (id: string) => req<void>('DELETE', `/expenses/${id}`),
   },
   db: {
     maintenance: () => req<MaintenanceResult>('POST', '/db/maintenance'),

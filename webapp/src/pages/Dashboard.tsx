@@ -74,6 +74,7 @@ export default function Dashboard() {
   const [showProjection, setShowProjection] = useState(false)
   const [projRateInput, setProjRateInput] = useState('')
   const shiftInputRef = useRef<HTMLInputElement>(null)
+  const selectedRowRef = useRef<HTMLTableRowElement>(null)
 
   useEffect(() => {
     if (shiftPopover) setTimeout(() => shiftInputRef.current?.focus(), 0)
@@ -92,6 +93,13 @@ export default function Dashboard() {
     const match = yearStats.find(s => s.month === month)
     if (match) setSelectedId(match.id)
   }, [yearStats, incomingDate])
+
+  // Scroll the selected row into view after the table renders
+  useEffect(() => {
+    if (!selectedDayDate) return
+    const timer = setTimeout(() => selectedRowRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 150)
+    return () => clearTimeout(timer)
+  }, [selectedDayDate, selectedId])
 
   // Reset projection when the selected month changes
   useEffect(() => {
@@ -251,8 +259,8 @@ export default function Dashboard() {
           </p>
         </div>
         {years.length > 1 && (
-          <div className="flex gap-2 ml-4">
-            {years.map((y) => (
+          <div className="flex items-center gap-2 ml-4">
+            {years.slice(0, 3).map((y) => (
               <button key={y} onClick={() => setSelectedYear(y)}
                 className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
                   y === selectedYear ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-gray-200'
@@ -260,6 +268,20 @@ export default function Dashboard() {
                 {y}
               </button>
             ))}
+            {years.length > 3 && (
+              <select
+                value={years.slice(3).includes(selectedYear) ? selectedYear : ''}
+                onChange={e => setSelectedYear(Number(e.target.value))}
+                className={`bg-gray-900 border rounded-md px-2 py-1 text-sm font-medium focus:outline-none focus:ring-1 focus:ring-indigo-500 ${
+                  years.slice(3).includes(selectedYear)
+                    ? 'border-indigo-600 text-white'
+                    : 'border-gray-700 text-gray-400 hover:border-gray-600'
+                }`}
+              >
+                {!years.slice(3).includes(selectedYear) && <option value="" disabled>More…</option>}
+                {years.slice(3).map(y => <option key={y} value={y}>{y}</option>)}
+              </select>
+            )}
           </div>
         )}
       </div>
@@ -584,6 +606,7 @@ export default function Dashboard() {
                       return (
                         <React.Fragment key={day.date}>
                         <tr
+                          ref={isExpanded ? selectedRowRef : undefined}
                           className={`${rowBg} cursor-pointer ${isExpanded ? 'bg-indigo-950/30' : (!isProj ? 'hover:bg-gray-800/40' : 'hover:bg-amber-950/20')} transition-colors`}
                           onClick={() => setSelectedDayDate(isExpanded ? null : day.date)}
                         >

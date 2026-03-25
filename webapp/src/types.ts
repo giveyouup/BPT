@@ -149,3 +149,19 @@ export interface CptRange {
   hi: number
   label: string
 }
+
+export interface ExpenseEntry {
+  id: string
+  category: string
+  amount: number
+  note?: string
+}
+
+export interface MonthlyExpenses {
+  id: string   // "YYYY-MM"
+  year: number
+  month: number
+  physicianId?: string
+  recurring: Record<string, number>  // category key -> monthly amount
+  entries: ExpenseEntry[]            // free-form additional entries
+}

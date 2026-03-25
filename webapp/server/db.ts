@@ -2,7 +2,7 @@ import Database from 'better-sqlite3'
 import path from 'path'
 import fs from 'fs'
 import { randomUUID } from 'crypto'
-import type { MonthlyReport, Schedule, Settings, StipendMapping, CptRange, Physician } from '../src/types'
+import type { MonthlyReport, Schedule, Settings, StipendMapping, CptRange, Physician, MonthlyExpenses } from '../src/types'
 import { DEFAULT_CPT_RANGES } from '../src/utils/cptLookup'
 
 const DATA_DIR = process.env.DATA_DIR ?? '/opt/stacks/BPT'
@@ -44,6 +44,11 @@ db.exec(`
     lo INTEGER NOT NULL,
     hi INTEGER NOT NULL,
     label TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS monthly_expenses (
+    id TEXT PRIMARY KEY,
+    physician_id TEXT,
+    data TEXT NOT NULL
   );
 `)
 
@@ -250,6 +255,27 @@ export function resetCptRanges(): void {
   }
 }
 
+// ─── Monthly Expenses ─────────────────────────────────────────────────────────
+
+export function getMonthlyExpenses(physicianId?: string): MonthlyExpenses[] {
+  type Row = { physician_id: string; data: string }
+  if (physicianId) {
+    return (db.prepare('SELECT physician_id, data FROM monthly_expenses WHERE physician_id = ? ORDER BY id').all(physicianId) as Row[])
+      .map((r) => ({ ...JSON.parse(r.data), physicianId: r.physician_id }))
+  }
+  return (db.prepare('SELECT physician_id, data FROM monthly_expenses ORDER BY id').all() as Row[])
+    .map((r) => ({ ...JSON.parse(r.data), physicianId: r.physician_id }))
+}
+
+export function upsertMonthlyExpenses(record: MonthlyExpenses): void {
+  const physicianId = record.physicianId ?? defaultPhysicianId
+  db.prepare('INSERT OR REPLACE INTO monthly_expenses (id, physician_id, data) VALUES (?, ?, ?)').run(record.id, physicianId, JSON.stringify(record))
+}
+
+export function deleteMonthlyExpenses(id: string): void {
+  db.prepare('DELETE FROM monthly_expenses WHERE id = ?').run(id)
+}
+
 // ─── Export / Import ──────────────────────────────────────────────────────────
 
 export interface DatabaseExport {
@@ -262,6 +288,7 @@ export interface DatabaseExport {
   settings: Settings
   stipendMappings: StipendMapping[]
   cptRanges: CptRange[]
+  monthlyExpenses: MonthlyExpenses[]
 }
 
 export function exportDatabase(): DatabaseExport {
@@ -280,6 +307,7 @@ export function exportDatabase(): DatabaseExport {
     settings: getSettings(),
     stipendMappings: getStipendMappings(),
     cptRanges: getCptRanges(),
+    monthlyExpenses: getMonthlyExpenses(),
   }
 }
 
@@ -296,6 +324,7 @@ export function importDatabase(data: DatabaseExport): void {
     db.prepare('DELETE FROM settings').run()
     db.prepare('DELETE FROM stipend_mappings').run()
     db.prepare('DELETE FROM cpt_ranges').run()
+    db.prepare('DELETE FROM monthly_expenses').run()
 
     for (const physician of data.physicians ?? []) upsertPhysician(physician)
     for (const report of data.reports ?? []) upsertReport(report)
@@ -322,6 +351,7 @@ export function importDatabase(data: DatabaseExport): void {
     if (data.settings) upsertSettings(data.settings)
     for (const mapping of data.stipendMappings ?? []) upsertStipendMapping(mapping)
     for (const range of data.cptRanges ?? []) upsertCptRange(range)
+    for (const record of data.monthlyExpenses ?? []) upsertMonthlyExpenses(record)
   })
   run()
 }
