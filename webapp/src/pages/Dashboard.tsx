@@ -67,6 +67,8 @@ export default function Dashboard() {
   const [dayStipendInput, setDayStipendInput] = useState('')
   const [editingHoursDate, setEditingHoursDate] = useState<string | null>(null)
   const [hoursInput, setHoursInput] = useState('')
+  const [editingNoteDate, setEditingNoteDate] = useState<string | null>(null)
+  const [noteInput, setNoteInput] = useState('')
   const [hideCompensation, setHideCompensation] = useState(true)
   const [selectedWeek, setSelectedWeek] = useState<string | null>(null)
   const [selectedDayDate, setSelectedDayDate] = useState<string | null>(incomingDate)
@@ -134,6 +136,21 @@ export default function Dashboard() {
     }
     await saveReport({ ...report, workingDayOverrides })
     setEditingHoursDate(null)
+  }
+
+  const saveDayNote = async (date: string) => {
+    if (!selStats) return
+    const report = reports.find((r) => r.id === selStats.id)
+    if (!report) return
+    const text = noteInput.trim()
+    const dayNotes = { ...(report.dayNotes ?? {}) }
+    if (text) {
+      dayNotes[date] = text
+    } else {
+      delete dayNotes[date]
+    }
+    await saveReport({ ...report, dayNotes })
+    setEditingNoteDate(null)
   }
 
   const handleShiftSave = async (date: string) => {
@@ -809,6 +826,51 @@ export default function Dashboard() {
                                   </table>
                                 </div>
                               )}
+
+                              {/* ── Day note ── */}
+                              {(() => {
+                                const report = reports.find(r => r.id === selStats.id)
+                                const existingNote = report?.dayNotes?.[day.date] ?? ''
+                                const isEditingNote = editingNoteDate === day.date
+                                return (
+                                  <div className="mt-3 pt-2 border-t border-gray-800/60">
+                                    {isEditingNote ? (
+                                      <div className="flex items-start gap-2">
+                                        <textarea
+                                          autoFocus
+                                          rows={2}
+                                          value={noteInput}
+                                          onChange={e => setNoteInput(e.target.value)}
+                                          onBlur={() => saveDayNote(day.date)}
+                                          onKeyDown={e => { if (e.key === 'Escape') { setEditingNoteDate(null) } }}
+                                          placeholder="Add a note for this day…"
+                                          className="flex-1 bg-gray-900 border border-gray-700 rounded px-2.5 py-1.5 text-xs text-gray-200 placeholder-gray-600 resize-none focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                                        />
+                                      </div>
+                                    ) : existingNote ? (
+                                      <button
+                                        onClick={() => { setNoteInput(existingNote); setEditingNoteDate(day.date) }}
+                                        className="flex items-start gap-1.5 text-left w-full group"
+                                      >
+                                        <svg className="w-3 h-3 text-gray-600 mt-0.5 flex-shrink-0 group-hover:text-indigo-400 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                                        </svg>
+                                        <span className="text-xs text-gray-400 group-hover:text-gray-200 transition-colors whitespace-pre-wrap">{existingNote}</span>
+                                      </button>
+                                    ) : (
+                                      <button
+                                        onClick={() => { setNoteInput(''); setEditingNoteDate(day.date) }}
+                                        className="flex items-center gap-1 text-gray-700 hover:text-gray-400 transition-colors"
+                                      >
+                                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                                        </svg>
+                                        <span className="text-xs">Add note</span>
+                                      </button>
+                                    )}
+                                  </div>
+                                )
+                              })()}
                             </td>
                           </tr>
                         )}

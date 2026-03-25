@@ -104,6 +104,7 @@ export interface MonthlyReport {
   lineItems: LineItem[]
   workingDayOverrides: Record<string, number> // date -> hours
   dayStipends: Record<string, number>        // date -> additional per-day stipend
+  dayNotes?: Record<string, string>          // date -> free-text note
   stipends: Stipend[]        // additional (manual) stipends (legacy)
   autoSplit?: boolean        // true when created by splitting a multi-month upload
   stipendMappingOverride?: string  // mapping id — overrides date-based auto-selection
