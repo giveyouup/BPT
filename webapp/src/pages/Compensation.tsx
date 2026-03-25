@@ -38,11 +38,6 @@ const ACTIVE_KEYS     = new Set([...BUSINESS_KEYS, ...BENEFITS_KEYS, ...RETIREME
 const ALL_LEAVES      = [...BUSINESS_LEAVES, ...BENEFITS_LEAVES, ...RETIREMENT_LEAVES]
 
 type Section = 'business' | 'benefits' | 'retirement'
-const SECTION_ENTRY_FIELD: Record<Section, keyof AnnualExpenses> = {
-  business:   'entries',
-  benefits:   'benefitsEntries',
-  retirement: 'retirementEntries',
-}
 
 function initDraft(rec: AnnualExpenses | undefined, annualGross: number): Record<string, string> {
   const draft: Record<string, string> = {}
@@ -256,17 +251,28 @@ export default function Compensation() {
       amount: amt,
       note: form.note.trim() || undefined,
     }
-    const field = SECTION_ENTRY_FIELD[section]
-    const existing = (record[field] as ExpenseEntry[] | undefined) ?? []
-    await saveAnnualExpenses({ ...record, [field]: [...existing, entry] })
+    let updated: AnnualExpenses
+    if (section === 'business') {
+      updated = { ...record, entries: [...(record.entries ?? []), entry] }
+    } else if (section === 'benefits') {
+      updated = { ...record, benefitsEntries: [...(record.benefitsEntries ?? []), entry] }
+    } else {
+      updated = { ...record, retirementEntries: [...(record.retirementEntries ?? []), entry] }
+    }
+    await saveAnnualExpenses(updated)
     setForms(f => ({ ...f, [section]: EMPTY_FORM }))
   }
 
   async function handleDeleteEntry(section: Section, entryId: string) {
     const record = getOrCreate()
-    const field = SECTION_ENTRY_FIELD[section]
-    const existing = (record[field] as ExpenseEntry[] | undefined) ?? []
-    const updated = { ...record, [field]: existing.filter(e => e.id !== entryId) }
+    let updated: AnnualExpenses
+    if (section === 'business') {
+      updated = { ...record, entries: (record.entries ?? []).filter(e => e.id !== entryId) }
+    } else if (section === 'benefits') {
+      updated = { ...record, benefitsEntries: (record.benefitsEntries ?? []).filter(e => e.id !== entryId) }
+    } else {
+      updated = { ...record, retirementEntries: (record.retirementEntries ?? []).filter(e => e.id !== entryId) }
+    }
     if (!hasAnything(updated)) await deleteAnnualExpenses(updated.id)
     else await saveAnnualExpenses(updated)
   }
