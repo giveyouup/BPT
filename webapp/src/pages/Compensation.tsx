@@ -520,6 +520,98 @@ export default function Compensation() {
           <span className="text-xs font-semibold text-amber-500 w-12 text-right">{formatPct(yearOverheadPct)}</span>
         </div>
       </div>
+
+      {/* Expense Breakdown */}
+      <div className="mt-6 bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
+        <div className="px-5 py-3 border-b border-gray-800">
+          <h3 className="text-sm font-semibold text-gray-300">Expense Breakdown</h3>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b border-gray-800">
+                <th className="px-4 py-2 text-left text-gray-600 uppercase tracking-wider font-semibold sticky left-0 bg-gray-900 min-w-[160px]">Category</th>
+                {monthsToShow.map(m => (
+                  <th key={m} className="px-2 py-2 text-right text-gray-600 uppercase tracking-wider font-semibold min-w-[64px]">
+                    {getMonthName(m).slice(0, 3)}
+                  </th>
+                ))}
+                <th className="px-4 py-2 text-right text-gray-500 uppercase tracking-wider font-semibold min-w-[72px]">YTD</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-800/50">
+              {/* Business recurring rows */}
+              {RECURRING_LEAVES.filter(l => BUSINESS_RECURRING_KEYS.has(l.key)).map(leaf => {
+                const monthValues = monthsToShow.map(m => expensesByMonth.get(m)?.recurring?.[leaf.key] ?? 0)
+                const ytd = monthValues.reduce((s, v) => s + v, 0)
+                if (ytd === 0) return null
+                return (
+                  <tr key={leaf.key} className="hover:bg-gray-800/20">
+                    <td className="px-4 py-1.5 text-gray-400 sticky left-0 bg-gray-900">{leaf.label}</td>
+                    {monthValues.map((v, i) => (
+                      <td key={i} className={`px-2 py-1.5 text-right tabular-nums ${v !== 0 ? 'text-gray-300' : 'text-gray-700'}`}>
+                        {v !== 0 ? formatCurrency(v) : '—'}
+                      </td>
+                    ))}
+                    <td className="px-4 py-1.5 text-right font-semibold text-red-400 tabular-nums">{formatCurrency(ytd)}</td>
+                  </tr>
+                )
+              })}
+              {/* Additional entries row */}
+              {(() => {
+                const monthValues = monthsToShow.map(m => entriesTotal(expensesByMonth.get(m)))
+                const ytd = monthValues.reduce((s, v) => s + v, 0)
+                if (ytd === 0) return null
+                return (
+                  <tr className="hover:bg-gray-800/20">
+                    <td className="px-4 py-1.5 text-gray-400 sticky left-0 bg-gray-900">Additional</td>
+                    {monthValues.map((v, i) => (
+                      <td key={i} className={`px-2 py-1.5 text-right tabular-nums ${v !== 0 ? 'text-gray-300' : 'text-gray-700'}`}>
+                        {v !== 0 ? formatCurrency(v) : '—'}
+                      </td>
+                    ))}
+                    <td className="px-4 py-1.5 text-right font-semibold text-red-400 tabular-nums">{formatCurrency(ytd)}</td>
+                  </tr>
+                )
+              })()}
+              {/* Personal deductions rows */}
+              {RECURRING_LEAVES.filter(l => PERSONAL_RECURRING_KEYS.has(l.key)).map(leaf => {
+                const monthValues = monthsToShow.map(m => expensesByMonth.get(m)?.recurring?.[leaf.key] ?? 0)
+                const ytd = monthValues.reduce((s, v) => s + v, 0)
+                if (ytd === 0) return null
+                return (
+                  <tr key={leaf.key} className="hover:bg-gray-800/20">
+                    <td className="px-4 py-1.5 text-gray-500 sticky left-0 bg-gray-900 italic">Health — {leaf.label}</td>
+                    {monthValues.map((v, i) => (
+                      <td key={i} className={`px-2 py-1.5 text-right tabular-nums ${v !== 0 ? 'text-gray-400' : 'text-gray-700'}`}>
+                        {v !== 0 ? formatCurrency(v) : '—'}
+                      </td>
+                    ))}
+                    <td className="px-4 py-1.5 text-right font-semibold text-violet-400 tabular-nums">{formatCurrency(ytd)}</td>
+                  </tr>
+                )
+              })}
+            </tbody>
+            {/* Totals footer */}
+            <tfoot>
+              <tr className="border-t border-gray-700 bg-gray-800/30">
+                <td className="px-4 py-2 text-gray-500 font-semibold sticky left-0 bg-gray-800/60">Total</td>
+                {monthsToShow.map(m => {
+                  const t = businessMonthTotal(m) + personalMonthTotal(m)
+                  return (
+                    <td key={m} className={`px-2 py-2 text-right text-xs font-semibold tabular-nums ${t > 0 ? 'text-gray-300' : 'text-gray-700'}`}>
+                      {t > 0 ? formatCurrency(t) : '—'}
+                    </td>
+                  )
+                })}
+                <td className="px-4 py-2 text-right text-xs font-bold text-gray-200 tabular-nums">
+                  {formatCurrency(yearBusinessExpenses + yearPersonalDeductions)}
+                </td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      </div>
     </div>
   )
 }
