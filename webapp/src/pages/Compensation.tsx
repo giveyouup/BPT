@@ -11,11 +11,11 @@ type RecurringGroup = { kind: 'group'; label: string; isPersonal?: boolean; chil
 type RecurringItem = RecurringLeaf | RecurringGroup
 
 const RECURRING_ITEMS: RecurringItem[] = [
-  { kind: 'leaf', key: 'operatingExpense',   label: 'Operating Expense',    default: 600 },
-  { kind: 'leaf', key: 'developmentReserve', label: 'Development Reserve',  default: 0 },
-  { kind: 'leaf', key: 'operatingFee',       label: 'Operating Fee',        default: 0 },
-  { kind: 'leaf', key: 'payrollTaxes',       label: 'Payroll Taxes',        default: 0 },
-  { kind: 'leaf', key: 'liabilityInsurance', label: 'Liability Insurance',  default: 0 },
+  { kind: 'leaf', key: 'operatingFee',       label: 'Operating Fee (7%)',    default: 0 },
+  { kind: 'leaf', key: 'developmentReserve', label: 'Development Fee (10%)', default: 0 },
+  { kind: 'leaf', key: 'operatingExpense',   label: 'Operating Expense',     default: 600 },
+  { kind: 'leaf', key: 'payrollTaxes',       label: 'Payroll Taxes',         default: 0 },
+  { kind: 'leaf', key: 'liabilityInsurance', label: 'Liability Insurance',   default: 0 },
   {
     kind: 'group', label: 'Health Insurance', isPersonal: true, children: [
       { kind: 'leaf', key: 'healthDental',  label: 'Dental',  default: 0 },
@@ -51,11 +51,21 @@ const PERSONAL_RECURRING_ITEMS = RECURRING_ITEMS.filter((item): item is Recurrin
   item.kind === 'group' && !!item.isPersonal
 )
 
-function initDraft(rec: MonthlyExpenses | undefined): Record<string, string> {
+function initDraft(rec: MonthlyExpenses | undefined, gross: number): Record<string, string> {
   const draft: Record<string, string> = {}
+  const savedFee = rec?.recurring?.['operatingFee']
+  const operatingFeeAmount = savedFee !== undefined ? savedFee : Math.round(gross * 0.07)
   for (const leaf of RECURRING_LEAVES) {
     const saved = rec?.recurring?.[leaf.key]
-    draft[leaf.key] = saved ? String(saved) : (leaf.default ? String(leaf.default) : '')
+    if (saved !== undefined) {
+      draft[leaf.key] = String(saved)
+    } else if (leaf.key === 'operatingFee') {
+      draft[leaf.key] = gross > 0 ? String(operatingFeeAmount) : ''
+    } else if (leaf.key === 'developmentReserve') {
+      draft[leaf.key] = gross > 0 ? String(Math.round((gross - operatingFeeAmount) * 0.10)) : ''
+    } else {
+      draft[leaf.key] = leaf.default ? String(leaf.default) : ''
+    }
   }
   return draft
 }
@@ -135,7 +145,7 @@ export default function Compensation() {
     if (expandedMonth === draftInitializedForMonth.current) return
     draftInitializedForMonth.current = expandedMonth
     if (expandedMonth === null) { setRecurringDraft({}); return }
-    setRecurringDraft(initDraft(expensesByMonth.get(expandedMonth)))
+    setRecurringDraft(initDraft(expensesByMonth.get(expandedMonth), grossByMonth.get(expandedMonth) ?? 0))
   }, [expandedMonth]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const monthsToShow = selectedYear === currentYear
