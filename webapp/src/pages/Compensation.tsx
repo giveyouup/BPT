@@ -47,8 +47,8 @@ const PERSONAL_RECURRING_KEYS = new Set(
 const BUSINESS_RECURRING_ITEMS = RECURRING_ITEMS.filter(item =>
   item.kind === 'leaf' || !item.isPersonal
 )
-const PERSONAL_RECURRING_ITEMS = RECURRING_ITEMS.filter(item =>
-  item.kind === 'group' && item.isPersonal
+const PERSONAL_RECURRING_ITEMS = RECURRING_ITEMS.filter((item): item is RecurringGroup =>
+  item.kind === 'group' && !!item.isPersonal
 )
 
 function initDraft(rec: MonthlyExpenses | undefined): Record<string, string> {
