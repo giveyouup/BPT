@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useRef } from 'react'
 import { useData } from '../context/DataContext'
 import { computeCalendarYearStats } from '../utils/calculations'
-import { formatCurrency } from '../utils/dateUtils'
+import { formatCurrency, randomId } from '../utils/dateUtils'
 import type { ExpenseEntry, AnnualExpenses } from '../types'
 
 // ─── Category definitions ──────────────────────────────────────────────────────
@@ -182,7 +182,7 @@ export default function Compensation() {
     const amt = parseFloat(bizAmt)
     if (!bizCat.trim() || isNaN(amt) || amt === 0) return
     const record = getOrCreate()
-    const entry: ExpenseEntry = { id: crypto.randomUUID(), category: bizCat.trim(), amount: amt, note: bizNote.trim() || undefined }
+    const entry: ExpenseEntry = { id: randomId(), category: bizCat.trim(), amount: amt, note: bizNote.trim() || undefined }
     await saveAnnualExpenses({ ...record, entries: [...(record.entries ?? []), entry] })
     setBizCat(''); setBizAmt(''); setBizNote('')
   }
@@ -191,7 +191,7 @@ export default function Compensation() {
     const amt = parseFloat(benAmt)
     if (!benCat.trim() || isNaN(amt) || amt === 0) return
     const record = getOrCreate()
-    const entry: ExpenseEntry = { id: crypto.randomUUID(), category: benCat.trim(), amount: amt, note: benNote.trim() || undefined }
+    const entry: ExpenseEntry = { id: randomId(), category: benCat.trim(), amount: amt, note: benNote.trim() || undefined }
     await saveAnnualExpenses({ ...record, benefitsEntries: [...(record.benefitsEntries ?? []), entry] })
     setBenCat(''); setBenAmt(''); setBenNote('')
   }
@@ -200,7 +200,7 @@ export default function Compensation() {
     const amt = parseFloat(retAmt)
     if (!retCat.trim() || isNaN(amt) || amt === 0) return
     const record = getOrCreate()
-    const entry: ExpenseEntry = { id: crypto.randomUUID(), category: retCat.trim(), amount: amt, note: retNote.trim() || undefined }
+    const entry: ExpenseEntry = { id: randomId(), category: retCat.trim(), amount: amt, note: retNote.trim() || undefined }
     await saveAnnualExpenses({ ...record, retirementEntries: [...(record.retirementEntries ?? []), entry] })
     setRetCat(''); setRetAmt(''); setRetNote('')
   }
