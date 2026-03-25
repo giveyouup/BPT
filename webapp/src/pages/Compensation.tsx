@@ -283,7 +283,7 @@ export default function Compensation() {
   const businessExpenses = recurringSum(BUSINESS_KEYS) + (currentRecord?.entries?.reduce((s, e) => s + e.amount, 0) ?? 0)
   const benefitsTotal    = recurringSum(BENEFITS_KEYS) + (currentRecord?.benefitsEntries?.reduce((s, e) => s + e.amount, 0) ?? 0)
   const retirementTotal  = recurringSum(RETIREMENT_KEYS) + (currentRecord?.retirementEntries?.reduce((s, e) => s + e.amount, 0) ?? 0)
-  const netIncome        = annualGross - businessExpenses
+  const netIncome        = annualGross - businessExpenses - benefitsTotal - retirementTotal
   const totalComp        = netIncome + benefitsTotal + retirementTotal
   const overheadPct      = annualGross > 0 ? businessExpenses / annualGross * 100 : 0
 
