@@ -217,6 +217,29 @@ export default function Audits() {
     [allDays, holidaySet]
   )
 
+  // Section 5: weekdays with no calendar entry at all (no shift, no production)
+  const unscheduledWeekdays = useMemo(() => {
+    const today = new Date()
+    const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
+    const cutoff = selectedYear < today.getFullYear() ? `${selectedYear}-12-31` : todayStr
+    const allDayDates = new Set(allDays.map(d => d.date))
+    const result: string[] = []
+    for (let m = 0; m < 12; m++) {
+      for (let day = 1; day <= 31; day++) {
+        const d = new Date(selectedYear, m, day)
+        if (d.getMonth() !== m) break
+        const iso = `${selectedYear}-${String(m + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+        if (iso > cutoff) continue
+        const dow = d.getDay()
+        if (dow === 0 || dow === 6) continue
+        if (holidaySet.has(iso)) continue
+        if (allDayDates.has(iso)) continue
+        result.push(iso)
+      }
+    }
+    return result
+  }, [selectedYear, allDays, holidaySet])
+
   const hasData = yearStats.length > 0
 
   return (
@@ -667,6 +690,61 @@ export default function Audits() {
                     </tfoot>
                   </table>
                 </div>
+                </div>
+              </div>
+            )}
+          </section>
+
+          {/* ── Section 5: Weekdays with no calendar entry ───────────────────── */}
+          <section>
+            <div className="flex items-center gap-3 mb-1">
+              <h3 className="text-sm font-semibold text-gray-300 uppercase tracking-wider">
+                Unscheduled Weekdays
+              </h3>
+              <SectionBadge count={unscheduledWeekdays.length} variant="warn" />
+            </div>
+            <p className="text-xs text-gray-600 mb-4">
+              Weekdays (Mon–Fri) with no shift assignment and no production data. Holidays are excluded.
+              These may indicate missing schedule uploads or gaps in coverage.
+            </p>
+
+            {unscheduledWeekdays.length === 0 ? (
+              <EmptyCheck message={`All weekdays have calendar entries for ${selectedYear}`} />
+            ) : (
+              <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
+                <div className="relative">
+                  <div className="pointer-events-none absolute inset-y-0 right-0 w-8 bg-gradient-to-l from-gray-900 to-transparent sm:hidden z-10" />
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-gray-800">
+                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider whitespace-nowrap">Date</th>
+                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Day</th>
+                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Month</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {unscheduledWeekdays.map(date => (
+                          <tr
+                            key={date}
+                            className="border-b border-gray-800 last:border-0 hover:bg-gray-800/40 cursor-pointer"
+                            onClick={() => goToDashboard(date)}
+                          >
+                            <td className="px-4 py-3 text-gray-200 whitespace-nowrap hover:text-indigo-400 transition-colors">{formatDateFull(date)}</td>
+                            <td className="px-4 py-3 text-gray-500 whitespace-nowrap">{getDow(date)}</td>
+                            <td className="px-4 py-3 text-gray-500 whitespace-nowrap">{getMonthName(parseInt(date.slice(5, 7)))}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                      <tfoot>
+                        <tr className="bg-gray-800/60 border-t border-gray-700">
+                          <td colSpan={3} className="px-4 py-2.5 text-xs font-semibold text-gray-500">
+                            {unscheduledWeekdays.length} day{unscheduledWeekdays.length !== 1 ? 's' : ''}
+                          </td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
                 </div>
               </div>
             )}

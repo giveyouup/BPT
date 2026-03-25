@@ -203,7 +203,9 @@ function EndTimeTooltip({ active, payload }: { active?: boolean; payload?: Array
 
 export default function AnnualSummary() {
   const [hoursView, setHoursView] = useState<'month' | 'week'>('month')
-  const [expandedShift, setExpandedShift] = useState<string | null>(null)
+  const [expandedShift, setExpandedShift] = useState<string | null>(
+    (window.history.state?.usr as { selectedBucketIdx?: number; expandedShift?: string } | null)?.expandedShift ?? null
+  )
   const [shiftTab, setShiftTab] = useState<'hours' | 'dollars'>('hours')
   const [shiftSort, setShiftSort] = useState<{ col: string; dir: 1 | -1 }>({ col: 'shift', dir: 1 })
   const [whatIfMappingId, setWhatIfMappingId] = useState<string | null>(null)
@@ -211,7 +213,9 @@ export default function AnnualSummary() {
   const [showWhatIfPopover, setShowWhatIfPopover] = useState(false)
   const [showWeeksPopover, setShowWeeksPopover] = useState(false)
   const [showExcludedPopover, setShowExcludedPopover] = useState(false)
-  const [selectedBucketIdx, setSelectedBucketIdx] = useState<number | null>(null)
+  const [selectedBucketIdx, setSelectedBucketIdx] = useState<number | null>(
+    (window.history.state?.usr as { selectedBucketIdx?: number } | null)?.selectedBucketIdx ?? null
+  )
   const [showYoY, setShowYoY] = useState(false)
   const popoverRef = useRef<HTMLDivElement>(null)
   const weeksPopoverRef = useRef<HTMLDivElement>(null)
@@ -265,6 +269,16 @@ export default function AnnualSummary() {
     () => year ? computeCalendarYearStats(year, reports, allSchedules, settings, allMappings) : [],
     [year, reports, allSchedules, settings, allMappings]
   )
+
+  // Restore scroll position when returning via browser back — wait for content to render
+  const scrollRestored = useRef(false)
+  useEffect(() => {
+    if (scrollRestored.current || yearStats.length === 0) return
+    const savedScrollY = (window.history.state?.usr as { scrollY?: number } | null)?.scrollY
+    if (savedScrollY == null) return
+    scrollRestored.current = true
+    requestAnimationFrame(() => requestAnimationFrame(() => window.scrollTo({ top: savedScrollY, behavior: 'instant' })))
+  }, [yearStats])
 
   // ── YoY stats for all years (for comparison view) ─────────────────────────
   const allYearStats = useMemo(
@@ -531,6 +545,8 @@ export default function AnnualSummary() {
           const match = day.lastEndTime.match(/^(\d{1,2}):(\d{2})/)
           if (!match) { excludedDays.push({ date: day.date, shiftTypes: activeShifts }); continue }
           endMins = parseInt(match[1]) * 60 + parseInt(match[2])
+          // Times after midnight (e.g. "00:30") parse to small values; treat as next-day continuation
+          if (endMins < dayStartMins) endMins += 24 * 60
         } else {
           // Fixed-shift-only day: estimate end as clinicalDayStart + longest shift
           const maxHours = Math.max(...activeShifts.map((s) => {
@@ -620,8 +636,8 @@ export default function AnnualSummary() {
       <div className="flex items-center gap-4 mb-4 flex-wrap">
         <h2 className="text-2xl font-bold text-gray-100">{year} Annual Summary</h2>
         {years.length > 1 && (
-          <div className="flex gap-2 ml-4">
-            {years.map((y) => (
+          <div className="flex items-center gap-2 ml-4">
+            {years.slice(0, 3).map((y) => (
               <button key={y} onClick={() => { navigate(`/annual/${y}`); setWhatIfMappingId(null); setWhatIfUnitRate(null); setShowYoY(false); setSelectedBucketIdx(null) }}
                 className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
                   y === year ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-gray-200'
@@ -629,6 +645,20 @@ export default function AnnualSummary() {
                 {y}
               </button>
             ))}
+            {years.length > 3 && (
+              <select
+                value={years.slice(3).includes(year!) ? year : ''}
+                onChange={e => { navigate(`/annual/${e.target.value}`); setWhatIfMappingId(null); setWhatIfUnitRate(null); setShowYoY(false); setSelectedBucketIdx(null) }}
+                className={`bg-gray-900 border rounded-md px-2 py-1 text-sm font-medium focus:outline-none focus:ring-1 focus:ring-indigo-500 ${
+                  years.slice(3).includes(year!)
+                    ? 'border-indigo-600 text-white'
+                    : 'border-gray-700 text-gray-400 hover:border-gray-600'
+                }`}
+              >
+                {!years.slice(3).includes(year!) && <option value="" disabled>More…</option>}
+                {years.slice(3).map(y => <option key={y} value={y}>{y}</option>)}
+              </select>
+            )}
           </div>
         )}
         {years.length > 1 && (
@@ -1122,7 +1152,13 @@ export default function AnnualSummary() {
                   </div>
                   <div className="divide-y divide-gray-800 max-h-72 overflow-y-auto">
                     {allDays.map(({ stats: d, endTime, isFixed }) => (
-                      <div key={d.date} className="flex items-center gap-3 px-4 py-2.5 hover:bg-gray-800/50 transition-colors">
+                      <div key={d.date} className="flex items-center gap-3 px-4 py-2.5 hover:bg-gray-800/50 transition-colors cursor-pointer" onClick={() => {
+                          window.history.replaceState(
+                            { ...window.history.state, usr: { selectedBucketIdx, expandedShift, scrollY: window.scrollY } },
+                            ''
+                          )
+                          navigate('/', { state: { date: d.date } })
+                        }}>
                         <span className="text-xs text-gray-400 w-28 shrink-0">{formatDateFull(d.date)}</span>
                         <div className="flex flex-wrap gap-1 flex-1">
                           {d.shiftTypes.filter(s => !isOffDayShift(s)).map(s => (
@@ -1341,7 +1377,13 @@ export default function AnnualSummary() {
                                     </thead>
                                     <tbody>
                                       {dayEntries.map(({ day, hours, pay }) => (
-                                        <tr key={day.date} className="border-t border-gray-800/50">
+                                        <tr key={day.date} className="border-t border-gray-800/50 hover:bg-gray-800/40 cursor-pointer transition-colors" onClick={() => {
+                                          window.history.replaceState(
+                                            { ...window.history.state, usr: { selectedBucketIdx, expandedShift, scrollY: window.scrollY } },
+                                            ''
+                                          )
+                                          navigate('/', { state: { date: day.date } })
+                                        }}>
                                           <td className="py-1 pr-6 text-gray-300">{formatDateFull(day.date)}</td>
                                           <td className="py-1 pr-6 text-gray-500">{day.caseCount > 0 ? day.caseCount : '—'}</td>
                                           <td className="py-1 pr-6 font-mono text-gray-500">{day.firstStartTime ?? '—'}</td>

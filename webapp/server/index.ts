@@ -8,6 +8,7 @@ import {
   getSettings, upsertSettings,
   getStipendMappings, upsertStipendMapping, deleteStipendMapping,
   getCptRanges, upsertCptRange, deleteCptRange as deleteCptRangeDb, resetCptRanges,
+  getMonthlyExpenses, upsertMonthlyExpenses, deleteMonthlyExpenses,
   exportDatabase, importDatabase, runMaintenance,
 } from './db'
 
@@ -130,6 +131,23 @@ app.delete('/api/cpt-ranges/:id', (req, res) => {
 app.post('/api/cpt-ranges/reset', (_req, res) => {
   resetCptRanges()
   res.json(getCptRanges())
+})
+
+// ─── Monthly Expenses ─────────────────────────────────────────────────────────
+
+app.get('/api/expenses', (req, res) => {
+  const physicianId = req.query.physicianId as string | undefined
+  res.json(getMonthlyExpenses(physicianId))
+})
+
+app.put('/api/expenses/:id', (req, res) => {
+  upsertMonthlyExpenses(req.body)
+  res.json({ ok: true })
+})
+
+app.delete('/api/expenses/:id', (req, res) => {
+  deleteMonthlyExpenses(req.params.id)
+  res.json({ ok: true })
 })
 
 // ─── DB Maintenance ───────────────────────────────────────────────────────────
