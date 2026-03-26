@@ -1,61 +1,64 @@
 import { useState, useMemo, useEffect, useRef } from 'react'
+import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from 'recharts'
 import { useData } from '../context/DataContext'
 import { computeCalendarYearStats } from '../utils/calculations'
-import { getMonthName, formatCurrency } from '../utils/dateUtils'
-import type { ExpenseEntry, MonthlyExpenses } from '../types'
+import { formatCurrency, randomId } from '../utils/dateUtils'
+import type { ExpenseEntry, AnnualExpenses } from '../types'
 
-// ─── Recurring category definitions ───────────────────────────────────────────
+// ─── Category definitions ──────────────────────────────────────────────────────
 
-type RecurringLeaf = { kind: 'leaf'; key: string; label: string; default: number }
-type RecurringGroup = { kind: 'group'; label: string; isPersonal?: boolean; children: RecurringLeaf[] }
-type RecurringItem = RecurringLeaf | RecurringGroup
+type Leaf = { key: string; label: string }
+type BenefitsLeaf = Leaf & { subGroup?: string }
 
-const RECURRING_ITEMS: RecurringItem[] = [
-  { kind: 'leaf', key: 'operatingExpense',   label: 'Operating Expense',    default: 600 },
-  { kind: 'leaf', key: 'developmentReserve', label: 'Development Reserve',  default: 0 },
-  { kind: 'leaf', key: 'operatingFee',       label: 'Operating Fee',        default: 0 },
-  { kind: 'leaf', key: 'payrollTaxes',       label: 'Payroll Taxes',        default: 0 },
-  { kind: 'leaf', key: 'liabilityInsurance', label: 'Liability Insurance',  default: 0 },
-  {
-    kind: 'group', label: 'Health Insurance', isPersonal: true, children: [
-      { kind: 'leaf', key: 'healthDental',  label: 'Dental',  default: 0 },
-      { kind: 'leaf', key: 'healthMedical', label: 'Medical', default: 0 },
-      { kind: 'leaf', key: 'healthVision',  label: 'Vision',  default: 0 },
-    ],
-  },
+const BUSINESS_LEAVES: Leaf[] = [
+  { key: 'operatingFee',       label: 'Operating Fee (7%)'    },
+  { key: 'developmentReserve', label: 'Development Fee (10%)' },
+  { key: 'operatingExpense',   label: 'Operating Expense'     },
+  { key: 'payrollTaxes',       label: 'Payroll Taxes'         },
+  { key: 'liabilityInsurance', label: 'Liability Insurance'   },
 ]
 
-// Flat list of all leaf keys and their defaults
-const RECURRING_LEAVES: RecurringLeaf[] = RECURRING_ITEMS.flatMap(item =>
-  item.kind === 'leaf' ? [item] : item.children
-)
+const BENEFITS_LEAVES: BenefitsLeaf[] = [
+  { key: 'healthDental',   label: 'Dental',           subGroup: 'Health Insurance' },
+  { key: 'healthMedical',  label: 'Medical',          subGroup: 'Health Insurance' },
+  { key: 'healthVision',   label: 'Vision',           subGroup: 'Health Insurance' },
+  { key: 'healthBenicomp', label: 'Benicomp',         subGroup: 'Health Insurance' },
+  { key: 'licensesDues',  label: 'Licenses & Dues'  },
+  { key: 'cme',           label: 'CME'              },
+  { key: 'phoneInternet', label: 'Phone / Internet' },
+]
 
-const BUSINESS_RECURRING_KEYS = new Set(
-  RECURRING_ITEMS.flatMap(item =>
-    item.kind === 'leaf' ? [item.key]
-    : item.isPersonal ? []
-    : item.children.map(c => c.key)
-  )
-)
+const RETIREMENT_LEAVES: Leaf[] = [
+  { key: 'profitSharing', label: 'Profit Sharing' },
+  { key: 'cashBalance',   label: 'Cash Balance'   },
+]
 
-const PERSONAL_RECURRING_KEYS = new Set(
-  RECURRING_ITEMS.flatMap(item =>
-    item.kind === 'group' && item.isPersonal ? item.children.map(c => c.key) : []
-  )
-)
+const BUSINESS_KEYS    = new Set(BUSINESS_LEAVES.map(l => l.key))
+const BENEFITS_KEYS    = new Set(BENEFITS_LEAVES.map(l => l.key))
+const RETIREMENT_KEYS  = new Set(RETIREMENT_LEAVES.map(l => l.key))
+const HEALTHCARE_KEYS  = new Set(['healthDental', 'healthMedical', 'healthVision', 'healthBenicomp'])
+const ACTIVE_KEYS      = new Set([...BUSINESS_KEYS, ...BENEFITS_KEYS, ...RETIREMENT_KEYS])
+const ALL_LEAVES       = [...BUSINESS_LEAVES, ...BENEFITS_LEAVES, ...RETIREMENT_LEAVES]
 
-const BUSINESS_RECURRING_ITEMS = RECURRING_ITEMS.filter(item =>
-  item.kind === 'leaf' || !item.isPersonal
-)
-const PERSONAL_RECURRING_ITEMS = RECURRING_ITEMS.filter((item): item is RecurringGroup =>
-  item.kind === 'group' && !!item.isPersonal
-)
+type Section = 'business' | 'benefits' | 'retirement' // used by handleDeleteEntry
 
-function initDraft(rec: MonthlyExpenses | undefined): Record<string, string> {
+function initDraft(rec: AnnualExpenses | undefined, annualGross: number): Record<string, string> {
   const draft: Record<string, string> = {}
-  for (const leaf of RECURRING_LEAVES) {
+  const savedFee = rec?.recurring?.['operatingFee']
+  const operatingFeeAmt = savedFee !== undefined ? savedFee : Math.round(annualGross * 0.07)
+  const savedDev = rec?.recurring?.['developmentReserve']
+  const devAmt = savedDev !== undefined ? savedDev : Math.round((annualGross - operatingFeeAmt) * 0.10)
+  for (const leaf of ALL_LEAVES) {
     const saved = rec?.recurring?.[leaf.key]
-    draft[leaf.key] = saved ? String(saved) : (leaf.default ? String(leaf.default) : '')
+    if (saved !== undefined) {
+      draft[leaf.key] = String(saved)
+    } else if (leaf.key === 'operatingFee') {
+      draft[leaf.key] = annualGross > 0 ? String(operatingFeeAmt) : ''
+    } else if (leaf.key === 'developmentReserve') {
+      draft[leaf.key] = annualGross > 0 ? String(devAmt) : ''
+    } else {
+      draft[leaf.key] = ''
+    }
   }
   return draft
 }
@@ -64,23 +67,65 @@ function formatPct(pct: number): string {
   return `${pct.toFixed(1)}%`
 }
 
-// ─── Amount input ──────────────────────────────────────────────────────────────
+// ─── Sub-components ────────────────────────────────────────────────────────────
 
-function AmountInput({
-  value, onChange, onBlur,
-}: { value: string; onChange: (v: string) => void; onBlur: () => void }) {
+function AmountInput({ value, onChange, onBlur }: {
+  value: string; onChange: (v: string) => void; onBlur: () => void
+}) {
   return (
-    <div className="relative w-28">
+    <div className="relative w-36">
       <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-gray-600">$</span>
       <input
-        type="number"
-        step="0.01"
-        value={value}
+        type="number" step="1" value={value} placeholder="0"
         onChange={e => onChange(e.target.value)}
         onBlur={onBlur}
-        placeholder="0"
-        className="w-full bg-gray-900 border border-gray-700 rounded pl-5 pr-2 py-1 text-xs text-right text-gray-200 placeholder-gray-700 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+        className="w-full bg-gray-800 border border-gray-700 rounded pl-5 pr-2 py-1.5 text-sm text-right text-gray-200 placeholder-gray-700 focus:outline-none focus:ring-1 focus:ring-indigo-500"
       />
+    </div>
+  )
+}
+
+function EntryList({ entries, onDelete }: { entries: ExpenseEntry[]; onDelete: (id: string) => void }) {
+  const [confirmId, setConfirmId] = useState<string | null>(null)
+  if (entries.length === 0) return null
+  return (
+    <div className="space-y-1.5 mb-3">
+      {entries.map(entry => (
+        <div key={entry.id} className="flex items-center gap-3">
+          <span className="text-sm text-gray-400 flex-1">{entry.category}</span>
+          {entry.note && <span className="text-xs text-gray-600 truncate max-w-[160px]">{entry.note}</span>}
+          <span className="text-sm font-semibold text-gray-300 tabular-nums">{formatCurrency(entry.amount)}</span>
+          <div className="relative">
+            <button
+              onClick={() => setConfirmId(entry.id)}
+              className="text-gray-600 hover:text-red-400 transition-colors"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+            {confirmId === entry.id && (
+              <div className="absolute right-0 top-6 z-20 bg-gray-950 border border-gray-700 rounded-lg shadow-xl p-3 w-44">
+                <p className="text-xs text-gray-300 mb-2">Delete this entry?</p>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => { onDelete(entry.id); setConfirmId(null) }}
+                    className="flex-1 px-2 py-1 bg-red-600 hover:bg-red-500 text-white text-xs rounded transition-colors font-medium"
+                  >
+                    Delete
+                  </button>
+                  <button
+                    onClick={() => setConfirmId(null)}
+                    className="flex-1 px-2 py-1 bg-gray-800 hover:bg-gray-700 text-gray-300 text-xs rounded transition-colors"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      ))}
     </div>
   )
 }
@@ -88,426 +133,458 @@ function AmountInput({
 // ─── Main component ────────────────────────────────────────────────────────────
 
 export default function Compensation() {
-  const { reports, schedules, settings, stipendMappings, monthlyExpenses, saveMonthlyExpenses, deleteMonthlyExpenses } = useData()
+  const { reports, schedules, settings, stipendMappings, annualExpenses, saveAnnualExpenses, deleteAnnualExpenses } = useData()
 
   const now = new Date()
   const currentYear = now.getFullYear()
-  const currentMonth = now.getMonth() + 1
 
   const years = useMemo(() => {
     const s = new Set<number>([currentYear])
     for (const r of reports) s.add(r.year)
-    for (const e of monthlyExpenses) s.add(e.year)
+    for (const e of annualExpenses) s.add(e.year)
     return [...s].sort((a, b) => b - a)
-  }, [reports, monthlyExpenses, currentYear])
+  }, [reports, annualExpenses, currentYear])
 
   const [selectedYear, setSelectedYear] = useState<number>(years[0] ?? currentYear)
-  const [expandedMonth, setExpandedMonth] = useState<number | null>(null)
-  const [recurringDraft, setRecurringDraft] = useState<Record<string, string>>({})
-  const draftInitializedForMonth = useRef<number | null>(null)
+  const [draft, setDraft] = useState<Record<string, string>>({})
+  const draftKey = useRef<string>('')
+  const [pieDrill, setPieDrill] = useState<'benefits' | 'retirement' | null>(null)
 
-  // Free-form entry state
-  const [newCategory, setNewCategory] = useState('')
-  const [newAmount, setNewAmount] = useState('')
-  const [newNote, setNewNote] = useState('')
+  const [bizCat, setBizCat] = useState(''); const [bizAmt, setBizAmt] = useState(''); const [bizNote, setBizNote] = useState('')
+  const [benCat, setBenCat] = useState(''); const [benAmt, setBenAmt] = useState(''); const [benNote, setBenNote] = useState('')
+  const [retCat, setRetCat] = useState(''); const [retAmt, setRetAmt] = useState(''); const [retNote, setRetNote] = useState('')
 
   const yearStats = useMemo(
     () => computeCalendarYearStats(selectedYear, reports, schedules, settings, stipendMappings),
     [selectedYear, reports, schedules, settings, stipendMappings]
   )
 
-  const grossByMonth = useMemo(() => {
-    const m = new Map<number, number>()
-    for (const s of yearStats) m.set(s.month, s.totalCompensation)
-    return m
-  }, [yearStats])
+  const annualGross = useMemo(
+    () => yearStats.reduce((s, m) => s + m.totalCompensation, 0),
+    [yearStats]
+  )
 
-  const expensesByMonth = useMemo(() => {
-    const m = new Map<number, MonthlyExpenses>()
-    for (const e of monthlyExpenses) {
-      if (e.year === selectedYear) m.set(e.month, e)
-    }
-    return m
-  }, [monthlyExpenses, selectedYear])
+  const currentRecord = useMemo(
+    () => annualExpenses.find(e => e.year === selectedYear),
+    [annualExpenses, selectedYear]
+  )
 
-  // Initialize recurring draft only when the expanded month changes
   useEffect(() => {
-    if (expandedMonth === draftInitializedForMonth.current) return
-    draftInitializedForMonth.current = expandedMonth
-    if (expandedMonth === null) { setRecurringDraft({}); return }
-    setRecurringDraft(initDraft(expensesByMonth.get(expandedMonth)))
-  }, [expandedMonth]) // eslint-disable-line react-hooks/exhaustive-deps
+    // Re-initialize the draft when:
+    //   (a) the year changes, OR
+    //   (b) gross data first becomes available for a year that had no saved record
+    // Do NOT re-initialize when currentRecord changes (e.g. user saves an entry mid-edit).
+    const hasData = annualGross > 0 || !!currentRecord
+    const key = `${selectedYear}:${hasData}`
+    if (key === draftKey.current) return
+    // Don't downgrade from a richer key — keeps draft stable if data briefly disappears
+    if (!hasData && draftKey.current === `${selectedYear}:true`) return
+    draftKey.current = key
+    setDraft(initDraft(currentRecord, annualGross))
+  }, [selectedYear, currentRecord, annualGross])
 
-  const monthsToShow = selectedYear === currentYear
-    ? Array.from({ length: currentMonth }, (_, i) => i + 1)
-    : Array.from({ length: 12 }, (_, i) => i + 1)
-
-  function getOrCreateRecord(month: number): MonthlyExpenses {
-    const id = `${selectedYear}-${String(month).padStart(2, '0')}`
-    return expensesByMonth.get(month) ?? { id, year: selectedYear, month, recurring: {}, entries: [] }
+  function getOrCreate(): AnnualExpenses {
+    return currentRecord ?? {
+      id: String(selectedYear), year: selectedYear,
+      recurring: {}, entries: [], benefitsEntries: [], retirementEntries: [],
+    }
   }
 
-  const ACTIVE_RECURRING_KEYS = new Set(RECURRING_LEAVES.map(l => l.key))
-
-  function businessRecurringTotal(rec: MonthlyExpenses | undefined): number {
-    if (!rec?.recurring) return 0
-    return Object.entries(rec.recurring)
-      .filter(([k]) => BUSINESS_RECURRING_KEYS.has(k))
-      .reduce((s, [, v]) => s + v, 0)
+  function hasAnything(rec: AnnualExpenses): boolean {
+    return (
+      Object.values(rec.recurring ?? {}).some(v => v !== 0) ||
+      (rec.entries?.length ?? 0) > 0 ||
+      (rec.benefitsEntries?.length ?? 0) > 0 ||
+      (rec.retirementEntries?.length ?? 0) > 0
+    )
   }
 
-  function personalDeductionsTotal(rec: MonthlyExpenses | undefined): number {
-    if (!rec?.recurring) return 0
-    return Object.entries(rec.recurring)
-      .filter(([k]) => PERSONAL_RECURRING_KEYS.has(k))
-      .reduce((s, [, v]) => s + v, 0)
-  }
-
-  function entriesTotal(rec: MonthlyExpenses | undefined): number {
-    return rec?.entries.reduce((s, e) => s + e.amount, 0) ?? 0
-  }
-
-  function businessMonthTotal(month: number): number {
-    const rec = expensesByMonth.get(month)
-    return businessRecurringTotal(rec) + entriesTotal(rec)
-  }
-
-  function personalMonthTotal(month: number): number {
-    const rec = expensesByMonth.get(month)
-    return personalDeductionsTotal(rec)
-  }
-
-  // Year totals
-  const yearGross = monthsToShow.reduce((s, m) => s + (grossByMonth.get(m) ?? 0), 0)
-  const yearBusinessExpenses = monthsToShow.reduce((s, m) => s + businessMonthTotal(m), 0)
-  const yearPersonalDeductions = monthsToShow.reduce((s, m) => s + personalMonthTotal(m), 0)
-  const yearNet = yearGross - yearBusinessExpenses
-  const yearTotalComp = yearNet + yearPersonalDeductions
-  const yearOverheadPct = yearGross > 0 ? yearBusinessExpenses / yearGross * 100 : 0
-
-  // Save recurring field on blur
-  async function handleRecurringBlur(month: number, key: string) {
-    const amount = parseFloat(recurringDraft[key] ?? '') || 0
-    const record = getOrCreateRecord(month)
-    // Merge new value and strip any legacy keys no longer in the active set
+  async function handleBlur(key: string) {
+    const amount = parseFloat(draft[key] ?? '') || 0
+    const record = getOrCreate()
     const merged = { ...(record.recurring ?? {}), [key]: amount }
-    const updatedRecurring = Object.fromEntries(Object.entries(merged).filter(([k]) => ACTIVE_RECURRING_KEYS.has(k)))
+    const updatedRecurring = Object.fromEntries(Object.entries(merged).filter(([k]) => ACTIVE_KEYS.has(k)))
     const updated = { ...record, recurring: updatedRecurring }
-    const hasAnything = Object.values(updatedRecurring).some(v => v !== 0) || updated.entries.length > 0
-    if (!hasAnything && expensesByMonth.has(month)) {
-      await deleteMonthlyExpenses(updated.id)
-    } else if (hasAnything) {
-      await saveMonthlyExpenses(updated)
+    if (!hasAnything(updated) && currentRecord) {
+      await deleteAnnualExpenses(updated.id)
+    } else if (hasAnything(updated)) {
+      await saveAnnualExpenses(updated)
     }
   }
 
-  async function handleAddEntry(month: number) {
-    const amt = parseFloat(newAmount)
-    if (!newCategory.trim() || isNaN(amt) || amt === 0) return
-    const record = getOrCreateRecord(month)
-    const entry: ExpenseEntry = {
-      id: crypto.randomUUID(),
-      category: newCategory.trim(),
-      amount: amt,
-      note: newNote.trim() || undefined,
+  async function handleAddBiz() {
+    const amt = parseFloat(bizAmt)
+    if (!bizCat.trim() || isNaN(amt) || amt === 0) return
+    const record = getOrCreate()
+    const entry: ExpenseEntry = { id: randomId(), category: bizCat.trim(), amount: amt, note: bizNote.trim() || undefined }
+    await saveAnnualExpenses({ ...record, entries: [...(record.entries ?? []), entry] })
+    setBizCat(''); setBizAmt(''); setBizNote('')
+  }
+
+  async function handleAddBen() {
+    const amt = parseFloat(benAmt)
+    if (!benCat.trim() || isNaN(amt) || amt === 0) return
+    const record = getOrCreate()
+    const entry: ExpenseEntry = { id: randomId(), category: benCat.trim(), amount: amt, note: benNote.trim() || undefined }
+    await saveAnnualExpenses({ ...record, benefitsEntries: [...(record.benefitsEntries ?? []), entry] })
+    setBenCat(''); setBenAmt(''); setBenNote('')
+  }
+
+  async function handleAddRet() {
+    const amt = parseFloat(retAmt)
+    if (!retCat.trim() || isNaN(amt) || amt === 0) return
+    const record = getOrCreate()
+    const entry: ExpenseEntry = { id: randomId(), category: retCat.trim(), amount: amt, note: retNote.trim() || undefined }
+    await saveAnnualExpenses({ ...record, retirementEntries: [...(record.retirementEntries ?? []), entry] })
+    setRetCat(''); setRetAmt(''); setRetNote('')
+  }
+
+  async function handleDeleteEntry(section: Section, entryId: string) {
+    const record = getOrCreate()
+    let updated: AnnualExpenses
+    if (section === 'business') {
+      updated = { ...record, entries: (record.entries ?? []).filter(e => e.id !== entryId) }
+    } else if (section === 'benefits') {
+      updated = { ...record, benefitsEntries: (record.benefitsEntries ?? []).filter(e => e.id !== entryId) }
+    } else {
+      updated = { ...record, retirementEntries: (record.retirementEntries ?? []).filter(e => e.id !== entryId) }
     }
-    await saveMonthlyExpenses({ ...record, entries: [...record.entries, entry] })
-    setNewCategory(''); setNewAmount(''); setNewNote('')
+    if (!hasAnything(updated)) await deleteAnnualExpenses(updated.id)
+    else await saveAnnualExpenses(updated)
   }
 
-  async function handleDeleteEntry(month: number, entryId: string) {
-    const record = getOrCreateRecord(month)
-    const updated = { ...record, entries: record.entries.filter(e => e.id !== entryId) }
-    const hasAnything = Object.values(updated.recurring ?? {}).some(v => v !== 0) || updated.entries.length > 0
-    if (!hasAnything) await deleteMonthlyExpenses(updated.id)
-    else await saveMonthlyExpenses(updated)
+  // ── Derived totals ────────────────────────────────────────────────────────────
+
+  function recurringSum(keys: Set<string>): number {
+    if (!currentRecord?.recurring) return 0
+    return Object.entries(currentRecord.recurring)
+      .filter(([k]) => keys.has(k))
+      .reduce((s, [, v]) => s + v, 0)
   }
 
-  // ── JSX ─────────────────────────────────────────────────────────────────────
+  const businessExpenses = recurringSum(BUSINESS_KEYS) + (currentRecord?.entries?.reduce((s, e) => s + e.amount, 0) ?? 0)
+  const benefitsTotal    = recurringSum(BENEFITS_KEYS) + (currentRecord?.benefitsEntries?.reduce((s, e) => s + e.amount, 0) ?? 0)
+  const healthcareTotal  = recurringSum(HEALTHCARE_KEYS)
+  const retirementTotal  = recurringSum(RETIREMENT_KEYS) + (currentRecord?.retirementEntries?.reduce((s, e) => s + e.amount, 0) ?? 0)
+  const netIncome        = annualGross - businessExpenses - benefitsTotal - retirementTotal
+  const totalComp        = netIncome + benefitsTotal + retirementTotal
+  const overheadPct      = annualGross > 0 ? businessExpenses / annualGross * 100 : 0
+  const totalHours       = yearStats.reduce((s, m) => s + m.totalHours, 0)
+  const effectiveHourly  = totalHours > 0 ? totalComp / totalHours : 0
+
+  const rec = currentRecord?.recurring ?? {}
+
+  // ── JSX ───────────────────────────────────────────────────────────────────────
 
   return (
-    <div className="p-4 md:p-8 max-w-4xl">
+    <div className="p-4 md:p-8 max-w-3xl">
+
       {/* Header */}
       <div className="flex items-center gap-4 mb-6 flex-wrap">
         <h2 className="text-2xl font-bold text-gray-100">Compensation</h2>
-        <select
-          value={selectedYear}
-          onChange={e => { setSelectedYear(Number(e.target.value)); setExpandedMonth(null) }}
-          className="bg-gray-900 border border-gray-700 text-gray-300 text-sm rounded-md px-2 py-1 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-        >
-          {years.map(y => <option key={y} value={y}>{y}</option>)}
-        </select>
-      </div>
-
-      {/* Year summary cards */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-8">
-        {([
-          { label: 'Gross Revenue',      value: formatCurrency(yearGross),         color: 'text-emerald-400' },
-          { label: 'Business Expenses',  value: formatCurrency(yearBusinessExpenses), color: 'text-red-400' },
-          { label: 'Net Income',         value: formatCurrency(yearNet),           color: yearNet >= 0 ? 'text-indigo-400' : 'text-red-400' },
-          { label: 'Overhead',           value: formatPct(yearOverheadPct),        color: 'text-amber-400' },
-          { label: 'Total Compensation', value: formatCurrency(yearTotalComp),     color: yearTotalComp >= 0 ? 'text-violet-400' : 'text-red-400' },
-        ] as const).map(({ label, value, color }) => (
-          <div key={label} className="bg-gray-900 border border-gray-800 rounded-xl p-4">
-            <p className="text-xs text-gray-500 mb-1">{label}</p>
-            <p className={`text-lg font-bold ${color}`}>{value}</p>
-          </div>
-        ))}
-      </div>
-
-      {/* Monthly table */}
-      <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
-        <div className="px-5 py-3 border-b border-gray-800">
-          <h3 className="text-sm font-semibold text-gray-300">Monthly Breakdown</h3>
+        <div className="flex items-center gap-2 ml-2">
+          {years.slice(0, 3).map(y => (
+            <button key={y} onClick={() => setSelectedYear(y)}
+              className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
+                y === selectedYear ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-gray-200'
+              }`}>{y}</button>
+          ))}
+          {years.length > 3 && (
+            <select
+              value={years.slice(3).includes(selectedYear) ? selectedYear : ''}
+              onChange={e => setSelectedYear(Number(e.target.value))}
+              className={`bg-gray-900 border rounded-md px-2 py-1 text-sm font-medium focus:outline-none focus:ring-1 focus:ring-indigo-500 ${
+                years.slice(3).includes(selectedYear) ? 'border-indigo-600 text-white' : 'border-gray-700 text-gray-400'
+              }`}
+            >
+              {!years.slice(3).includes(selectedYear) && <option value="" disabled>More…</option>}
+              {years.slice(3).map(y => <option key={y} value={y}>{y}</option>)}
+            </select>
+          )}
         </div>
+      </div>
 
-        <div className="divide-y divide-gray-800">
-          {/* Column headers */}
-          <div className="flex items-center gap-3 px-5 py-2 bg-gray-800/30">
-            <span className="w-3.5" />
-            <span className="text-xs text-gray-600 uppercase tracking-wider w-10">Month</span>
-            <div className="flex-1 grid grid-cols-3 gap-2 text-right">
-              <span className="text-xs text-gray-600 uppercase tracking-wider">Gross</span>
-              <span className="text-xs text-gray-600 uppercase tracking-wider">Expenses</span>
-              <span className="text-xs text-gray-600 uppercase tracking-wider">Net</span>
-            </div>
-            <span className="text-xs text-gray-600 uppercase tracking-wider w-12 text-right">OH%</span>
-          </div>
-
-          {monthsToShow.map(month => {
-            const gross = grossByMonth.get(month) ?? 0
-            const rec = expensesByMonth.get(month)
-            const bizTotal = businessMonthTotal(month)
-            const personalTotal = personalMonthTotal(month)
-            const net = gross - bizTotal
-            const overheadPct = gross > 0 ? bizTotal / gross * 100 : null
-            const isExpanded = expandedMonth === month
-            const hasData = gross > 0 || bizTotal > 0 || personalTotal > 0
-
-            return (
-              <div key={month}>
-                {/* Month summary row */}
-                <div
-                  className={`flex items-center gap-3 px-5 py-3 cursor-pointer transition-colors ${
-                    isExpanded ? 'bg-indigo-950/20' : hasData ? 'hover:bg-gray-800/40' : 'opacity-40 hover:opacity-60'
-                  }`}
-                  onClick={() => setExpandedMonth(isExpanded ? null : month)}
-                >
-                  <svg className={`w-3.5 h-3.5 text-gray-600 flex-shrink-0 transition-transform ${isExpanded ? 'rotate-90' : ''}`}
-                    fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                  </svg>
-                  <span className="text-sm font-medium text-gray-300 w-10">{getMonthName(month).slice(0, 3)}</span>
-                  <div className="flex-1 grid grid-cols-3 gap-2 text-right text-sm">
-                    <span className={gross > 0 ? 'text-emerald-400' : 'text-gray-700'}>{gross > 0 ? formatCurrency(gross) : '—'}</span>
-                    <span className={bizTotal > 0 ? 'text-red-400' : 'text-gray-700'}>{bizTotal > 0 ? formatCurrency(bizTotal) : '—'}</span>
-                    <span className={hasData ? (net >= 0 ? 'text-indigo-400' : 'text-red-400') : 'text-gray-700'}>{hasData ? formatCurrency(net) : '—'}</span>
-                  </div>
-                  {overheadPct !== null
-                    ? <span className="text-xs text-amber-500 w-12 text-right">{formatPct(overheadPct)}</span>
-                    : <span className="w-12" />}
+      {/* Stat cards */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+        <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
+          <p className="text-xs text-gray-500 mb-1">Gross Revenue</p>
+          <p className="text-lg font-bold text-emerald-400">{formatCurrency(annualGross)}</p>
+        </div>
+        <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
+          <p className="text-xs text-gray-500 mb-1">Overhead</p>
+          <p className="text-lg font-bold text-amber-400">{formatPct(overheadPct)}</p>
+        </div>
+        <div className="relative bg-gray-900 border border-gray-800 rounded-xl p-4 group">
+          <p className="text-xs text-gray-500 mb-1">Business Expenses</p>
+          <p className="text-lg font-bold text-red-400">{formatCurrency(businessExpenses)}</p>
+          {businessExpenses > 0 && (
+            <div className="absolute left-0 top-full mt-1.5 z-10 hidden group-hover:block w-52 bg-gray-950 border border-gray-700 rounded-xl shadow-xl p-3 space-y-1.5">
+              {[
+                { label: 'Operating Fee',  value: rec.operatingFee       ?? 0 },
+                { label: 'Operating Exp',  value: rec.operatingExpense   ?? 0 },
+                { label: 'Liability Ins.', value: rec.liabilityInsurance ?? 0 },
+                { label: 'Payroll Taxes',  value: rec.payrollTaxes       ?? 0 },
+              ].filter(r => r.value > 0).map(({ label, value }) => (
+                <div key={label} className="flex justify-between items-center">
+                  <span className="text-xs text-gray-400">{label}</span>
+                  <span className="text-xs font-medium text-red-400 tabular-nums">{formatCurrency(value)}</span>
                 </div>
+              ))}
+            </div>
+          )}
+        </div>
+        <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
+          <p className="text-xs text-gray-500 mb-1">Effective Hourly Rate</p>
+          <p className="text-lg font-bold text-violet-400">{effectiveHourly > 0 ? formatCurrency(effectiveHourly) : '—'}</p>
+          {totalHours > 0 && (
+            <p className="text-xs text-gray-600 mt-1">{totalHours.toFixed(0)} hrs</p>
+          )}
+        </div>
+      </div>
 
-                {/* Expanded detail */}
-                {isExpanded && (
-                  <div className="bg-gray-950 border-t border-gray-800 px-5 py-4 space-y-5">
+{/* Pie chart — Total Compensation breakdown */}
+      {totalComp > 0 && (() => {
+        const freeformBen = (currentRecord?.benefitsEntries ?? []).reduce((s, e) => s + e.amount, 0)
+        const freeformRet = (currentRecord?.retirementEntries ?? []).reduce((s, e) => s + e.amount, 0)
 
-                    {/* ── Business Expenses ── */}
-                    <div>
-                      <p className="text-[10px] text-gray-600 uppercase tracking-wider mb-2">Business Expenses</p>
-                      <div className="space-y-0.5">
-                        {BUSINESS_RECURRING_ITEMS.map(item => {
-                          if (item.kind === 'leaf') {
-                            return (
-                              <div key={item.key} className="flex items-center gap-3 py-1">
-                                <span className="text-xs text-gray-400 flex-1">{item.label}</span>
-                                <AmountInput
-                                  value={recurringDraft[item.key] ?? ''}
-                                  onChange={v => setRecurringDraft(d => ({ ...d, [item.key]: v }))}
-                                  onBlur={() => handleRecurringBlur(month, item.key)}
-                                />
-                              </div>
-                            )
-                          }
-                          // Group (non-personal)
-                          const groupTotal = item.children.reduce((s, c) => {
-                            const v = parseFloat(recurringDraft[c.key] ?? '') || 0
-                            return s + v
-                          }, 0)
-                          return (
-                            <div key={item.label}>
-                              <div className="flex items-center gap-3 py-1">
-                                <span className="text-xs font-medium text-gray-400 flex-1">{item.label}</span>
-                                {groupTotal !== 0
-                                  ? <span className="text-xs text-gray-500 w-28 text-right tabular-nums">{formatCurrency(groupTotal)}</span>
-                                  : <span className="w-28" />}
-                              </div>
-                              {item.children.map(child => (
-                                <div key={child.key} className="flex items-center gap-3 py-1 pl-4">
-                                  <span className="text-xs text-gray-500 flex-1">{child.label}</span>
-                                  <AmountInput
-                                    value={recurringDraft[child.key] ?? ''}
-                                    onChange={v => setRecurringDraft(d => ({ ...d, [child.key]: v }))}
-                                    onBlur={() => handleRecurringBlur(month, child.key)}
-                                  />
-                                </div>
-                              ))}
-                            </div>
-                          )
-                        })}
-                      </div>
+        type Drill = 'benefits' | 'retirement' | null
+        const topSlices = [
+          { label: 'Net Income',  value: Math.max(netIncome, 0),        hex: '#818cf8', drill: null as Drill },
+          { label: 'Benefits',    value: Math.max(benefitsTotal, 0),    hex: '#fb923c', drill: 'benefits' as Drill },
+          { label: 'Retirement',  value: Math.max(retirementTotal, 0),  hex: '#4ade80', drill: 'retirement' as Drill },
+        ].filter(d => d.value > 0)
 
-                      {/* Additional (free-form) entries */}
-                      <div className="mt-3">
-                        <p className="text-[10px] text-gray-700 uppercase tracking-wider mb-2">Additional</p>
-                        {rec && rec.entries.length > 0 && (
-                          <div className="space-y-1 mb-3">
-                            {rec.entries.map(entry => (
-                              <div key={entry.id} className="flex items-center gap-3 py-0.5 group">
-                                <span className="text-xs text-gray-400 flex-1">{entry.category}</span>
-                                {entry.note && <span className="text-xs text-gray-600 truncate max-w-[140px]">{entry.note}</span>}
-                                <span className="text-xs font-semibold text-red-400 tabular-nums w-28 text-right">{formatCurrency(entry.amount)}</span>
-                                <button
-                                  onClick={() => handleDeleteEntry(month, entry.id)}
-                                  className="opacity-0 group-hover:opacity-100 text-gray-700 hover:text-red-400 transition-all"
-                                >
-                                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                                  </svg>
-                                </button>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                        {/* Add entry form */}
-                        <div className="flex flex-wrap items-end gap-2">
-                          <div className="flex-1 min-w-[130px]">
-                            <label className="block text-[10px] text-gray-600 mb-1 uppercase tracking-wider">Category</label>
-                            <input
-                              list="expense-categories"
-                              value={newCategory}
-                              onChange={e => setNewCategory(e.target.value)}
-                              onKeyDown={e => { if (e.key === 'Enter') handleAddEntry(month) }}
-                              placeholder="Description"
-                              className="w-full bg-gray-900 border border-gray-700 rounded px-2.5 py-1.5 text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                            />
-                            <datalist id="expense-categories">
-                              {['CME & Education', 'Medical Licensing & DEA', 'Professional Dues', 'Medical Equipment', 'Business Travel', 'Accounting & Legal', 'Office & Subscriptions', 'Other'].map(s => (
-                                <option key={s} value={s} />
-                              ))}
-                            </datalist>
-                          </div>
-                          <div className="w-28">
-                            <label className="block text-[10px] text-gray-600 mb-1 uppercase tracking-wider">Amount</label>
-                            <input
-                              type="number" step="0.01"
-                              value={newAmount}
-                              onChange={e => setNewAmount(e.target.value)}
-                              onKeyDown={e => { if (e.key === 'Enter') handleAddEntry(month) }}
-                              placeholder="0.00"
-                              className="w-full bg-gray-900 border border-gray-700 rounded px-2.5 py-1.5 text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                            />
-                          </div>
-                          <div className="flex-1 min-w-[90px]">
-                            <label className="block text-[10px] text-gray-600 mb-1 uppercase tracking-wider">Note</label>
-                            <input
-                              value={newNote}
-                              onChange={e => setNewNote(e.target.value)}
-                              onKeyDown={e => { if (e.key === 'Enter') handleAddEntry(month) }}
-                              placeholder="optional"
-                              className="w-full bg-gray-900 border border-gray-700 rounded px-2.5 py-1.5 text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                            />
-                          </div>
-                          <button
-                            onClick={() => handleAddEntry(month)}
-                            disabled={!newCategory.trim() || !newAmount}
-                            className="px-3 py-1.5 bg-indigo-600 text-white text-xs rounded-md hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors font-medium"
-                          >
-                            Add
-                          </button>
-                        </div>
-                      </div>
+        const benefitsSlices = [
+          { label: 'Health Insurance',  value: (rec.healthDental ?? 0) + (rec.healthMedical ?? 0) + (rec.healthVision ?? 0), hex: '#38bdf8' },
+          { label: 'Benicomp',          value: rec.healthBenicomp ?? 0,  hex: '#f472b6' },
+          { label: 'Licenses & Dues',   value: rec.licensesDues ?? 0,    hex: '#a78bfa' },
+          { label: 'CME',               value: rec.cme ?? 0,             hex: '#facc15' },
+          { label: 'Phone / Internet',  value: rec.phoneInternet ?? 0,   hex: '#f87171' },
+          { label: 'Other',             value: freeformBen,               hex: '#94a3b8' },
+        ].filter(d => d.value > 0)
 
-                      {/* Business subtotal */}
-                      <div className="flex items-center justify-between pt-2 mt-2 border-t border-gray-800">
-                        <span className="text-xs text-gray-600">Business expenses</span>
-                        <span className="text-xs font-semibold text-red-400 tabular-nums">
-                          {formatCurrency(bizTotal)}
-                        </span>
-                      </div>
+        const retirementSlices = [
+          { label: 'Profit Sharing',  value: rec.profitSharing ?? 0,  hex: '#4ade80' },
+          { label: 'Cash Balance',    value: rec.cashBalance ?? 0,    hex: '#fb923c' },
+          { label: 'Other',           value: freeformRet,              hex: '#94a3b8' },
+        ].filter(d => d.value > 0)
+
+        const activeSlices = pieDrill === 'benefits' ? benefitsSlices
+          : pieDrill === 'retirement' ? retirementSlices
+          : topSlices
+        const total = activeSlices.reduce((s, d) => s + d.value, 0)
+        const drillLabel: Record<NonNullable<Drill>, string> = { benefits: 'Benefits', retirement: 'Retirement' }
+        const totalLabel = pieDrill ? drillLabel[pieDrill] : 'Total Compensation'
+        const totalColor = pieDrill === 'benefits' ? 'text-sky-400' : pieDrill === 'retirement' ? 'text-teal-400' : 'text-violet-400'
+
+        return (
+          <div className="bg-gray-900 border border-gray-800 rounded-xl p-5 mb-6">
+            <div className="flex items-center gap-3 mb-4">
+              {pieDrill && (
+                <button onClick={() => setPieDrill(null)} className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-300 transition-colors">
+                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                  </svg>
+                  Overview
+                </button>
+              )}
+              <p className="text-xs text-gray-500 uppercase tracking-wider">
+                {pieDrill ? `${drillLabel[pieDrill]} Breakdown` : 'Total Compensation Breakdown'}
+              </p>
+            </div>
+            <div className="flex flex-col md:flex-row items-center md:items-start gap-4 md:gap-6">
+              <div className="w-full md:w-[180px] md:flex-shrink-0">
+                <ResponsiveContainer width="100%" height={200}>
+                  <PieChart>
+                    <Pie
+                      data={activeSlices}
+                      dataKey="value"
+                      innerRadius={60}
+                      outerRadius={90}
+                      paddingAngle={2}
+                      strokeWidth={0}
+                      onClick={(entry: { drill?: Drill }) => { if (entry.drill) setPieDrill(entry.drill) }}
+                      style={{ cursor: pieDrill ? 'default' : 'pointer' }}
+                    >
+                      {activeSlices.map(d => <Cell key={d.label} fill={d.hex} />)}
+                    </Pie>
+                    <Tooltip
+                      formatter={(value: number) => formatCurrency(value)}
+                      contentStyle={{ background: '#111827', border: '1px solid #374151', borderRadius: '8px', fontSize: '12px' }}
+                      itemStyle={{ color: '#d1d5db' }}
+                      labelStyle={{ color: '#9ca3af' }}
+                    />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+              <div className="w-full md:flex-1">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2 mb-3">
+                  {activeSlices.map(({ label, value, hex }) => (
+                    <div key={label} className="flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: hex }} />
+                      <span className="text-xs text-gray-400 flex-1 truncate">{label}</span>
+                      <span className="text-xs font-semibold text-gray-300 tabular-nums">{formatCurrency(value)}</span>
+                      <span className="text-xs text-gray-600 tabular-nums w-9 text-right">{total > 0 ? (value / total * 100).toFixed(1) : '0.0'}%</span>
                     </div>
-
-                    {/* ── Personal Deductions ── */}
-                    <div>
-                      <p className="text-[10px] text-gray-600 uppercase tracking-wider mb-2">Personal Deductions</p>
-                      <div className="space-y-0.5">
-                        {PERSONAL_RECURRING_ITEMS.map(item => {
-                          const groupTotal = item.children.reduce((s, c) => {
-                            const v = parseFloat(recurringDraft[c.key] ?? '') || 0
-                            return s + v
-                          }, 0)
-                          return (
-                            <div key={item.label}>
-                              <div className="flex items-center gap-3 py-1">
-                                <span className="text-xs font-medium text-gray-400 flex-1">{item.label}</span>
-                                {groupTotal !== 0
-                                  ? <span className="text-xs text-gray-500 w-28 text-right tabular-nums">{formatCurrency(groupTotal)}</span>
-                                  : <span className="w-28" />}
-                              </div>
-                              {item.children.map(child => (
-                                <div key={child.key} className="flex items-center gap-3 py-1 pl-4">
-                                  <span className="text-xs text-gray-500 flex-1">{child.label}</span>
-                                  <AmountInput
-                                    value={recurringDraft[child.key] ?? ''}
-                                    onChange={v => setRecurringDraft(d => ({ ...d, [child.key]: v }))}
-                                    onBlur={() => handleRecurringBlur(month, child.key)}
-                                  />
-                                </div>
-                              ))}
-                            </div>
-                          )
-                        })}
-                      </div>
-                      <div className="flex items-center justify-between pt-2 mt-2 border-t border-gray-800">
-                        <span className="text-xs text-gray-600">Personal deductions</span>
-                        <span className="text-xs font-semibold text-violet-400 tabular-nums">
-                          {formatCurrency(personalTotal)}
-                        </span>
-                      </div>
-                    </div>
-
-                    {/* ── Month summary ── */}
-                    {gross > 0 && (
-                      <div className="space-y-1 pt-2 border-t border-gray-700">
-                        <div className="flex items-center justify-between">
-                          <span className="text-xs text-gray-600">Net income</span>
-                          <span className={`text-xs font-semibold tabular-nums ${net >= 0 ? 'text-indigo-400' : 'text-red-400'}`}>{formatCurrency(net)}</span>
-                        </div>
-                        {personalTotal !== 0 && (
-                          <div className="flex items-center justify-between">
-                            <span className="text-xs text-gray-600">Total compensation</span>
-                            <span className={`text-sm font-bold tabular-nums ${(net + personalTotal) >= 0 ? 'text-violet-400' : 'text-red-400'}`}>{formatCurrency(net + personalTotal)}</span>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
+                  ))}
+                </div>
+                <div className="pt-2 border-t border-gray-800 flex items-center gap-2">
+                  <span className="w-2 h-2 flex-shrink-0" />
+                  <span className="text-xs text-gray-500 flex-1">{totalLabel}</span>
+                  <span className={`text-xs font-bold tabular-nums ${totalColor}`}>{formatCurrency(pieDrill ? total : totalComp)}</span>
+                  <span className="text-xs text-gray-600 w-9 text-right">100%</span>
+                </div>
+                {!pieDrill && benefitsTotal + retirementTotal > 0 && (
+                  <p className="text-xs text-gray-700 mt-2">Click Benefits or Retirement to drill down</p>
                 )}
               </div>
-            )
-          })}
+            </div>
+          </div>
+        )
+      })()}
+
+      {/* Expense form */}
+      <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
+        <div className="px-5 py-3 border-b border-gray-800">
+          <h3 className="text-sm font-semibold text-gray-300">{selectedYear} Expenses</h3>
         </div>
 
-        {/* YTD footer */}
-        <div className="px-5 py-3 border-t border-gray-800 bg-gray-800/40 flex items-center gap-3">
-          <span className="w-3.5" />
-          <span className="text-xs text-gray-600 w-10">YTD</span>
-          <div className="flex-1 grid grid-cols-3 gap-2 text-right text-xs font-semibold">
-            <span className="text-emerald-500">{formatCurrency(yearGross)}</span>
-            <span className="text-red-500">{formatCurrency(yearBusinessExpenses)}</span>
-            <span className={yearNet >= 0 ? 'text-indigo-400' : 'text-red-400'}>{formatCurrency(yearNet)}</span>
+        <div>
+
+          {/* ── Business Expenses ── */}
+          <div className="pl-4 pr-5 py-4 border-l-4 border-red-700">
+            <span className="inline-block text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full bg-red-950 text-red-400 mb-3">Business Expenses</span>
+            <div className="space-y-2 mb-4">
+              {BUSINESS_LEAVES.map(leaf => (
+                <div key={leaf.key} className="flex items-center justify-between gap-4">
+                  <span className="text-sm text-gray-400">{leaf.label}</span>
+                  <AmountInput
+                    value={draft[leaf.key] ?? ''}
+                    onChange={v => setDraft(d => ({ ...d, [leaf.key]: v }))}
+                    onBlur={() => handleBlur(leaf.key)}
+                  />
+                </div>
+              ))}
+            </div>
+            <EntryList entries={currentRecord?.entries ?? []} onDelete={id => handleDeleteEntry('business', id)} />
+            <div className="flex flex-wrap items-end gap-2 pt-2">
+              <div className="flex-1 min-w-[130px]">
+                <label className="block text-[10px] text-gray-600 mb-1 uppercase tracking-wider">Category</label>
+                <input list="biz-cats" value={bizCat} onChange={e => setBizCat(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') handleAddBiz() }} placeholder="Description" className="w-full bg-gray-800 border border-gray-700 rounded px-2.5 py-1.5 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-indigo-500" />
+                <datalist id="biz-cats">{['Accounting & Legal','Office & Subscriptions','Business Travel','Medical Equipment','Other'].map(s => <option key={s} value={s} />)}</datalist>
+              </div>
+              <div className="w-28">
+                <label className="block text-[10px] text-gray-600 mb-1 uppercase tracking-wider">Amount</label>
+                <input type="number" step="1" value={bizAmt} onChange={e => setBizAmt(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') handleAddBiz() }} placeholder="0" className="w-full bg-gray-800 border border-gray-700 rounded px-2.5 py-1.5 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-indigo-500" />
+              </div>
+              <div className="flex-1 min-w-[90px]">
+                <label className="block text-[10px] text-gray-600 mb-1 uppercase tracking-wider">Note</label>
+                <input value={bizNote} onChange={e => setBizNote(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') handleAddBiz() }} placeholder="optional" className="w-full bg-gray-800 border border-gray-700 rounded px-2.5 py-1.5 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-indigo-500" />
+              </div>
+              <button onClick={handleAddBiz} disabled={!bizCat.trim() || !bizAmt} className="px-3 py-1.5 bg-indigo-600 text-white text-sm rounded-md hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors font-medium">Add</button>
+            </div>
+            <div className="flex items-center justify-between pt-3 mt-3 border-t border-gray-800">
+              <span className="text-sm text-gray-500">Business Expenses Total</span>
+              <span className="text-sm font-bold text-red-400 tabular-nums">{formatCurrency(businessExpenses)}</span>
+            </div>
           </div>
-          <span className="text-xs font-semibold text-amber-500 w-12 text-right">{formatPct(yearOverheadPct)}</span>
+
+          {/* ── Benefits ── */}
+          <div className="pl-4 pr-5 py-4 border-t border-gray-800 border-l-4 border-orange-700">
+            <span className="inline-block text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full bg-orange-950 text-orange-400 mb-3">Benefits</span>
+
+            {/* Health Insurance sub-group */}
+            <div className="mb-3">
+              <p className="text-xs text-gray-600 mb-2">Health Insurance</p>
+              <div className="space-y-2 pl-3 border-l border-gray-800">
+                {BENEFITS_LEAVES.filter(l => l.subGroup).map(leaf => (
+                  <div key={leaf.key} className="flex items-center justify-between gap-4">
+                    <span className="text-sm text-gray-400">{leaf.label}</span>
+                    <AmountInput
+                      value={draft[leaf.key] ?? ''}
+                      onChange={v => setDraft(d => ({ ...d, [leaf.key]: v }))}
+                      onBlur={() => handleBlur(leaf.key)}
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Other benefits */}
+            <div className="space-y-2 mb-4">
+              {BENEFITS_LEAVES.filter(l => !l.subGroup).map(leaf => (
+                <div key={leaf.key} className="flex items-center justify-between gap-4">
+                  <span className="text-sm text-gray-400">{leaf.label}</span>
+                  <AmountInput
+                    value={draft[leaf.key] ?? ''}
+                    onChange={v => setDraft(d => ({ ...d, [leaf.key]: v }))}
+                    onBlur={() => handleBlur(leaf.key)}
+                  />
+                </div>
+              ))}
+            </div>
+
+            <EntryList entries={currentRecord?.benefitsEntries ?? []} onDelete={id => handleDeleteEntry('benefits', id)} />
+            <div className="flex flex-wrap items-end gap-2 pt-2">
+              <div className="flex-1 min-w-[130px]">
+                <label className="block text-[10px] text-gray-600 mb-1 uppercase tracking-wider">Category</label>
+                <input list="ben-cats" value={benCat} onChange={e => setBenCat(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') handleAddBen() }} placeholder="Description" className="w-full bg-gray-800 border border-gray-700 rounded px-2.5 py-1.5 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-indigo-500" />
+                <datalist id="ben-cats">{['Medical Licensing & DEA','Professional Dues','Conference Registration','Other'].map(s => <option key={s} value={s} />)}</datalist>
+              </div>
+              <div className="w-28">
+                <label className="block text-[10px] text-gray-600 mb-1 uppercase tracking-wider">Amount</label>
+                <input type="number" step="1" value={benAmt} onChange={e => setBenAmt(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') handleAddBen() }} placeholder="0" className="w-full bg-gray-800 border border-gray-700 rounded px-2.5 py-1.5 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-indigo-500" />
+              </div>
+              <div className="flex-1 min-w-[90px]">
+                <label className="block text-[10px] text-gray-600 mb-1 uppercase tracking-wider">Note</label>
+                <input value={benNote} onChange={e => setBenNote(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') handleAddBen() }} placeholder="optional" className="w-full bg-gray-800 border border-gray-700 rounded px-2.5 py-1.5 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-indigo-500" />
+              </div>
+              <button onClick={handleAddBen} disabled={!benCat.trim() || !benAmt} className="px-3 py-1.5 bg-indigo-600 text-white text-sm rounded-md hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors font-medium">Add</button>
+            </div>
+            <div className="flex items-center justify-between pt-3 mt-3 border-t border-gray-800">
+              <span className="text-sm text-gray-500">Benefits Total</span>
+              <span className="text-sm font-bold text-sky-400 tabular-nums">{formatCurrency(benefitsTotal)}</span>
+            </div>
+          </div>
+
+          {/* ── Retirement Benefits ── */}
+          <div className="pl-4 pr-5 py-4 border-t border-gray-800 border-l-4 border-green-700">
+            <span className="inline-block text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full bg-green-950 text-green-400 mb-3">Retirement Benefits</span>
+            <div className="space-y-2 mb-4">
+              {RETIREMENT_LEAVES.map(leaf => (
+                <div key={leaf.key} className="flex items-center justify-between gap-4">
+                  <span className="text-sm text-gray-400">{leaf.label}</span>
+                  <AmountInput
+                    value={draft[leaf.key] ?? ''}
+                    onChange={v => setDraft(d => ({ ...d, [leaf.key]: v }))}
+                    onBlur={() => handleBlur(leaf.key)}
+                  />
+                </div>
+              ))}
+            </div>
+            <EntryList entries={currentRecord?.retirementEntries ?? []} onDelete={id => handleDeleteEntry('retirement', id)} />
+            <div className="flex flex-wrap items-end gap-2 pt-2">
+              <div className="flex-1 min-w-[130px]">
+                <label className="block text-[10px] text-gray-600 mb-1 uppercase tracking-wider">Category</label>
+                <input list="ret-cats" value={retCat} onChange={e => setRetCat(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') handleAddRet() }} placeholder="Description" className="w-full bg-gray-800 border border-gray-700 rounded px-2.5 py-1.5 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-indigo-500" />
+                <datalist id="ret-cats">{['IRA Contribution','HSA Contribution','Other'].map(s => <option key={s} value={s} />)}</datalist>
+              </div>
+              <div className="w-28">
+                <label className="block text-[10px] text-gray-600 mb-1 uppercase tracking-wider">Amount</label>
+                <input type="number" step="1" value={retAmt} onChange={e => setRetAmt(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') handleAddRet() }} placeholder="0" className="w-full bg-gray-800 border border-gray-700 rounded px-2.5 py-1.5 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-indigo-500" />
+              </div>
+              <div className="flex-1 min-w-[90px]">
+                <label className="block text-[10px] text-gray-600 mb-1 uppercase tracking-wider">Note</label>
+                <input value={retNote} onChange={e => setRetNote(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') handleAddRet() }} placeholder="optional" className="w-full bg-gray-800 border border-gray-700 rounded px-2.5 py-1.5 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-indigo-500" />
+              </div>
+              <button onClick={handleAddRet} disabled={!retCat.trim() || !retAmt} className="px-3 py-1.5 bg-indigo-600 text-white text-sm rounded-md hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors font-medium">Add</button>
+            </div>
+            <div className="flex items-center justify-between pt-3 mt-3 border-t border-gray-800">
+              <span className="text-sm text-gray-500">Retirement Total</span>
+              <span className="text-sm font-bold text-teal-400 tabular-nums">{formatCurrency(retirementTotal)}</span>
+            </div>
+          </div>
+
         </div>
       </div>
     </div>

@@ -404,7 +404,7 @@ export function computeMonthlyStats(
   const rawUnits = lineItems.reduce((s, li) => s + li.totalDistributableUnits, 0)
   const unitCorrection = report.unitCorrection ?? 0
   const totalDistributableUnits = rawUnits + unitCorrection
-  const unitCompensation = totalDistributableUnits * unitDollarValue
+  const unitCompensation = totalDistributableUnits * (unitDollarValue ?? 0)
 
   const shiftMap = allSchedules?.length ? buildShiftMap(allSchedules) : undefined
   const holidayList = settings
@@ -653,7 +653,17 @@ export function computeCalendarMonthStats(
   const totalStipends = shiftStipends + additionalStipends
   const totalCompensation = unitCompensation + totalStipends
   const totalHours = workingDays.reduce((s, d) => s + d.hours, 0)
-  const daysWorked = workingDays.filter((d) => d.hasProduction).length
+  const daysWorked = workingDays.filter((d) => {
+    if (d.hasProduction) return true
+    // Fixed-shift day with no production counts as worked...
+    const canonicals = d.shiftTypes.map(s => resolveShiftAlias(s.toUpperCase()))
+    const hasFixed = canonicals.some(s => isFixedShift(s, settings.shiftHours))
+    if (!hasFixed) return false
+    // ...except APS on a weekend/holiday with no production (on-call coverage, nothing happened)
+    const isAPS = canonicals.some(s => s === 'APS')
+    if (isAPS && d.isCallWeekend) return false
+    return true
+  }).length
 
   const weekdayCallDays = workingDays.filter(
     (d) => d.shiftTypes.some(isCallShift) && !d.isCallWeekend

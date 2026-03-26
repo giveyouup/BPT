@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState, useMemo } from 'react'
-import type { MonthlyReport, Schedule, Settings, StipendMapping, CptRange, Physician, MonthlyExpenses } from '../types'
+import type { MonthlyReport, Schedule, Settings, StipendMapping, CptRange, Physician, MonthlyExpenses, AnnualExpenses } from '../types'
 import { api } from '../api'
 import { parseShiftSummary } from '../utils/shiftUtils'
 import { lastDayOfMonth } from '../utils/dateUtils'
@@ -56,6 +56,9 @@ interface DataContextValue {
   monthlyExpenses: MonthlyExpenses[]
   saveMonthlyExpenses: (r: MonthlyExpenses) => Promise<void>
   deleteMonthlyExpenses: (id: string) => Promise<void>
+  annualExpenses: AnnualExpenses[]
+  saveAnnualExpenses: (r: AnnualExpenses) => Promise<void>
+  deleteAnnualExpenses: (id: string) => Promise<void>
 }
 
 const DataContext = createContext<DataContextValue | null>(null)
@@ -81,6 +84,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
   const [rawStipendMappings, setRawStipendMappings] = useState<StipendMapping[]>([])
   const [cptRanges, setCptRanges] = useState<CptRange[]>([])
   const [monthlyExpenses, setMonthlyExpenses] = useState<MonthlyExpenses[]>([])
+  const [annualExpenses, setAnnualExpenses] = useState<AnnualExpenses[]>([])
 
   // One-time initialization: shared data + physicians
   useEffect(() => {
@@ -116,11 +120,13 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
       api.schedules.list(activePhysicianId),
       api.manualShifts.list(activePhysicianId),
       api.expenses.list(activePhysicianId),
-    ]).then(([rpts, scheds, manual, expenses]) => {
+      api.annualExpenses.list(activePhysicianId),
+    ]).then(([rpts, scheds, manual, expenses, annualExp]) => {
       setRawReports(rpts)
       setRawSchedules(scheds)
       setManualShifts(manual)
       setMonthlyExpenses(expenses)
+      setAnnualExpenses(annualExp)
       setLoading(false)
     }).catch((err) => {
       console.error('Failed to load physician data:', err)
@@ -303,6 +309,21 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
     setMonthlyExpenses((prev) => prev.filter((r) => r.id !== id))
   }
 
+  const saveAnnualExpenses = async (record: AnnualExpenses) => {
+    const r = { ...record, physicianId: record.physicianId ?? activePhysicianId }
+    await api.annualExpenses.upsert(r)
+    setAnnualExpenses((prev) => {
+      const idx = prev.findIndex((x) => x.id === r.id)
+      if (idx >= 0) { const next = [...prev]; next[idx] = r; return next }
+      return [...prev, r].sort((a, b) => a.id.localeCompare(b.id))
+    })
+  }
+
+  const deleteAnnualExpenses = async (id: string) => {
+    await api.annualExpenses.delete(id)
+    setAnnualExpenses((prev) => prev.filter((r) => r.id !== id))
+  }
+
   return (
     <DataContext.Provider value={{
       physicians, activePhysicianId, setActivePhysicianId, savePhysician, deletePhysician,
@@ -313,6 +334,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
       saveStipendMapping, deleteStipendMapping,
       saveCptRange, deleteCptRange, resetCptRanges,
       monthlyExpenses, saveMonthlyExpenses, deleteMonthlyExpenses,
+      annualExpenses, saveAnnualExpenses, deleteAnnualExpenses,
     }}>
       {children}
     </DataContext.Provider>

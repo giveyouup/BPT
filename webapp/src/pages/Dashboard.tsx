@@ -229,7 +229,7 @@ export default function Dashboard() {
     (selStats.year === curYear  && selStats.month === curMonth) ||
     (selStats.year === prevYear && selStats.month === prevMonth)
   )
-  const dataCutoff = monthDays.reduce((max, d) => d.hasProduction && d.date > max ? d.date : max, '')
+  const dataCutoff = monthDays.reduce((max, d) => d.hasProduction && d.date > max ? d.date : max, '0000-00-00')
   const remainingDays = monthDays.filter(
     (d) => !d.hasProduction && d.shiftTypes.some((s) => !isOffDayShift(s)) && d.date > dataCutoff
   )

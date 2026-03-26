@@ -465,7 +465,7 @@ export default function ScheduleCalendar() {
                     <div className="flex flex-wrap gap-0.5">
                       {shifts.map(st => {
                         const label = displayShift(date, st)
-                        return <span key={st} className={`text-[10px] font-mono px-1 py-0.5 rounded leading-tight ${shiftBadgeClass(label)}`}>{label}</span>
+                        return <span key={st} className={`text-[10px] font-mono px-1 py-0.5 rounded leading-tight break-all ${shiftBadgeClass(label)}`}>{label}</span>
                       })}
                     </div>
                     {isOpen && (
@@ -595,7 +595,7 @@ export default function ScheduleCalendar() {
                           <div className="flex flex-wrap gap-px">
                             {shifts.map(st => {
                               const label = displayShift(date, st)
-                              return <span key={st} className={`text-[8px] font-mono px-0.5 rounded leading-tight ${shiftBadgeClass(label)}`}>{label}</span>
+                              return <span key={st} className={`text-[8px] font-mono px-0.5 rounded leading-tight break-all ${shiftBadgeClass(label)}`}>{label}</span>
                             })}
                           </div>
                           {isOpen && (
