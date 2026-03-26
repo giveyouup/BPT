@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect, useRef } from 'react'
+import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from 'recharts'
 import { useData } from '../context/DataContext'
 import { computeCalendarYearStats } from '../utils/calculations'
 import { formatCurrency, randomId } from '../utils/dateUtils'
@@ -85,22 +86,44 @@ function AmountInput({ value, onChange, onBlur }: {
 }
 
 function EntryList({ entries, onDelete }: { entries: ExpenseEntry[]; onDelete: (id: string) => void }) {
+  const [confirmId, setConfirmId] = useState<string | null>(null)
   if (entries.length === 0) return null
   return (
     <div className="space-y-1.5 mb-3">
       {entries.map(entry => (
-        <div key={entry.id} className="flex items-center gap-3 group">
+        <div key={entry.id} className="flex items-center gap-3">
           <span className="text-sm text-gray-400 flex-1">{entry.category}</span>
           {entry.note && <span className="text-xs text-gray-600 truncate max-w-[160px]">{entry.note}</span>}
           <span className="text-sm font-semibold text-gray-300 tabular-nums">{formatCurrency(entry.amount)}</span>
-          <button
-            onClick={() => onDelete(entry.id)}
-            className="opacity-0 group-hover:opacity-100 text-gray-700 hover:text-red-400 transition-all"
-          >
-            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-            </svg>
-          </button>
+          <div className="relative">
+            <button
+              onClick={() => setConfirmId(entry.id)}
+              className="text-gray-600 hover:text-red-400 transition-colors"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+            {confirmId === entry.id && (
+              <div className="absolute right-0 top-6 z-20 bg-gray-950 border border-gray-700 rounded-lg shadow-xl p-3 w-44">
+                <p className="text-xs text-gray-300 mb-2">Delete this entry?</p>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => { onDelete(entry.id); setConfirmId(null) }}
+                    className="flex-1 px-2 py-1 bg-red-600 hover:bg-red-500 text-white text-xs rounded transition-colors font-medium"
+                  >
+                    Delete
+                  </button>
+                  <button
+                    onClick={() => setConfirmId(null)}
+                    className="flex-1 px-2 py-1 bg-gray-800 hover:bg-gray-700 text-gray-300 text-xs rounded transition-colors"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       ))}
     </div>
@@ -125,6 +148,7 @@ export default function Compensation() {
   const [selectedYear, setSelectedYear] = useState<number>(years[0] ?? currentYear)
   const [draft, setDraft] = useState<Record<string, string>>({})
   const draftKey = useRef<string>('')
+  const [pieDrill, setPieDrill] = useState<'benefits' | 'retirement' | null>(null)
 
   const [bizCat, setBizCat] = useState(''); const [bizAmt, setBizAmt] = useState(''); const [bizNote, setBizNote] = useState('')
   const [benCat, setBenCat] = useState(''); const [benAmt, setBenAmt] = useState(''); const [benNote, setBenNote] = useState('')
@@ -245,6 +269,10 @@ export default function Compensation() {
   const netIncome        = annualGross - businessExpenses - benefitsTotal - retirementTotal
   const totalComp        = netIncome + benefitsTotal + retirementTotal
   const overheadPct      = annualGross > 0 ? businessExpenses / annualGross * 100 : 0
+  const totalHours       = yearStats.reduce((s, m) => s + m.totalHours, 0)
+  const effectiveHourly  = totalHours > 0 ? totalComp / totalHours : 0
+
+  const rec = currentRecord?.recurring ?? {}
 
   // ── JSX ───────────────────────────────────────────────────────────────────────
 
@@ -276,39 +304,144 @@ export default function Compensation() {
         </div>
       </div>
 
-      {/* Stat cards — row 1: P&L */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
-        {([
-          { label: 'Gross Revenue',     value: formatCurrency(annualGross),      color: 'text-emerald-400' },
-          { label: 'Business Expenses', value: formatCurrency(businessExpenses), color: 'text-red-400' },
-          { label: 'Net Income',        value: formatCurrency(netIncome),        color: netIncome >= 0 ? 'text-indigo-400' : 'text-red-400' },
-          { label: 'Overhead',          value: formatPct(overheadPct),           color: 'text-amber-400' },
-        ] as const).map(({ label, value, color }) => (
-          <div key={label} className="bg-gray-900 border border-gray-800 rounded-xl p-4">
-            <p className="text-xs text-gray-500 mb-1">{label}</p>
-            <p className={`text-lg font-bold ${color}`}>{value}</p>
-          </div>
-        ))}
-      </div>
-
-      {/* Stat cards — row 2: personal comp */}
-      <div className="grid grid-cols-3 gap-3 mb-8">
+      {/* Stat cards */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
         <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
-          <p className="text-xs text-gray-500 mb-1">Benefits</p>
-          <p className="text-lg font-bold text-sky-400">{formatCurrency(benefitsTotal)}</p>
-          {healthcareTotal > 0 && (
-            <p className="text-xs text-sky-700 mt-1">Healthcare {formatCurrency(healthcareTotal)}</p>
+          <p className="text-xs text-gray-500 mb-1">Gross Revenue</p>
+          <p className="text-lg font-bold text-emerald-400">{formatCurrency(annualGross)}</p>
+        </div>
+        <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
+          <p className="text-xs text-gray-500 mb-1">Overhead</p>
+          <p className="text-lg font-bold text-amber-400">{formatPct(overheadPct)}</p>
+        </div>
+        <div className="relative bg-gray-900 border border-gray-800 rounded-xl p-4 group">
+          <p className="text-xs text-gray-500 mb-1">Business Expenses</p>
+          <p className="text-lg font-bold text-red-400">{formatCurrency(businessExpenses)}</p>
+          {businessExpenses > 0 && (
+            <div className="absolute left-0 top-full mt-1.5 z-10 hidden group-hover:block w-52 bg-gray-950 border border-gray-700 rounded-xl shadow-xl p-3 space-y-1.5">
+              {[
+                { label: 'Operating Fee',  value: rec.operatingFee       ?? 0 },
+                { label: 'Operating Exp',  value: rec.operatingExpense   ?? 0 },
+                { label: 'Liability Ins.', value: rec.liabilityInsurance ?? 0 },
+                { label: 'Payroll Taxes',  value: rec.payrollTaxes       ?? 0 },
+              ].filter(r => r.value > 0).map(({ label, value }) => (
+                <div key={label} className="flex justify-between items-center">
+                  <span className="text-xs text-gray-400">{label}</span>
+                  <span className="text-xs font-medium text-red-400 tabular-nums">{formatCurrency(value)}</span>
+                </div>
+              ))}
+            </div>
           )}
         </div>
         <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
-          <p className="text-xs text-gray-500 mb-1">Retirement</p>
-          <p className="text-lg font-bold text-teal-400">{formatCurrency(retirementTotal)}</p>
-        </div>
-        <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
-          <p className="text-xs text-gray-500 mb-1">Total Compensation</p>
-          <p className={`text-lg font-bold ${totalComp >= 0 ? 'text-violet-400' : 'text-red-400'}`}>{formatCurrency(totalComp)}</p>
+          <p className="text-xs text-gray-500 mb-1">Effective Hourly Rate</p>
+          <p className="text-lg font-bold text-violet-400">{effectiveHourly > 0 ? formatCurrency(effectiveHourly) : '—'}</p>
+          {totalHours > 0 && (
+            <p className="text-xs text-gray-600 mt-1">{totalHours.toFixed(0)} hrs</p>
+          )}
         </div>
       </div>
+
+{/* Pie chart — Total Compensation breakdown */}
+      {totalComp > 0 && (() => {
+        const freeformBen = (currentRecord?.benefitsEntries ?? []).reduce((s, e) => s + e.amount, 0)
+        const freeformRet = (currentRecord?.retirementEntries ?? []).reduce((s, e) => s + e.amount, 0)
+
+        type Drill = 'benefits' | 'retirement' | null
+        const topSlices = [
+          { label: 'Net Income',  value: Math.max(netIncome, 0),        hex: '#818cf8', drill: null as Drill },
+          { label: 'Benefits',    value: Math.max(benefitsTotal, 0),    hex: '#fb923c', drill: 'benefits' as Drill },
+          { label: 'Retirement',  value: Math.max(retirementTotal, 0),  hex: '#4ade80', drill: 'retirement' as Drill },
+        ].filter(d => d.value > 0)
+
+        const benefitsSlices = [
+          { label: 'Health Insurance',  value: (rec.healthDental ?? 0) + (rec.healthMedical ?? 0) + (rec.healthVision ?? 0), hex: '#38bdf8' },
+          { label: 'Benicomp',          value: rec.healthBenicomp ?? 0,  hex: '#f472b6' },
+          { label: 'Licenses & Dues',   value: rec.licensesDues ?? 0,    hex: '#a78bfa' },
+          { label: 'CME',               value: rec.cme ?? 0,             hex: '#facc15' },
+          { label: 'Phone / Internet',  value: rec.phoneInternet ?? 0,   hex: '#f87171' },
+          { label: 'Other',             value: freeformBen,               hex: '#94a3b8' },
+        ].filter(d => d.value > 0)
+
+        const retirementSlices = [
+          { label: 'Profit Sharing',  value: rec.profitSharing ?? 0,  hex: '#4ade80' },
+          { label: 'Cash Balance',    value: rec.cashBalance ?? 0,    hex: '#fb923c' },
+          { label: 'Other',           value: freeformRet,              hex: '#94a3b8' },
+        ].filter(d => d.value > 0)
+
+        const activeSlices = pieDrill === 'benefits' ? benefitsSlices
+          : pieDrill === 'retirement' ? retirementSlices
+          : topSlices
+        const total = activeSlices.reduce((s, d) => s + d.value, 0)
+        const drillLabel: Record<NonNullable<Drill>, string> = { benefits: 'Benefits', retirement: 'Retirement' }
+        const totalLabel = pieDrill ? drillLabel[pieDrill] : 'Total Compensation'
+        const totalColor = pieDrill === 'benefits' ? 'text-sky-400' : pieDrill === 'retirement' ? 'text-teal-400' : 'text-violet-400'
+
+        return (
+          <div className="bg-gray-900 border border-gray-800 rounded-xl p-5 mb-6">
+            <div className="flex items-center gap-3 mb-4">
+              {pieDrill && (
+                <button onClick={() => setPieDrill(null)} className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-300 transition-colors">
+                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                  </svg>
+                  Overview
+                </button>
+              )}
+              <p className="text-xs text-gray-500 uppercase tracking-wider">
+                {pieDrill ? `${drillLabel[pieDrill]} Breakdown` : 'Total Compensation Breakdown'}
+              </p>
+            </div>
+            <div className="flex flex-col md:flex-row items-center md:items-start gap-4 md:gap-6">
+              <div className="w-full md:w-[180px] md:flex-shrink-0">
+                <ResponsiveContainer width="100%" height={200}>
+                  <PieChart>
+                    <Pie
+                      data={activeSlices}
+                      dataKey="value"
+                      innerRadius={60}
+                      outerRadius={90}
+                      paddingAngle={2}
+                      strokeWidth={0}
+                      onClick={(entry: { drill?: Drill }) => { if (entry.drill) setPieDrill(entry.drill) }}
+                      style={{ cursor: pieDrill ? 'default' : 'pointer' }}
+                    >
+                      {activeSlices.map(d => <Cell key={d.label} fill={d.hex} />)}
+                    </Pie>
+                    <Tooltip
+                      formatter={(value: number) => formatCurrency(value)}
+                      contentStyle={{ background: '#111827', border: '1px solid #374151', borderRadius: '8px', fontSize: '12px' }}
+                      itemStyle={{ color: '#d1d5db' }}
+                      labelStyle={{ color: '#9ca3af' }}
+                    />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+              <div className="w-full md:flex-1">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2 mb-3">
+                  {activeSlices.map(({ label, value, hex }) => (
+                    <div key={label} className="flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: hex }} />
+                      <span className="text-xs text-gray-400 flex-1 truncate">{label}</span>
+                      <span className="text-xs font-semibold text-gray-300 tabular-nums">{formatCurrency(value)}</span>
+                      <span className="text-xs text-gray-600 tabular-nums w-9 text-right">{total > 0 ? (value / total * 100).toFixed(1) : '0.0'}%</span>
+                    </div>
+                  ))}
+                </div>
+                <div className="pt-2 border-t border-gray-800 flex items-center gap-2">
+                  <span className="w-2 h-2 flex-shrink-0" />
+                  <span className="text-xs text-gray-500 flex-1">{totalLabel}</span>
+                  <span className={`text-xs font-bold tabular-nums ${totalColor}`}>{formatCurrency(pieDrill ? total : totalComp)}</span>
+                  <span className="text-xs text-gray-600 w-9 text-right">100%</span>
+                </div>
+                {!pieDrill && benefitsTotal + retirementTotal > 0 && (
+                  <p className="text-xs text-gray-700 mt-2">Click Benefits or Retirement to drill down</p>
+                )}
+              </div>
+            </div>
+          </div>
+        )
+      })()}
 
       {/* Expense form */}
       <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
@@ -316,11 +449,11 @@ export default function Compensation() {
           <h3 className="text-sm font-semibold text-gray-300">{selectedYear} Expenses</h3>
         </div>
 
-        <div className="divide-y divide-gray-800">
+        <div>
 
           {/* ── Business Expenses ── */}
-          <div className="px-5 py-4">
-            <p className="text-[10px] text-gray-600 uppercase tracking-wider mb-3">Business Expenses</p>
+          <div className="pl-4 pr-5 py-4 border-l-4 border-red-700">
+            <span className="inline-block text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full bg-red-950 text-red-400 mb-3">Business Expenses</span>
             <div className="space-y-2 mb-4">
               {BUSINESS_LEAVES.map(leaf => (
                 <div key={leaf.key} className="flex items-center justify-between gap-4">
@@ -357,8 +490,8 @@ export default function Compensation() {
           </div>
 
           {/* ── Benefits ── */}
-          <div className="px-5 py-4">
-            <p className="text-[10px] text-gray-600 uppercase tracking-wider mb-3">Benefits</p>
+          <div className="pl-4 pr-5 py-4 border-t border-gray-800 border-l-4 border-orange-700">
+            <span className="inline-block text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full bg-orange-950 text-orange-400 mb-3">Benefits</span>
 
             {/* Health Insurance sub-group */}
             <div className="mb-3">
@@ -415,8 +548,8 @@ export default function Compensation() {
           </div>
 
           {/* ── Retirement Benefits ── */}
-          <div className="px-5 py-4">
-            <p className="text-[10px] text-gray-600 uppercase tracking-wider mb-3">Retirement Benefits</p>
+          <div className="pl-4 pr-5 py-4 border-t border-gray-800 border-l-4 border-green-700">
+            <span className="inline-block text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full bg-green-950 text-green-400 mb-3">Retirement Benefits</span>
             <div className="space-y-2 mb-4">
               {RETIREMENT_LEAVES.map(leaf => (
                 <div key={leaf.key} className="flex items-center justify-between gap-4">

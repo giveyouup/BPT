@@ -1293,6 +1293,9 @@ export default function Settings() {
           </button>
         </div>
       )}
+      <div className="mt-12 pt-6 border-t border-gray-800 text-center">
+        <span className="text-xs text-gray-600">v5.5</span>
+      </div>
     </div>
   )
 }

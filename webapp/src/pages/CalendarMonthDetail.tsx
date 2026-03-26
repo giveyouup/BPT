@@ -6,7 +6,7 @@ import {
   formatMonthYear, formatDateFull, formatHours, formatCurrency, formatCurrencyFull,
 } from '../utils/dateUtils'
 import StatCard from '../components/StatCard'
-import { shiftBadgeClass, isCallShift, isOffDayShift } from '../utils/shiftUtils'
+import { shiftBadgeClass, isCallShift, isOffDayShift, isFixedShift, resolveShiftAlias } from '../utils/shiftUtils'
 
 const SHIFT_TYPE_OPTIONS = ['G1', 'G2', 'G3', 'G4', 'G5', 'APS', 'BR', 'NIR', 'GI', 'ENDO']
 import { getCptCategory } from '../utils/cptLookup'
@@ -42,7 +42,10 @@ export default function CalendarMonthDetail() {
   }
 
   const prodDays = stats.workingDays.filter((d) => d.hasProduction)
-  const noProdDays = stats.workingDays.filter((d) => !d.hasProduction)
+  // Collapsible section: scheduled days with no production, excluding pure off-day shifts (V, H, Postcall)
+  const noProdDays = stats.workingDays.filter((d) =>
+    !d.hasProduction && d.shiftTypes.some((s) => !isOffDayShift(s))
+  )
   const avgRate = stats.totalDistributableUnits > 0
     ? stats.unitCompensation / stats.totalDistributableUnits
     : null
