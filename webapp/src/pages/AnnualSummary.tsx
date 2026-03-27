@@ -255,6 +255,7 @@ function EndTimeTooltip({ active, payload }: { active?: boolean; payload?: Array
 
 export default function AnnualSummary() {
   const [hoursView, setHoursView] = useState<'month' | 'week'>('month')
+  const [mobileHoursTarget, setMobileHoursTarget] = useState<{ label: string; date: string; week?: string } | null>(null)
   const [expandedShift, setExpandedShift] = useState<string | null>(
     (window.history.state?.usr as { selectedBucketIdx?: number; expandedShift?: string } | null)?.expandedShift ?? null
   )
@@ -322,22 +323,20 @@ export default function AnnualSummary() {
     [year, reports, allSchedules, settings, allMappings]
   )
 
-  // Double-click detection for hours chart bars
-  const hoursBarLastClick = useRef<{ key: string; time: number } | null>(null)
+  // Single-click on desktop navigates immediately; on mobile updates the link below the chart
   function handleHoursBarClick(_: unknown, index: number) {
-    const key = `${hoursView}-${index}`
-    const now = Date.now()
-    if (hoursBarLastClick.current?.key === key && now - hoursBarLastClick.current.time < 400) {
-      hoursBarLastClick.current = null
-      if (hoursView === 'month') {
-        const s = yearStats[index]
-        if (s) navigate('/dashboard', { state: { date: `${s.year}-${String(s.month).padStart(2, '0')}-01` } })
-      } else {
-        const entry = weeklyHoursData[index]
-        if (entry) navigate('/dashboard', { state: { date: entry.iso, week: entry.iso } })
-      }
+    const isTouch = window.matchMedia('(pointer: coarse)').matches
+    if (hoursView === 'month') {
+      const s = yearStats[index]
+      if (!s) return
+      const date = `${s.year}-${String(s.month).padStart(2, '0')}-01`
+      if (isTouch) setMobileHoursTarget({ label: `${getMonthName(s.month)} ${s.year}`, date })
+      else navigate('/dashboard', { state: { date } })
     } else {
-      hoursBarLastClick.current = { key, time: now }
+      const entry = weeklyHoursData[index]
+      if (!entry) return
+      if (isTouch) setMobileHoursTarget({ label: `Week of ${entry.week}`, date: entry.iso, week: entry.iso })
+      else navigate('/dashboard', { state: { date: entry.iso, week: entry.iso } })
     }
   }
 
@@ -1114,7 +1113,7 @@ export default function AnnualSummary() {
             <h3 className="text-sm font-semibold text-gray-300">Hours Worked</h3>
             <div className="flex rounded-lg overflow-hidden border border-gray-700 text-xs">
               {(['month', 'week'] as const).map((v) => (
-                <button key={v} onClick={() => setHoursView(v)}
+                <button key={v} onClick={() => { setHoursView(v); setMobileHoursTarget(null) }}
                   className={`px-3 py-1 font-medium transition-colors ${hoursView === v ? 'bg-gray-700 text-gray-100' : 'text-gray-500 hover:text-gray-300'}`}>
                   {v === 'month' ? 'Monthly' : 'Weekly'}
                 </button>
@@ -1143,14 +1142,27 @@ export default function AnnualSummary() {
             const avgWeekly = weeklyHoursData.length > 0 ? totalHours / weeklyHoursData.length : null
             const avgMonthly = chartData.length > 0 ? totalHours / chartData.length : null
             return (
-              <div className="mt-3 flex items-center justify-between gap-4 text-xs text-gray-500">
-                <div className="flex items-center gap-4">
-                  <span>Avg <span className="text-gray-300 font-medium">{avgWeekly != null ? formatHours(avgWeekly) : '—'}</span> / week</span>
-                  <span className="text-gray-700">·</span>
-                  <span>Avg <span className="text-gray-300 font-medium">{avgMonthly != null ? formatHours(avgMonthly) : '—'}</span> / month</span>
+              <>
+                <div className="mt-3 flex items-center justify-between gap-4 text-xs text-gray-500">
+                  <div className="flex items-center gap-4">
+                    <span>Avg <span className="text-gray-300 font-medium">{avgWeekly != null ? formatHours(avgWeekly) : '—'}</span> / week</span>
+                    <span className="text-gray-700">·</span>
+                    <span>Avg <span className="text-gray-300 font-medium">{avgMonthly != null ? formatHours(avgMonthly) : '—'}</span> / month</span>
+                  </div>
+                  <span className="hidden md:inline text-gray-700 text-[10px]">click bar to open in dashboard</span>
                 </div>
-                <span className="text-gray-700 text-[10px]">double-click bar to open in dashboard</span>
-              </div>
+                {mobileHoursTarget && (
+                  <button
+                    className="md:hidden mt-3 w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-indigo-900/40 border border-indigo-700/50 text-xs text-indigo-300 active:bg-indigo-900/70 transition-colors"
+                    onClick={() => navigate('/dashboard', { state: { date: mobileHoursTarget.date, week: mobileHoursTarget.week } })}
+                  >
+                    <span>Open {mobileHoursTarget.label} in Dashboard</span>
+                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                    </svg>
+                  </button>
+                )}
+              </>
             )
           })()}
         </div>
