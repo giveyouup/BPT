@@ -323,21 +323,33 @@ export default function AnnualSummary() {
     [year, reports, allSchedules, settings, allMappings]
   )
 
-  // Single-click on desktop navigates immediately; on mobile updates the link below the chart
-  function handleHoursBarClick(_: unknown, index: number) {
-    const isTouch = window.matchMedia('(pointer: coarse)').matches
+  // Resolve navigation target from a bar index
+  function hoursBarNavTarget(index: number) {
     if (hoursView === 'month') {
       const s = yearStats[index]
-      if (!s) return
-      const date = `${s.year}-${String(s.month).padStart(2, '0')}-01`
-      if (isTouch) setMobileHoursTarget({ label: `${getMonthName(s.month)} ${s.year}`, date })
-      else navigate('/dashboard', { state: { date } })
+      if (!s) return null
+      return { label: `${getMonthName(s.month)} ${s.year}`, date: `${s.year}-${String(s.month).padStart(2, '0')}-01` }
     } else {
       const entry = weeklyHoursData[index]
-      if (!entry) return
-      if (isTouch) setMobileHoursTarget({ label: `Week of ${entry.week}`, date: entry.iso, week: entry.iso })
-      else navigate('/dashboard', { state: { date: entry.iso, week: entry.iso } })
+      if (!entry) return null
+      return { label: `Week of ${entry.week}`, date: entry.iso, week: entry.iso }
     }
+  }
+
+  // Single-click on desktop navigates immediately; on mobile click updates the link below the chart
+  function handleHoursBarClick(_: unknown, index: number) {
+    const isTouch = window.matchMedia('(pointer: coarse)').matches
+    const target = hoursBarNavTarget(index)
+    if (!target) return
+    if (isTouch) setMobileHoursTarget(target)
+    else navigate('/', { state: { date: target.date, week: target.week } })
+  }
+
+  // Track active bar on mouse/touch move so the mobile link stays in sync with the tooltip
+  function handleHoursChartMouseMove(data: { activeTooltipIndex?: number }) {
+    if (data?.activeTooltipIndex == null) return
+    const target = hoursBarNavTarget(data.activeTooltipIndex)
+    if (target) setMobileHoursTarget(target)
   }
 
   // Restore scroll position when returning via browser back — wait for content to render
@@ -1125,6 +1137,7 @@ export default function AnnualSummary() {
               data={hoursView === 'month' ? chartData : weeklyHoursData}
               margin={{ top: 0, right: 8, bottom: 0, left: -10 }}
               style={{ cursor: 'pointer' }}
+              onMouseMove={handleHoursChartMouseMove}
             >
               <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
               <XAxis dataKey={hoursView === 'month' ? 'month' : 'week'} {...AXIS_PROPS} interval={hoursView === 'week' ? 3 : 0} />
@@ -1154,7 +1167,7 @@ export default function AnnualSummary() {
                 {mobileHoursTarget && (
                   <button
                     className="md:hidden mt-3 w-full flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-indigo-900/40 border border-indigo-700/50 text-xs text-indigo-300 active:bg-indigo-900/70 transition-colors"
-                    onClick={() => navigate('/dashboard', { state: { date: mobileHoursTarget.date, week: mobileHoursTarget.week } })}
+                    onClick={() => navigate('/', { state: { date: mobileHoursTarget.date, week: mobileHoursTarget.week } })}
                   >
                     <span>Open {mobileHoursTarget.label} in Dashboard</span>
                     <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">

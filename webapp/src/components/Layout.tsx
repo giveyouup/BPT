@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react'
-import { NavLink, useNavigate } from 'react-router-dom'
+import { NavLink, useNavigate, useLocation } from 'react-router-dom'
 import { useData } from '../context/DataContext'
 import { formatMonthYear } from '../utils/dateUtils'
 
@@ -23,6 +23,27 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   const [selectedYear, setSelectedYear] = useState<number>(years[0] ?? new Date().getFullYear())
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [desktopCollapsed, setDesktopCollapsed] = useState(false)
+  const [headerHidden, setHeaderHidden] = useState(false)
+  const lastScrollY = useRef(0)
+  const mainRef = useRef<HTMLElement>(null)
+  const location = useLocation()
+
+  // Hide header on scroll down, reveal on scroll up
+  useEffect(() => {
+    const el = mainRef.current
+    if (!el) return
+    const handler = () => {
+      const y = el.scrollTop
+      if (y > lastScrollY.current && y > 48) setHeaderHidden(true)
+      else if (y < lastScrollY.current) setHeaderHidden(false)
+      lastScrollY.current = y
+    }
+    el.addEventListener('scroll', handler, { passive: true })
+    return () => el.removeEventListener('scroll', handler)
+  }, [])
+
+  // Reveal header on route change
+  useEffect(() => { setHeaderHidden(false) }, [location.pathname])
 
   const navLinkClass = ({ isActive }: { isActive: boolean }) =>
     `flex items-center gap-2.5 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
@@ -36,7 +57,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex h-screen bg-gray-950">
       {/* Mobile top bar */}
-      <div className="md:hidden fixed top-0 left-0 right-0 z-30 flex items-center gap-3 px-4 h-12 bg-gray-900 border-b border-gray-800">
+      <div className={`md:hidden fixed top-0 left-0 right-0 z-30 flex items-center gap-3 px-4 h-12 bg-gray-900 border-b border-gray-800 transition-transform duration-300 ${headerHidden ? '-translate-y-full' : 'translate-y-0'}`}>
         <button
           onClick={() => setSidebarOpen(true)}
           className="text-gray-400 hover:text-gray-100 transition-colors"
@@ -295,7 +316,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       </aside>
 
       {/* Main content */}
-      <main className="flex-1 overflow-y-auto pt-12 md:pt-0">
+      <main ref={mainRef} className="flex-1 overflow-y-auto pt-12 md:pt-0">
         {children}
       </main>
     </div>

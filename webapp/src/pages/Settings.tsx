@@ -1294,7 +1294,7 @@ export default function Settings() {
         </div>
       )}
       <div className="mt-12 pt-6 border-t border-gray-800 text-center">
-        <span className="text-xs text-gray-600">v5.6</span>
+        <span className="text-xs text-gray-600">v5.7</span>
       </div>
     </div>
   )

@@ -89,7 +89,19 @@ export default function Dashboard() {
     return () => window.removeEventListener('keydown', handler)
   }, [])
 
-  // When navigating here with a pre-selected date, pick the correct month tab
+  // When navigating here with a pre-selected date, update year + month tab
+  // (useEffect needed because useState initializers only run on first mount)
+  useEffect(() => {
+    if (!incomingDate) return
+    const year = parseInt(incomingDate.slice(0, 4))
+    if (!isNaN(year)) setSelectedYear(year)
+    setSelectedDayDate(incomingDate)
+  }, [incomingDate])
+
+  useEffect(() => {
+    setSelectedWeek(incomingWeek)
+  }, [incomingWeek])
+
   useEffect(() => {
     if (!incomingDate || yearStats.length === 0) return
     const month = parseInt(incomingDate.slice(5, 7))
