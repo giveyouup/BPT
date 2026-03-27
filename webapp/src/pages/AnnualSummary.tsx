@@ -322,6 +322,25 @@ export default function AnnualSummary() {
     [year, reports, allSchedules, settings, allMappings]
   )
 
+  // Double-click detection for hours chart bars
+  const hoursBarLastClick = useRef<{ key: string; time: number } | null>(null)
+  function handleHoursBarClick(_: unknown, index: number) {
+    const key = `${hoursView}-${index}`
+    const now = Date.now()
+    if (hoursBarLastClick.current?.key === key && now - hoursBarLastClick.current.time < 400) {
+      hoursBarLastClick.current = null
+      if (hoursView === 'month') {
+        const s = yearStats[index]
+        if (s) navigate('/dashboard', { state: { date: `${s.year}-${String(s.month).padStart(2, '0')}-01` } })
+      } else {
+        const entry = weeklyHoursData[index]
+        if (entry) navigate('/dashboard', { state: { date: entry.iso, week: entry.iso } })
+      }
+    } else {
+      hoursBarLastClick.current = { key, time: now }
+    }
+  }
+
   // Restore scroll position when returning via browser back — wait for content to render
   const scrollRestored = useRef(false)
   useEffect(() => {
@@ -555,7 +574,7 @@ export default function AnnualSummary() {
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([iso, hours]) => {
         const [, m, d] = iso.split('-').map(Number)
-        return { week: `${getMonthName(m).slice(0, 3)} ${d}`, hours: Math.round(hours * 10) / 10 }
+        return { week: `${getMonthName(m).slice(0, 3)} ${d}`, iso, hours: Math.round(hours * 10) / 10 }
       })
   }, [yearStats])
 
@@ -1106,6 +1125,7 @@ export default function AnnualSummary() {
             <BarChart
               data={hoursView === 'month' ? chartData : weeklyHoursData}
               margin={{ top: 0, right: 8, bottom: 0, left: -10 }}
+              style={{ cursor: 'pointer' }}
             >
               <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
               <XAxis dataKey={hoursView === 'month' ? 'month' : 'week'} {...AXIS_PROPS} interval={hoursView === 'week' ? 3 : 0} />
@@ -1115,7 +1135,7 @@ export default function AnnualSummary() {
                 <ReferenceLine y={50} stroke="#f59e0b" strokeDasharray="4 4"
                   label={{ value: '50h', position: 'right', fill: '#f59e0b', fontSize: 10 }} />
               )}
-              <Bar dataKey="hours" fill="#0ea5e9" radius={hoursView === 'month' ? [4, 4, 0, 0] : [2, 2, 0, 0]} />
+              <Bar dataKey="hours" fill="#0ea5e9" radius={hoursView === 'month' ? [4, 4, 0, 0] : [2, 2, 0, 0]} onClick={handleHoursBarClick} />
             </BarChart>
           </ResponsiveContainer>
           {(() => {
@@ -1123,10 +1143,13 @@ export default function AnnualSummary() {
             const avgWeekly = weeklyHoursData.length > 0 ? totalHours / weeklyHoursData.length : null
             const avgMonthly = chartData.length > 0 ? totalHours / chartData.length : null
             return (
-              <div className="mt-3 flex items-center gap-4 text-xs text-gray-500">
-                <span>Avg <span className="text-gray-300 font-medium">{avgWeekly != null ? formatHours(avgWeekly) : '—'}</span> / week</span>
-                <span className="text-gray-700">·</span>
-                <span>Avg <span className="text-gray-300 font-medium">{avgMonthly != null ? formatHours(avgMonthly) : '—'}</span> / month</span>
+              <div className="mt-3 flex items-center justify-between gap-4 text-xs text-gray-500">
+                <div className="flex items-center gap-4">
+                  <span>Avg <span className="text-gray-300 font-medium">{avgWeekly != null ? formatHours(avgWeekly) : '—'}</span> / week</span>
+                  <span className="text-gray-700">·</span>
+                  <span>Avg <span className="text-gray-300 font-medium">{avgMonthly != null ? formatHours(avgMonthly) : '—'}</span> / month</span>
+                </div>
+                <span className="text-gray-700 text-[10px]">double-click bar to open in dashboard</span>
               </div>
             )
           })()}

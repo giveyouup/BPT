@@ -50,7 +50,8 @@ export default function Dashboard() {
   const location = useLocation()
   const { reports, schedules: allSchedules, settings, stipendMappings: allMappings, cptRanges, saveReport, saveManualShift, deleteManualShift } = useData()
 
-  const incomingDate = (location.state as { date?: string } | null)?.date ?? null
+  const incomingDate = (location.state as { date?: string; week?: string } | null)?.date ?? null
+  const incomingWeek = (location.state as { date?: string; week?: string } | null)?.week ?? null
 
   const years = [...new Set(reports.map((r) => r.year))].sort((a, b) => b - a)
   const [selectedYear, setSelectedYear] = useState<number>(() => {
@@ -70,7 +71,7 @@ export default function Dashboard() {
   const [editingNoteDate, setEditingNoteDate] = useState<string | null>(null)
   const [noteInput, setNoteInput] = useState('')
   const [hideCompensation, setHideCompensation] = useState(true)
-  const [selectedWeek, setSelectedWeek] = useState<string | null>(null)
+  const [selectedWeek, setSelectedWeek] = useState<string | null>(incomingWeek)
   const [selectedDayDate, setSelectedDayDate] = useState<string | null>(incomingDate)
   const [shiftPopover, setShiftPopover] = useState<{ date: string; input: string; x: number; y: number } | null>(null)
   const [showProjection, setShowProjection] = useState(false)
