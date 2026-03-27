@@ -245,9 +245,12 @@ export default function Dashboard() {
   const curMonth = today.getMonth() + 1
   const prevYear  = curMonth === 1 ? curYear - 1 : curYear
   const prevMonth = curMonth === 1 ? 12 : curMonth - 1
+  const nextYear  = curMonth === 12 ? curYear + 1 : curYear
+  const nextMonth = curMonth === 12 ? 1 : curMonth + 1
   const isProjectableMonth = (
     (selStats.year === curYear  && selStats.month === curMonth) ||
-    (selStats.year === prevYear && selStats.month === prevMonth)
+    (selStats.year === prevYear && selStats.month === prevMonth) ||
+    (selStats.year === nextYear && selStats.month === nextMonth)
   )
   const dataCutoff = monthDays.reduce((max, d) => d.hasProduction && d.date > max ? d.date : max, '0000-00-00')
   const remainingDays = monthDays.filter(
