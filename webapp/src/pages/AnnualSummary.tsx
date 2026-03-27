@@ -33,6 +33,58 @@ function shiftBarColor(shift: string): string {
   return '#a78bfa'
 }
 
+function shiftGroup(shift: string): 'G' | 'FS' | 'Fixed' {
+  const u = shift.toUpperCase()
+  if (/^G\d/.test(u)) return 'G'
+  if (u.startsWith('FS')) return 'FS'
+  return 'Fixed'
+}
+
+const GROUP_REF_STYLE: Record<string, { stroke: string; label: string }> = {
+  G:     { stroke: '#fb7185', label: 'G avg' },
+  FS:    { stroke: '#fbbf24', label: 'FS avg' },
+  Fixed: { stroke: '#a78bfa', label: 'Fixed avg' },
+}
+
+const SHIFT_GROUPS: { key: string; label: string; color: string; match: (s: string) => boolean }[] = [
+  {
+    key: 'g-only',
+    label: 'G-type',
+    color: '#fb7185',
+    match: (s) => /^G\d+/i.test(s),
+  },
+  {
+    key: 'g-cc',
+    label: 'G + CC',
+    color: '#f97316',
+    match: (s) => /^G\d+/i.test(s) || /^CC(\s|$)/i.test(s),
+  },
+  {
+    key: 'g7plus',
+    label: 'G7+',
+    color: '#e11d48',
+    match: (s) => { const m = s.match(/^G(\d+)/i); return !!m && parseInt(m[1]) >= 7 },
+  },
+  {
+    key: 'g7plus-cc',
+    label: 'G7+ & CC',
+    color: '#be123c',
+    match: (s) => { const m = s.match(/^G(\d+)/i); return (!!m && parseInt(m[1]) >= 7) || /^CC(\s|$)/i.test(s) },
+  },
+  {
+    key: 'fs',
+    label: 'All FS',
+    color: '#fbbf24',
+    match: (s) => /^FS/i.test(s),
+  },
+  {
+    key: 'a-tier',
+    label: 'A1/A2/A3',
+    color: '#a78bfa',
+    match: (s) => /^A[123](\s|$)/i.test(s),
+  },
+]
+
 const CHART_STYLE = {
   contentStyle: {
     fontSize: 12, borderRadius: 8,
@@ -206,7 +258,7 @@ export default function AnnualSummary() {
   const [expandedShift, setExpandedShift] = useState<string | null>(
     (window.history.state?.usr as { selectedBucketIdx?: number; expandedShift?: string } | null)?.expandedShift ?? null
   )
-  const [shiftTab, setShiftTab] = useState<'hours' | 'dollars'>('hours')
+  const [shiftTab, setShiftTab] = useState<'hours' | 'dollars' | 'groups'>('hours')
   const [shiftSort, setShiftSort] = useState<{ col: string; dir: 1 | -1 }>({ col: 'shift', dir: 1 })
   const [whatIfMappingId, setWhatIfMappingId] = useState<string | null>(null)
   const [whatIfUnitRate, setWhatIfUnitRate] = useState<number | null>(null)
@@ -1225,6 +1277,14 @@ export default function AnnualSummary() {
                 >
                   Avg $/hr
                 </button>
+                <button
+                  onClick={() => setShiftTab('groups')}
+                  className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${
+                    shiftTab === 'groups' ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:text-gray-200'
+                  }`}
+                >
+                  Group Avgs
+                </button>
               </div>
               </div>
             </div>
@@ -1233,7 +1293,39 @@ export default function AnnualSummary() {
             )}
 
             {/* Chart */}
-            {shiftTab === 'hours' ? (
+            {shiftTab === 'groups' ? (() => {
+              const groupData = SHIFT_GROUPS.map(({ key, label, color, match }) => {
+                let totalPay = 0, totalHours = 0, totalDays = 0
+                for (const d of activeShiftStats) {
+                  if (!match(d.shift)) continue
+                  const hrs = (d.avgHours ?? 0) * d.days
+                  totalPay += d.totalPay
+                  totalHours += hrs
+                  totalDays += d.days
+                }
+                const avgDollarPerHr = totalHours > 0 ? Math.round(totalPay / totalHours) : null
+                return { key, label, color, avgDollarPerHr, days: totalDays }
+              }).filter(d => d.avgDollarPerHr !== null)
+              return (
+                <ResponsiveContainer width="100%" height={180}>
+                  <BarChart data={groupData} margin={{ top: 0, right: 8, bottom: 0, left: -10 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
+                    <XAxis dataKey="label" {...AXIS_PROPS} />
+                    <YAxis {...AXIS_PROPS} tickFormatter={(v) => `$${v}`} domain={[0, 'auto']} />
+                    <Tooltip
+                      formatter={(v: number, _: string, entry: { payload?: { days: number } }) =>
+                        [`$${v}/hr avg · ${entry.payload?.days ?? 0} days`, 'Avg $/hr']}
+                      {...CHART_STYLE}
+                    />
+                    <Bar dataKey="avgDollarPerHr" radius={[4, 4, 0, 0]}>
+                      {groupData.map((entry) => (
+                        <Cell key={entry.key} fill={entry.color} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              )
+            })() : shiftTab === 'hours' ? (
               <ResponsiveContainer width="100%" height={180}>
                 <BarChart data={hoursData} margin={{ top: 0, right: 32, bottom: 0, left: -10 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
@@ -1256,29 +1348,60 @@ export default function AnnualSummary() {
                   </Bar>
                 </BarChart>
               </ResponsiveContainer>
-            ) : (
-              <ResponsiveContainer width="100%" height={180}>
-                <BarChart data={dollarsData} margin={{ top: 0, right: 32, bottom: 0, left: -10 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
-                  <XAxis dataKey="shift" {...AXIS_PROPS} />
-                  <YAxis {...AXIS_PROPS} tickFormatter={(v) => `$${v}`} domain={[0, 650]} />
-                  <Tooltip
-                    labelFormatter={(label: string) => label.replace(/ WD$/, ' Weekday').replace(/ WE$/, ' Weekend')}
-                    formatter={(v: number, _: string, entry: { payload?: { days: number } }) =>
-                      [`$${v}/hr avg · ${entry.payload?.days ?? 0} days`, '$/hr']}
-                    {...CHART_STYLE}
-                  />
-                  <Bar dataKey="avgDollarPerHr" radius={[4, 4, 0, 0]}>
-                    {dollarsData.map((entry) => (
-                      <Cell key={entry.shift} fill={whatIfMapping ? '#f59e0b' : shiftBarColor(entry.shift)} />
+            ) : (() => {
+              // Weighted group averages: sum(totalPay) / sum(totalHours) per group
+              // Preserve insertion order (G first, then FS, then Fixed) by processing dollarsData in order
+              const groupOrder: string[] = []
+              const groupTotals = new Map<string, { pay: number; hours: number; count: number }>()
+              for (const d of dollarsData) {
+                const g = shiftGroup(d.shift)
+                const hrs = (d.avgHours ?? 0) * d.days
+                if (!groupTotals.has(g)) { groupTotals.set(g, { pay: 0, hours: 0, count: 0 }); groupOrder.push(g) }
+                const t = groupTotals.get(g)!
+                if (hrs > 0) { t.pay += d.totalPay; t.hours += hrs }
+                t.count++
+              }
+              const groupAvgs = groupOrder
+                .map(g => ({ g, t: groupTotals.get(g)! }))
+                .filter(({ t }) => t.count > 1 && t.hours > 0)
+                .map(({ g, t }) => ({ g, avg: Math.round(t.pay / t.hours), count: groupTotals.get(g)!.count }))
+              return (
+              <div>
+                <ResponsiveContainer width="100%" height={180}>
+                  <BarChart data={dollarsData} margin={{ top: 0, right: 8, bottom: 0, left: -10 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
+                    <XAxis dataKey="shift" {...AXIS_PROPS} />
+                    <YAxis {...AXIS_PROPS} tickFormatter={(v) => `$${v}`} domain={[0, 650]} />
+                    <Tooltip
+                      labelFormatter={(label: string) => label.replace(/ WD$/, ' Weekday').replace(/ WE$/, ' Weekend')}
+                      formatter={(v: number, _: string, entry: { payload?: { days: number } }) =>
+                        [`$${v}/hr avg · ${entry.payload?.days ?? 0} days`, '$/hr']}
+                      {...CHART_STYLE}
+                    />
+                    <Bar dataKey="avgDollarPerHr" radius={[4, 4, 0, 0]}>
+                      {dollarsData.map((entry) => (
+                        <Cell key={entry.shift} fill={whatIfMapping ? '#f59e0b' : shiftBarColor(entry.shift)} />
+                      ))}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+                {groupAvgs.length > 0 && (
+                  <div className="flex mt-1 pl-6 pr-2">
+                    {groupAvgs.map(({ g, avg, count }) => (
+                      <div key={g} style={{ flex: count }} className="text-center">
+                        <span className="text-[10px]" style={{ color: GROUP_REF_STYLE[g].stroke }}>
+                          {GROUP_REF_STYLE[g].label}: ${avg}/hr
+                        </span>
+                      </div>
                     ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            )}
+                  </div>
+                )}
+              </div>
+              )
+            })()}
 
-            {/* Stat table */}
-            {(() => {
+            {/* Stat table — hidden on Group Avgs tab */}
+            {shiftTab !== 'groups' && (() => {
               const cols: { label: string; key: string }[] = [
                 { label: 'Shift', key: 'shift' },
                 { label: 'Days', key: 'days' },
