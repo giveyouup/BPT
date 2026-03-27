@@ -6,7 +6,7 @@ import { useData } from '../context/DataContext'
 import { computeCalendarMonthWorkingDays, computeCalendarYearStats, projectRemainingDays } from '../utils/calculations'
 import type { MonthProjection } from '../utils/calculations'
 import {
-  formatCurrency, formatHours, formatMonthYear, formatDateShort, getMonthName,
+  formatCurrency, formatHours, formatMonthYear, formatDateShort, getMonthName, lastDayOfMonth,
 } from '../utils/dateUtils'
 import { shiftBadgeClass, isOffDayShift } from '../utils/shiftUtils'
 import { getCptCategory } from '../utils/cptLookup'
@@ -216,7 +216,27 @@ export default function Dashboard() {
   const monthHours = monthDays.reduce((s, d) => s + d.hours, 0)
   const prodDays = monthDays.filter((d) => d.hasProduction)
   const noProdDays = monthDays.filter((d) => !d.hasProduction)
-  const weeks = groupByWeek(monthDays)
+
+  // Extend boundary weeks with adjacent-month days so cross-month weeks show full hours.
+  // These supplemental days are ONLY used for the weekly chart — never for monthly totals.
+  const firstDay = `${selStats.year}-${String(selStats.month).padStart(2, '0')}-01`
+  const lastDay  = lastDayOfMonth(selStats.year, selStats.month)
+  const firstWeekKey = weekStart(firstDay)
+  const lastWeekKey  = weekStart(lastDay)
+  const prevY = selStats.month === 1 ? selStats.year - 1 : selStats.year
+  const prevM = selStats.month === 1 ? 12 : selStats.month - 1
+  const nextY = selStats.month === 12 ? selStats.year + 1 : selStats.year
+  const nextM = selStats.month === 12 ? 1  : selStats.month + 1
+  const prevAdjacent: WorkingDayStats[] = firstDay !== firstWeekKey
+    ? computeCalendarMonthWorkingDays(prevY, prevM, reports, allSchedules, settings, allMappings)
+        .filter(d => weekStart(d.date) === firstWeekKey)
+    : []
+  const lastDayDow = new Date(selStats.year, selStats.month - 1, parseInt(lastDay.split('-')[2])).getDay()
+  const nextAdjacent: WorkingDayStats[] = lastDayDow !== 0
+    ? computeCalendarMonthWorkingDays(nextY, nextM, reports, allSchedules, settings, allMappings)
+        .filter(d => weekStart(d.date) === lastWeekKey)
+    : []
+  const weeks = groupByWeek([...prevAdjacent, ...monthDays, ...nextAdjacent])
   // maxWeekHours computed after weekProjHours (see below)
 
   // Projection computed values
@@ -608,14 +628,22 @@ export default function Dashboard() {
                       </tr>
                     </thead>
                     <tbody>
-                    {monthDays.filter((d) => !selectedWeek || weekStart(d.date) === selectedWeek).map((day) => {
+                    {(selectedWeek
+                        ? [...prevAdjacent, ...monthDays, ...nextAdjacent]
+                            .filter(d => weekStart(d.date) === selectedWeek)
+                            .sort((a, b) => a.date.localeCompare(b.date))
+                        : monthDays
+                      ).map((day) => {
+                      const isAdjacentDay = !day.date.startsWith(`${selStats.year}-${String(selStats.month).padStart(2, '0')}-`)
                       const dayProj = projByDate.get(day.date) ?? null
                       const isProj  = dayProj !== null && !day.hasProduction
                       const unitsPerHr  = day.hours > 0 && day.totalUnits > 0 ? day.totalUnits / day.hours : null
                       const dollarPerHr = day.hours > 0 && day.totalDayPay > 0 ? day.totalDayPay / day.hours : null
                       const projUnitsPerHr  = isProj && dayProj!.projectedHours > 0 ? dayProj!.projectedUnits / dayProj!.projectedHours : null
                       const projDollarPerHr = isProj && dayProj!.projectedHours > 0 ? dayProj!.projectedTotal / dayProj!.projectedHours : null
-                      const rowBg = isProj
+                      const rowBg = isAdjacentDay
+                        ? 'opacity-40'
+                        : isProj
                         ? 'bg-amber-950/10 border-l-2 border-l-amber-800/40'
                         : (!day.hasProduction ? 'opacity-50' : '')
                       const isExpanded = selectedDayDate === day.date

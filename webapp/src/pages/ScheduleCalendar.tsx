@@ -14,14 +14,27 @@ import type { ICSEvent } from '../utils/generateICS'
 
 const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
-function buildCalendarCells(year: number, month: number): (string | null)[] {
+function buildCalendarCells(year: number, month: number): string[] {
   const firstDow = new Date(year, month - 1, 1).getDay()
   const daysInMonth = new Date(year, month, 0).getDate()
-  const cells: (string | null)[] = Array(firstDow).fill(null)
+  const prevYear  = month === 1 ? year - 1 : year
+  const prevMonth = month === 1 ? 12 : month - 1
+  const daysInPrev = new Date(prevYear, prevMonth, 0).getDate()
+  const nextYear  = month === 12 ? year + 1 : year
+  const nextMonth = month === 12 ? 1 : month + 1
+  const cells: string[] = []
+  for (let i = firstDow - 1; i >= 0; i--) {
+    const d = daysInPrev - i
+    cells.push(`${prevYear}-${String(prevMonth).padStart(2, '0')}-${String(d).padStart(2, '0')}`)
+  }
   for (let d = 1; d <= daysInMonth; d++) {
     cells.push(`${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`)
   }
-  while (cells.length % 7 !== 0) cells.push(null)
+  let nd = 1
+  while (cells.length % 7 !== 0) {
+    cells.push(`${nextYear}-${String(nextMonth).padStart(2, '0')}-${String(nd).padStart(2, '0')}`)
+    nd++
+  }
   return cells
 }
 
@@ -419,15 +432,8 @@ export default function ScheduleCalendar() {
                 const totalRows = Math.floor(cells.length / 7)
                 const isLastRow = row === totalRows - 1
                 const isLastCol = col === 6
-
-                if (!date) {
-                  return (
-                    <div
-                      key={`empty-${i}`}
-                      className={`min-h-[72px] bg-gray-950/30 ${isLastCol ? '' : 'border-r border-gray-800'} ${isLastRow ? '' : 'border-b border-gray-800'}`}
-                    />
-                  )
-                }
+                const currentMonthPrefix = `${year}-${String(month).padStart(2, '0')}-`
+                const isAdjacent = !date.startsWith(currentMonthPrefix)
 
                 const shifts = effectiveShift(date)
                 const isOverride = !!manualOverrides[date]
@@ -438,6 +444,29 @@ export default function ScheduleCalendar() {
                 const uploaded = uploadedShift(date)
                 const popoverY = row >= totalRows - 2 ? 'bottom-full mb-1' : 'top-full mt-1'
                 const popoverX = col >= 5 ? 'right-0' : 'left-0'
+
+                if (isAdjacent) {
+                  return (
+                    <div
+                      key={date}
+                      className={`min-h-[72px] p-1.5 opacity-35
+                        ${isLastCol ? '' : 'border-r border-gray-800'}
+                        ${isLastRow ? '' : 'border-b border-gray-800'}
+                        bg-gray-950/30
+                      `}
+                    >
+                      <div className="mb-1">
+                        <span className="text-xs font-semibold text-gray-600">{dayNum}</span>
+                      </div>
+                      <div className="flex flex-wrap gap-0.5">
+                        {shifts.map(st => {
+                          const label = displayShift(date, st)
+                          return <span key={st} className={`text-[10px] font-mono px-1 py-0.5 rounded leading-tight break-all ${shiftBadgeClass(label)}`}>{label}</span>
+                        })}
+                      </div>
+                    </div>
+                  )
+                }
 
                 return (
                   <div
