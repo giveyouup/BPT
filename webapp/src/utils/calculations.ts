@@ -943,9 +943,15 @@ export function computeCashYearStats(
   let unitPayStart: string
   let unitPayEnd: string
 
-  if (thisCutoff) {
+  // Use service-date filtering whenever either this year's or the prior year's cutoff is set.
+  // If only prevCutoff is set (this year has no cutoff yet), the window runs from prevCutoff+1
+  // through Dec 31 of this year — ensuring the late-December days from the previous year are
+  // never lost between years.
+  const useServiceDateFilter = !!(thisCutoff || prevCutoff)
+
+  if (useServiceDateFilter) {
     unitPayStart = prevCutoff ? addOneDay(prevCutoff) : `${year}-01-01`
-    unitPayEnd   = thisCutoff
+    unitPayEnd   = thisCutoff ?? `${year}-12-31`
 
     // Filter line items across all reports by serviceDate within the cash window
     for (const report of allReports) {
@@ -980,6 +986,7 @@ export function computeCashYearStats(
       if (curM === 12) { curY++; curM = 1 } else curM++
     }
   } else {
+    // No cutoffs at all — use whole report months Jan–Dec (correct for individually uploaded PCRs)
     unitPayStart = `${year}-01-01`
     unitPayEnd   = `${year}-12-31`
 
