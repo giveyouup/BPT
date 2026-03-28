@@ -1,8 +1,8 @@
 import { useState, useMemo, useEffect, useRef } from 'react'
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from 'recharts'
 import { useData } from '../context/DataContext'
-import { computeCalendarYearStats } from '../utils/calculations'
-import { formatCurrency, randomId } from '../utils/dateUtils'
+import { computeCalendarYearStats, computeCashYearStats } from '../utils/calculations'
+import { formatCurrency, formatMonthYear, randomId } from '../utils/dateUtils'
 import type { ExpenseEntry, AnnualExpenses } from '../types'
 
 // ─── Category definitions ──────────────────────────────────────────────────────
@@ -133,7 +133,7 @@ function EntryList({ entries, onDelete }: { entries: ExpenseEntry[]; onDelete: (
 // ─── Main component ────────────────────────────────────────────────────────────
 
 export default function Compensation() {
-  const { reports, schedules, settings, stipendMappings, annualExpenses, saveAnnualExpenses, deleteAnnualExpenses } = useData()
+  const { reports, schedules, settings, stipendMappings, annualExpenses, saveAnnualExpenses, deleteAnnualExpenses, saveSettings } = useData()
 
   const now = new Date()
   const currentYear = now.getFullYear()
@@ -146,6 +146,9 @@ export default function Compensation() {
   }, [reports, annualExpenses, currentYear])
 
   const [selectedYear, setSelectedYear] = useState<number>(years[0] ?? currentYear)
+  const [cashView, setCashView] = useState(false)
+  const [editingCutoff, setEditingCutoff] = useState(false)
+  const [cutoffInput, setCutoffInput] = useState('')
   const [draft, setDraft] = useState<Record<string, string>>({})
   const draftKey = useRef<string>('')
   const [pieDrill, setPieDrill] = useState<'benefits' | 'retirement' | null>(null)
@@ -159,10 +162,17 @@ export default function Compensation() {
     [selectedYear, reports, schedules, settings, stipendMappings]
   )
 
-  const annualGross = useMemo(
+  const cashStats = useMemo(
+    () => computeCashYearStats(selectedYear, reports, schedules, settings, stipendMappings),
+    [selectedYear, reports, schedules, settings, stipendMappings]
+  )
+
+  const accrualGross = useMemo(
     () => yearStats.reduce((s, m) => s + m.totalCompensation, 0),
     [yearStats]
   )
+
+  const annualGross = cashView ? cashStats.totalCompensation : accrualGross
 
   const currentRecord = useMemo(
     () => annualExpenses.find(e => e.year === selectedYear),
@@ -182,6 +192,18 @@ export default function Compensation() {
     draftKey.current = key
     setDraft(initDraft(currentRecord, annualGross))
   }, [selectedYear, currentRecord, annualGross])
+
+  async function saveCutoff() {
+    const trimmed = cutoffInput.trim()
+    const updated = { ...settings, cashCutoffs: { ...(settings.cashCutoffs ?? {}) } }
+    if (trimmed && /^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+      updated.cashCutoffs![selectedYear] = trimmed
+    } else {
+      delete updated.cashCutoffs![selectedYear]
+    }
+    await saveSettings(updated)
+    setEditingCutoff(false)
+  }
 
   function getOrCreate(): AnnualExpenses {
     return currentRecord ?? {
@@ -269,7 +291,9 @@ export default function Compensation() {
   const netIncome        = annualGross - businessExpenses - benefitsTotal - retirementTotal
   const totalComp        = netIncome + benefitsTotal + retirementTotal
   const overheadPct      = annualGross > 0 ? businessExpenses / annualGross * 100 : 0
-  const totalHours       = yearStats.reduce((s, m) => s + m.totalHours, 0)
+  const totalHours       = cashView
+    ? cashStats.totalHours
+    : yearStats.reduce((s, m) => s + m.totalHours, 0)
   const effectiveHourly  = totalHours > 0 ? totalComp / totalHours : 0
 
   const rec = currentRecord?.recurring ?? {}
@@ -304,15 +328,83 @@ export default function Compensation() {
         </div>
       </div>
 
-      {/* Accrual callout */}
-      <div className="flex items-start gap-2 mb-5 px-3 py-2.5 rounded-lg bg-gray-800/50 border border-gray-700/50">
-        <svg className="w-3.5 h-3.5 text-gray-500 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-        </svg>
-        <p className="text-[11px] text-gray-500 leading-snug">
-          Figures are <span className="text-gray-400">accrual-based</span> and tied to PCR billing periods, which may not align with calendar year cash payouts.
-        </p>
+      {/* Accrual / Cash toggle */}
+      <div className="flex items-center gap-1 mb-4 p-0.5 bg-gray-900 border border-gray-800 rounded-lg w-fit">
+        <button
+          onClick={() => setCashView(false)}
+          className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${!cashView ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:text-gray-200'}`}
+        >Accrual</button>
+        <button
+          onClick={() => setCashView(true)}
+          className={`px-3 py-1 rounded-md text-xs font-medium transition-colors ${cashView ? 'bg-emerald-700 text-white' : 'text-gray-400 hover:text-gray-200'}`}
+        >Cash</button>
       </div>
+
+      {/* Basis info bar */}
+      {!cashView ? (
+        <div className="flex items-start gap-2 mb-5 px-3 py-2.5 rounded-lg bg-gray-800/50 border border-gray-700/50">
+          <svg className="w-3.5 h-3.5 text-gray-500 mt-0.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          <p className="text-[11px] text-gray-500 leading-snug">
+            Figures are <span className="text-gray-400">accrual-based</span> and tied to PCR billing periods, which may not align with calendar year cash payouts.
+          </p>
+        </div>
+      ) : (
+        <div className="mb-5 px-3 py-2.5 rounded-lg bg-emerald-950/40 border border-emerald-900/50 space-y-2">
+          {/* Unit pay row */}
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            <span className="text-[11px] text-gray-500 w-16 flex-shrink-0">Unit pay</span>
+            {editingCutoff ? (
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] text-gray-500">through</span>
+                <input
+                  type="date"
+                  value={cutoffInput}
+                  onChange={e => setCutoffInput(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') saveCutoff(); if (e.key === 'Escape') setEditingCutoff(false) }}
+                  className="bg-gray-800 border border-gray-600 rounded px-2 py-0.5 text-xs text-gray-200 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                />
+                <button onClick={saveCutoff} className="text-xs text-emerald-400 hover:text-emerald-300 font-medium">Save</button>
+                <button onClick={() => setEditingCutoff(false)} className="text-xs text-gray-500 hover:text-gray-300">Cancel</button>
+                {settings.cashCutoffs?.[selectedYear] && (
+                  <button
+                    onClick={async () => {
+                      const updated = { ...settings, cashCutoffs: { ...(settings.cashCutoffs ?? {}) } }
+                      delete updated.cashCutoffs![selectedYear]
+                      await saveSettings(updated)
+                      setEditingCutoff(false)
+                    }}
+                    className="text-xs text-red-500 hover:text-red-400"
+                  >Clear</button>
+                )}
+              </div>
+            ) : (
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] text-emerald-300/80">
+                  {cashStats.unitPayStart === `${selectedYear}-01-01`
+                    ? `Jan 1 – Dec 31, ${selectedYear}`
+                    : `${cashStats.unitPayStart} – ${cashStats.unitPayEnd}`}
+                </span>
+                {!settings.cashCutoffs?.[selectedYear] && (
+                  <span className="text-[10px] text-gray-600">(standard)</span>
+                )}
+                <button
+                  onClick={() => { setCutoffInput(settings.cashCutoffs?.[selectedYear] ?? `${selectedYear}-12-31`); setEditingCutoff(true) }}
+                  className="text-[10px] text-gray-500 hover:text-gray-300 underline underline-offset-2"
+                >edit</button>
+              </div>
+            )}
+          </div>
+          {/* Stipend row */}
+          <div className="flex items-center gap-x-3">
+            <span className="text-[11px] text-gray-500 w-16 flex-shrink-0">Stipends</span>
+            <span className="text-[11px] text-emerald-300/80">
+              {formatMonthYear(selectedYear - 1, 12)} – {formatMonthYear(selectedYear, 11)}
+            </span>
+          </div>
+        </div>
+      )}
 
       {/* Stat cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">

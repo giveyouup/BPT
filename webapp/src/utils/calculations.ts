@@ -724,7 +724,7 @@ type ShiftEntry2 = { totalUnits: number; totalHours: number; days: number; hours
 function buildShiftUnitMap(
   stats: MonthlyStats[],
   shiftHours: Record<string, number>,
-): Map<string, { avgUnits: number; avgHours: number | null; days: number }> {
+): Map<string, { avgUnits: number | null; avgHours: number | null; days: number }> {
   const acc = new Map<string, ShiftEntry2>()
 
   function credit(sk: string, units: number, hours: number, isFixed: boolean) {
@@ -761,10 +761,10 @@ function buildShiftUnitMap(
     }
   }
 
-  const result = new Map<string, { avgUnits: number; avgHours: number | null; days: number }>()
+  const result = new Map<string, { avgUnits: number | null; avgHours: number | null; days: number }>()
   for (const [key, { totalUnits, totalHours, days, hoursDays }] of acc) {
     result.set(key, {
-      avgUnits: days > 0 ? totalUnits / days : 0,
+      avgUnits: days > 0 ? totalUnits / days : null,
       avgHours: hoursDays > 0 ? totalHours / hoursDays : null,
       days,
     })
@@ -818,8 +818,8 @@ export function projectRemainingDays(
     : 0
 
   function blend(
-    curr: { avgUnits: number; avgHours: number | null; days: number } | undefined,
-    prior: { avgUnits: number; avgHours: number | null; days: number } | undefined,
+    curr: { avgUnits: number | null; avgHours: number | null; days: number } | undefined,
+    prior: { avgUnits: number | null; avgHours: number | null; days: number } | undefined,
     field: 'avgUnits' | 'avgHours',
     fallback: number,
   ): number {
@@ -889,5 +889,124 @@ export function projectRemainingDays(
     totalProjectedUnitPay: days.reduce((s, d) => s + d.projectedUnitPay, 0),
     currentYearDays,
     priorYearDays,
+  }
+}
+
+// ─── Cash-basis year stats ─────────────────────────────────────────────────────
+
+export interface CashYearStats {
+  totalUnitPay: number
+  totalDistributableUnits: number
+  totalStipends: number
+  totalCompensation: number
+  totalHours: number
+  unitPayStart: string  // "YYYY-MM-DD"
+  unitPayEnd: string    // "YYYY-MM-DD"
+}
+
+/** Returns the ISO date string for the day after `date`. */
+function addOneDay(date: string): string {
+  const [y, m, d] = date.split('-').map(Number)
+  const next = new Date(y, m - 1, d + 1)
+  return `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, '0')}-${String(next.getDate()).padStart(2, '0')}`
+}
+
+/**
+ * Compute compensation on a cash (payment-received) basis for a given year.
+ *
+ * Unit pay:
+ *   - No cutoff set: include all reports tagged Jan Y – Dec Y (same months as accrual).
+ *     Forward-uploaded PCRs are already payment-period scoped, so no date filtering needed.
+ *   - Cutoff set (e.g. "2024-12-20"): filter ALL line items across ALL reports by serviceDate
+ *     within (prevYearCutoff+1 … cutoff). Used for historical auto-split data where report
+ *     month ≠ payment period.
+ *
+ * Stipends:
+ *   Always shifted one month back: Dec(Y-1) through Nov(Y).
+ *   Stipends are monthly lump sums so no service-date filtering is applied.
+ */
+export function computeCashYearStats(
+  year: number,
+  allReports: MonthlyReport[],
+  allSchedules: Schedule[],
+  settings: Settings,
+  allMappings: StipendMapping[] = []
+): CashYearStats {
+  const cashCutoffs = settings.cashCutoffs ?? {}
+  const thisCutoff = cashCutoffs[year]
+  const prevCutoff = cashCutoffs[year - 1]
+
+  // ── Unit pay ──────────────────────────────────────────────────────────────
+  let totalUnitPay = 0
+  let totalDistributableUnits = 0
+  let totalHours = 0
+  let unitPayStart: string
+  let unitPayEnd: string
+
+  if (thisCutoff) {
+    unitPayStart = prevCutoff ? addOneDay(prevCutoff) : `${year}-01-01`
+    unitPayEnd   = thisCutoff
+
+    // Filter line items across all reports by serviceDate within the cash window
+    for (const report of allReports) {
+      const rate = report.unitDollarValue ?? 0
+      let reportUnits = 0
+      for (const li of report.lineItems) {
+        if (li.serviceDate >= unitPayStart && li.serviceDate <= unitPayEnd) {
+          reportUnits += li.totalDistributableUnits
+        }
+      }
+      // Include any manual unit correction if this report's month falls within the window
+      if (reportUnits > 0 || (report.unitCorrection ?? 0) !== 0) {
+        const reportMid = `${report.year}-${String(report.month).padStart(2, '0')}-15`
+        const correctionUnits = (reportMid >= unitPayStart && reportMid <= unitPayEnd)
+          ? (report.unitCorrection ?? 0)
+          : 0
+        const netUnits = reportUnits + correctionUnits
+        totalDistributableUnits += netUnits
+        totalUnitPay += netUnits * rate
+      }
+    }
+
+    // Hours: working days within the cash window
+    const startY = parseInt(unitPayStart.slice(0, 4)), startM = parseInt(unitPayStart.slice(5, 7))
+    const endY   = parseInt(unitPayEnd.slice(0, 4)),   endM   = parseInt(unitPayEnd.slice(5, 7))
+    let curY = startY, curM = startM
+    while (curY < endY || (curY === endY && curM <= endM)) {
+      const monthDays = computeCalendarMonthWorkingDays(curY, curM, allReports, allSchedules, settings, allMappings)
+      for (const d of monthDays) {
+        if (d.date >= unitPayStart && d.date <= unitPayEnd) totalHours += d.hours
+      }
+      if (curM === 12) { curY++; curM = 1 } else curM++
+    }
+  } else {
+    unitPayStart = `${year}-01-01`
+    unitPayEnd   = `${year}-12-31`
+
+    const yearStats = computeCalendarYearStats(year, allReports, allSchedules, settings, allMappings)
+    totalUnitPay              = yearStats.reduce((s, m) => s + m.unitCompensation, 0)
+    totalDistributableUnits   = yearStats.reduce((s, m) => s + m.totalDistributableUnits, 0)
+    totalHours                = yearStats.reduce((s, m) => s + m.totalHours, 0)
+  }
+
+  // ── Stipends: Dec(Y-1) through Nov(Y) ────────────────────────────────────
+  let totalStipends = 0
+
+  const decPrev = computeCalendarMonthStats(year - 1, 12, allReports, allSchedules, settings, allMappings)
+  if (decPrev) totalStipends += decPrev.shiftStipends + decPrev.additionalStipends
+
+  for (let m = 1; m <= 11; m++) {
+    const ms = computeCalendarMonthStats(year, m, allReports, allSchedules, settings, allMappings)
+    if (ms) totalStipends += ms.shiftStipends + ms.additionalStipends
+  }
+
+  return {
+    totalUnitPay,
+    totalDistributableUnits,
+    totalStipends,
+    totalCompensation: totalUnitPay + totalStipends,
+    totalHours,
+    unitPayStart,
+    unitPayEnd,
   }
 }

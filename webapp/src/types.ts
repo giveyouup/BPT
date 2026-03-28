@@ -142,6 +142,7 @@ export interface Settings {
   shiftHours: Record<string, number>
   holidays: Record<number, string[]> // year -> ["YYYY-MM-DD", ...]
   stipendMappingOverrides?: Record<string, string> // "YYYY-MM" -> mapping id (for months without a report)
+  cashCutoffs?: Record<number, string>             // year -> ISO date "YYYY-MM-DD" (end of unit-pay cash period)
 }
 
 export interface CptRange {
