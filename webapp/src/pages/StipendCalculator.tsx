@@ -26,13 +26,14 @@ const BAR_COLORS: Record<string, string> = {
   ROC:        '#2dd4bf', // teal-400
   GI:         '#34d399', // emerald-400
   FS:         '#94a3b8', // slate-400
+  alhambra:   '#fb923c', // orange-400
   other:      '#6b7280', // gray-500
   additional: '#9ca3af', // gray-400
 }
 
 // ─── Stipend group classification ────────────────────────────────────────────
 
-type StipendGroup = 'mainOrCall' | 'otherG' | 'APS' | 'BR' | 'NIR' | 'ROC' | 'GI' | 'FS' | 'other'
+type StipendGroup = 'mainOrCall' | 'otherG' | 'APS' | 'BR' | 'NIR' | 'ROC' | 'GI' | 'FS' | 'alhambra' | 'other'
 
 function getStipendGroup(canonical: string): StipendGroup {
   if (isCallShift(canonical)) return 'mainOrCall'
@@ -43,6 +44,7 @@ function getStipendGroup(canonical: string): StipendGroup {
   if (canonical === 'ROC') return 'ROC'
   if (canonical === 'GI') return 'GI'
   if (/^FS\d*$/i.test(canonical)) return 'FS'
+  if (/^A\d+$/i.test(canonical)) return 'alhambra'
   return 'other'
 }
 
@@ -83,6 +85,7 @@ interface MonthRow {
   ROC: number
   GI: number
   FS: number
+  alhambra: number
   other: number
   additional: number
   mappingName: string | null
@@ -108,9 +111,17 @@ const GROUPS: {
   { key: 'ROC',        label: 'ROC',          headerClass: 'text-teal-400',    cellClass: 'text-teal-300',    activeBg: 'bg-teal-900/20' },
   { key: 'GI',         label: 'GI/Endo',      headerClass: 'text-emerald-400', cellClass: 'text-emerald-300', activeBg: 'bg-emerald-900/20' },
   { key: 'FS',         label: 'FS',           headerClass: 'text-slate-400',   cellClass: 'text-slate-300',   activeBg: 'bg-slate-800/40' },
+  { key: 'alhambra',   label: 'Alhambra',     headerClass: 'text-orange-400',  cellClass: 'text-orange-300',  activeBg: 'bg-orange-900/20' },
   { key: 'other',      label: 'Other',        headerClass: 'text-gray-500',    cellClass: 'text-gray-400',    activeBg: 'bg-gray-700/30' },
   { key: 'additional', label: 'Additional',   headerClass: 'text-gray-400',    cellClass: 'text-gray-300',    activeBg: 'bg-gray-700/30' },
 ]
+
+// Groups whose sub-table shows extra Shift + Day-of-week columns
+const DETAIL_GROUPS = new Set<StipendGroup>(['mainOrCall', 'otherG'])
+
+function getDayOfWeek(date: string): string {
+  return new Date(date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short' })
+}
 
 // ─── Component ───────────────────────────────────────────────────────────────
 
@@ -171,7 +182,7 @@ export default function StipendCalculator() {
 
     const row: MonthRow = {
       year: selectedYear, month,
-      mainOrCall: 0, otherG: 0, APS: 0, BR: 0, NIR: 0, ROC: 0, GI: 0, FS: 0, other: 0, additional: 0,
+      mainOrCall: 0, otherG: 0, APS: 0, BR: 0, NIR: 0, ROC: 0, GI: 0, FS: 0, alhambra: 0, other: 0, additional: 0,
       mappingName: mapping ? (mapping.name || mapping.filename) : null,
       mappingId: mapping?.id ?? null,
       overrideId,
@@ -194,8 +205,14 @@ export default function StipendCalculator() {
 
       const addl = additionalByDate.get(date) ?? 0
       if (addl > 0) {
-        row.additional += addl
-        row.details.push({ date, shift: '—', group: 'additional', isWeekend, amount: addl })
+        const hasFsDay       = shiftTypes.some(r => /^FS\d*$/i.test(resolveShiftAlias(r.toUpperCase())))
+        const hasAlhambraDay = shiftTypes.some(r => /^A\d+$/i.test(resolveShiftAlias(r.toUpperCase())))
+        const addlGroup: StipendGroup | 'additional' =
+          hasFsDay && !hasAlhambraDay ? 'FS' :
+          hasAlhambraDay && !hasFsDay ? 'alhambra' :
+          'additional'
+        row[addlGroup] += addl
+        row.details.push({ date, shift: '—', group: addlGroup, isWeekend, amount: addl })
       }
     }
 
@@ -362,30 +379,37 @@ export default function StipendCalculator() {
                           </span>
                         </button>
                         {/* Inline detail panel */}
-                        {isActive && detailRows.length > 0 && (
-                          <div className={`mt-1 mb-1 rounded-lg border border-gray-700/50 overflow-hidden ${g.activeBg}`}>
-                            <table className="text-xs w-full">
-                              <tbody>
-                                {detailRows.map((d, i) => (
-                                  <tr key={i} className="border-b border-gray-700/30 last:border-0">
-                                    <td className="px-3 py-1.5 text-gray-300 whitespace-nowrap">{formatDateFull(d.date)}</td>
-                                    <td className="px-3 py-1.5 text-gray-500 whitespace-nowrap">{d.isWeekend ? 'WE/Hol' : 'WD'}</td>
-                                    <td className={`px-3 py-1.5 text-right font-semibold whitespace-nowrap ${g.cellClass}`}>{formatCurrencyFull(d.amount)}</td>
+                        {isActive && detailRows.length > 0 && (() => {
+                          const showExtra = DETAIL_GROUPS.has(g.key as StipendGroup)
+                          return (
+                            <div className={`mt-1 mb-1 rounded-lg border border-gray-700/50 overflow-hidden ${g.activeBg}`}>
+                              <table className="text-xs w-full">
+                                <tbody>
+                                  {detailRows.map((d, i) => (
+                                    <tr key={i} className="border-b border-gray-700/30 last:border-0">
+                                      <td className="px-3 py-1.5 text-gray-300 whitespace-nowrap">{formatDateFull(d.date)}</td>
+                                      {showExtra && <td className="px-3 py-1.5 text-gray-400 whitespace-nowrap font-medium">{d.shift}</td>}
+                                      {showExtra && <td className="px-3 py-1.5 text-gray-500 whitespace-nowrap">{getDayOfWeek(d.date)}</td>}
+                                      <td className="px-3 py-1.5 text-gray-500 whitespace-nowrap">{d.isWeekend ? 'WE/Hol' : 'WD'}</td>
+                                      <td className={`px-3 py-1.5 text-right font-semibold whitespace-nowrap ${g.cellClass}`}>{formatCurrencyFull(d.amount)}</td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                                <tfoot>
+                                  <tr className="border-t border-gray-700/50">
+                                    <td className="px-3 py-1.5 text-gray-500 font-semibold">{detailRows.length} shift{detailRows.length !== 1 ? 's' : ''}</td>
+                                    {showExtra && <td />}
+                                    {showExtra && <td />}
+                                    <td />
+                                    <td className={`px-3 py-1.5 text-right font-bold whitespace-nowrap ${g.cellClass}`}>
+                                      {formatCurrencyFull(detailRows.reduce((s, d) => s + d.amount, 0))}
+                                    </td>
                                   </tr>
-                                ))}
-                              </tbody>
-                              <tfoot>
-                                <tr className="border-t border-gray-700/50">
-                                  <td className="px-3 py-1.5 text-gray-500 font-semibold">{detailRows.length} shift{detailRows.length !== 1 ? 's' : ''}</td>
-                                  <td />
-                                  <td className={`px-3 py-1.5 text-right font-bold whitespace-nowrap ${g.cellClass}`}>
-                                    {formatCurrencyFull(detailRows.reduce((s, d) => s + d.amount, 0))}
-                                  </td>
-                                </tr>
-                              </tfoot>
-                            </table>
-                          </div>
-                        )}
+                                </tfoot>
+                              </table>
+                            </div>
+                          )
+                        })()}
                       </div>
                     )
                   })}
@@ -504,59 +528,68 @@ export default function StipendCalculator() {
                       </tr>
 
                       {/* Sub-row detail — sticky left so it's visible on mobile scroll */}
-                      {isRowExpanded && expandedGroupMeta && detailRows.length > 0 && (
-                        <tr className={`border-b border-gray-800 ${expandedGroupMeta.activeBg}`}>
-                          <td colSpan={colSpan} className="p-0">
-                            <div className="sticky left-0 w-fit max-w-[min(calc(100vw-2rem),420px)] px-4 py-3">
-                              {/* Panel header */}
-                              <div className="flex items-center justify-between mb-2 gap-4">
-                                <p className={`text-xs font-semibold uppercase tracking-wider ${expandedGroupMeta.headerClass}`}>
-                                  {getMonthName(row.month)} — {expandedGroupMeta.label}
-                                </p>
-                                <button
-                                  onClick={() => setActiveCell(null)}
-                                  className="text-gray-600 hover:text-gray-300 text-xs leading-none"
-                                  aria-label="Close detail"
-                                >
-                                  ✕
-                                </button>
-                              </div>
-                              {/* Detail table */}
-                              <div className={`rounded-lg border border-gray-700/50 overflow-hidden ${expandedGroupMeta.activeBg}`}>
-                                <table className="text-xs w-full">
-                                  <thead>
-                                    <tr className="border-b border-gray-700/50">
-                                      <th className="px-3 py-1.5 text-left text-gray-600 font-semibold uppercase tracking-wider whitespace-nowrap">Date</th>
-                                      <th className="px-3 py-1.5 text-left text-gray-600 font-semibold uppercase tracking-wider whitespace-nowrap">Day</th>
-                                      <th className="px-3 py-1.5 text-right text-gray-600 font-semibold uppercase tracking-wider whitespace-nowrap">Amount</th>
-                                    </tr>
-                                  </thead>
-                                  <tbody>
-                                    {detailRows.map((d, i) => (
-                                      <tr key={i} className="border-b border-gray-700/30 last:border-0">
-                                        <td className="px-3 py-1.5 text-gray-300 whitespace-nowrap">{formatDateFull(d.date)}</td>
-                                        <td className="px-3 py-1.5 text-gray-500 whitespace-nowrap">{d.isWeekend ? 'WE/Hol' : 'WD'}</td>
-                                        <td className={`px-3 py-1.5 text-right font-semibold whitespace-nowrap ${expandedGroupMeta.cellClass}`}>
-                                          {formatCurrencyFull(d.amount)}
+                      {isRowExpanded && expandedGroupMeta && detailRows.length > 0 && (() => {
+                        const showExtra = DETAIL_GROUPS.has(expandedGroup as StipendGroup)
+                        return (
+                          <tr className={`border-b border-gray-800 ${expandedGroupMeta.activeBg}`}>
+                            <td colSpan={colSpan} className="p-0">
+                              <div className={`sticky left-0 w-fit px-4 py-3 ${showExtra ? 'max-w-[min(calc(100vw-2rem),540px)]' : 'max-w-[min(calc(100vw-2rem),420px)]'}`}>
+                                {/* Panel header */}
+                                <div className="flex items-center justify-between mb-2 gap-4">
+                                  <p className={`text-xs font-semibold uppercase tracking-wider ${expandedGroupMeta.headerClass}`}>
+                                    {getMonthName(row.month)} — {expandedGroupMeta.label}
+                                  </p>
+                                  <button
+                                    onClick={() => setActiveCell(null)}
+                                    className="text-gray-600 hover:text-gray-300 text-xs leading-none"
+                                    aria-label="Close detail"
+                                  >
+                                    ✕
+                                  </button>
+                                </div>
+                                {/* Detail table */}
+                                <div className={`rounded-lg border border-gray-700/50 overflow-hidden ${expandedGroupMeta.activeBg}`}>
+                                  <table className="text-xs w-full">
+                                    <thead>
+                                      <tr className="border-b border-gray-700/50">
+                                        <th className="px-3 py-1.5 text-left text-gray-600 font-semibold uppercase tracking-wider whitespace-nowrap">Date</th>
+                                        {showExtra && <th className="px-3 py-1.5 text-left text-gray-600 font-semibold uppercase tracking-wider whitespace-nowrap">Shift</th>}
+                                        {showExtra && <th className="px-3 py-1.5 text-left text-gray-600 font-semibold uppercase tracking-wider whitespace-nowrap">DOW</th>}
+                                        <th className="px-3 py-1.5 text-left text-gray-600 font-semibold uppercase tracking-wider whitespace-nowrap">Day</th>
+                                        <th className="px-3 py-1.5 text-right text-gray-600 font-semibold uppercase tracking-wider whitespace-nowrap">Amount</th>
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {detailRows.map((d, i) => (
+                                        <tr key={i} className="border-b border-gray-700/30 last:border-0">
+                                          <td className="px-3 py-1.5 text-gray-300 whitespace-nowrap">{formatDateFull(d.date)}</td>
+                                          {showExtra && <td className="px-3 py-1.5 text-gray-400 whitespace-nowrap font-medium">{d.shift}</td>}
+                                          {showExtra && <td className="px-3 py-1.5 text-gray-500 whitespace-nowrap">{getDayOfWeek(d.date)}</td>}
+                                          <td className="px-3 py-1.5 text-gray-500 whitespace-nowrap">{d.isWeekend ? 'WE/Hol' : 'WD'}</td>
+                                          <td className={`px-3 py-1.5 text-right font-semibold whitespace-nowrap ${expandedGroupMeta.cellClass}`}>
+                                            {formatCurrencyFull(d.amount)}
+                                          </td>
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                    <tfoot>
+                                      <tr className="border-t border-gray-700/50">
+                                        <td className="px-3 py-1.5 text-gray-500 font-semibold">{detailRows.length} shift{detailRows.length !== 1 ? 's' : ''}</td>
+                                        {showExtra && <td />}
+                                        {showExtra && <td />}
+                                        <td />
+                                        <td className={`px-3 py-1.5 text-right font-bold whitespace-nowrap ${expandedGroupMeta.cellClass}`}>
+                                          {formatCurrencyFull(detailRows.reduce((s, d) => s + d.amount, 0))}
                                         </td>
                                       </tr>
-                                    ))}
-                                  </tbody>
-                                  <tfoot>
-                                    <tr className="border-t border-gray-700/50">
-                                      <td className="px-3 py-1.5 text-gray-500 font-semibold">{detailRows.length} shift{detailRows.length !== 1 ? 's' : ''}</td>
-                                      <td />
-                                      <td className={`px-3 py-1.5 text-right font-bold whitespace-nowrap ${expandedGroupMeta.cellClass}`}>
-                                        {formatCurrencyFull(detailRows.reduce((s, d) => s + d.amount, 0))}
-                                      </td>
-                                    </tr>
-                                  </tfoot>
-                                </table>
+                                    </tfoot>
+                                  </table>
+                                </div>
                               </div>
-                            </div>
-                          </td>
-                        </tr>
-                      )}
+                            </td>
+                          </tr>
+                        )
+                      })()}
                     </Fragment>
                   )
                 })}

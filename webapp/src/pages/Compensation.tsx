@@ -1,8 +1,9 @@
 import { useState, useMemo, useEffect, useRef } from 'react'
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from 'recharts'
 import { useData } from '../context/DataContext'
-import { computeCalendarYearStats, computeCashYearStats } from '../utils/calculations'
+import { computeCalendarYearStats, computeCashYearStats, computeCalendarMonthStats, getStipendForDay, getApplicableMapping } from '../utils/calculations'
 import { formatCurrency, formatMonthYear, formatDateShort, randomId } from '../utils/dateUtils'
+import { resolveShiftAlias } from '../utils/shiftUtils'
 import type { ExpenseEntry, AnnualExpenses } from '../types'
 
 // ─── Category definitions ──────────────────────────────────────────────────────
@@ -146,12 +147,13 @@ export default function Compensation() {
   }, [reports, annualExpenses, currentYear])
 
   const [selectedYear, setSelectedYear] = useState<number>(years[0] ?? currentYear)
-  const [cashView, setCashView] = useState(false)
+  const [cashView, setCashView] = useState(true)
   const [editingCutoff, setEditingCutoff] = useState(false)
   const [cutoffInput, setCutoffInput] = useState('')
   const [draft, setDraft] = useState<Record<string, string>>({})
   const draftKey = useRef<string>('')
   const [pieDrill, setPieDrill] = useState<'benefits' | 'retirement' | null>(null)
+  const [grossBreakdownOpen, setGrossBreakdownOpen] = useState(true)
 
   const [bizCat, setBizCat] = useState(''); const [bizAmt, setBizAmt] = useState(''); const [bizNote, setBizNote] = useState('')
   const [benCat, setBenCat] = useState(''); const [benAmt, setBenAmt] = useState(''); const [benNote, setBenNote] = useState('')
@@ -172,7 +174,102 @@ export default function Compensation() {
     [yearStats]
   )
 
+  const accrualUnitPay = useMemo(
+    () => yearStats.reduce((s, m) => s + m.unitCompensation, 0),
+    [yearStats]
+  )
+
   const annualGross = cashView ? cashStats.totalCompensation : accrualGross
+
+  const prevDecWorkingDays = useMemo(
+    () => cashView
+      ? (computeCalendarMonthStats(selectedYear - 1, 12, reports, schedules, settings, stipendMappings)?.workingDays ?? [])
+      : [],
+    [cashView, selectedYear, reports, schedules, settings, stipendMappings]
+  )
+
+  const stipendBreakdown = useMemo(() => {
+    const HOSP_CATS = [
+      { label: 'NIR',        pattern: /^NIR$/i },
+      { label: 'BR',         pattern: /^BR$/i },
+      { label: 'G1/G2 Call', pattern: /^G[12]$/i },
+      { label: 'Other G',    pattern: /^G[3-9]$|^G\d{2,}$/i },
+      { label: 'APS',        pattern: /^APS$/i },
+      { label: 'ROC',        pattern: /^ROC$/i },
+      { label: 'GI',         pattern: /^(GI|ENDO)$/i },
+    ]
+    const ASC_CATS = [
+      { label: 'FS',       pattern: /^FS\d*$/i },
+      { label: 'Alhambra', pattern: /^A\d+$/i },
+    ]
+    const ASC_SHIFT = /^(FS\d*|A\d+)$/i
+
+    const hospTotals: Record<string, number> = Object.fromEntries(HOSP_CATS.map(c => [c.label, 0]))
+    const ascTotals:  Record<string, number> = Object.fromEntries(ASC_CATS.map(c => [c.label, 0]))
+    let hospOther = 0, hospAdditional = 0, ascAdditional = 0
+
+    function processMonth(year: number, month: number, days: typeof yearStats[0]['workingDays']) {
+      const mapping = getApplicableMapping(year, month, stipendMappings)
+      for (const day of days) {
+        const dayIsAsc = day.shiftTypes.some(r => ASC_SHIFT.test(resolveShiftAlias(r.toUpperCase())))
+
+        for (const raw of day.shiftTypes) {
+          const canonical = resolveShiftAlias(raw.toUpperCase())
+          const amt = getStipendForDay([raw], day.isCallWeekend, mapping)
+          if (amt === 0) continue
+
+          let matched = false
+          for (const c of ASC_CATS) {
+            if (c.pattern.test(canonical)) { ascTotals[c.label] += amt; matched = true; break }
+          }
+          if (!matched) {
+            for (const c of HOSP_CATS) {
+              if (c.pattern.test(canonical)) { hospTotals[c.label] += amt; matched = true; break }
+            }
+            if (!matched) hospOther += amt
+          }
+        }
+
+        if (day.additionalStipend > 0) {
+          if (dayIsAsc) {
+            // Attribute to the specific ASC category if unambiguous, else "Additional"
+            const ascCatsOnDay = ASC_CATS.filter(c =>
+              day.shiftTypes.some(r => c.pattern.test(resolveShiftAlias(r.toUpperCase())))
+            )
+            if (ascCatsOnDay.length === 1) {
+              ascTotals[ascCatsOnDay[0].label] += day.additionalStipend
+            } else {
+              ascAdditional += day.additionalStipend
+            }
+          } else {
+            hospAdditional += day.additionalStipend
+          }
+        }
+      }
+    }
+
+    if (cashView) {
+      processMonth(selectedYear - 1, 12, prevDecWorkingDays)
+      for (const ms of yearStats) {
+        if (ms.month <= 11) processMonth(ms.year, ms.month, ms.workingDays)
+      }
+    } else {
+      for (const ms of yearStats) {
+        processMonth(ms.year, ms.month, ms.workingDays)
+      }
+    }
+
+    const hospital = [
+      ...HOSP_CATS.map(c => ({ label: c.label, amount: hospTotals[c.label] })).filter(r => r.amount > 0),
+      ...(hospOther      > 0 ? [{ label: 'Other',      amount: hospOther      }] : []),
+      ...(hospAdditional > 0 ? [{ label: 'Additional', amount: hospAdditional }] : []),
+    ]
+    const asc = [
+      ...ASC_CATS.map(c => ({ label: c.label, amount: ascTotals[c.label] })).filter(r => r.amount > 0),
+      ...(ascAdditional  > 0 ? [{ label: 'Additional', amount: ascAdditional  }] : []),
+    ]
+    return { hospital, asc }
+  }, [cashView, selectedYear, yearStats, prevDecWorkingDays, stipendMappings])
 
   const currentRecord = useMemo(
     () => annualExpenses.find(e => e.year === selectedYear),
@@ -412,6 +509,30 @@ export default function Compensation() {
         <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
           <p className="text-xs text-gray-500 mb-1">Gross Revenue</p>
           <p className="text-lg font-bold text-emerald-400">{formatCurrency(annualGross)}</p>
+          {annualGross > 0 && (() => {
+            const unitPay  = cashView ? cashStats.totalUnitPay : accrualUnitPay
+            const stipends = annualGross - unitPay
+            const unitPct  = Math.max(0, Math.min(100, unitPay / annualGross * 100))
+            const stipPct  = 100 - unitPct
+            return (
+              <div className="mt-2.5">
+                <div className="flex h-1.5 rounded-full overflow-hidden">
+                  <div className="bg-indigo-500" style={{ width: `${unitPct}%` }} />
+                  <div className="flex-1 bg-emerald-600" />
+                </div>
+                <div className="flex justify-between mt-1.5">
+                  <span className="flex items-center gap-1 text-[10px] text-gray-500">
+                    <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 flex-shrink-0" />
+                    {unitPct.toFixed(0)}% fees
+                  </span>
+                  <span className="flex items-center gap-1 text-[10px] text-gray-500">
+                    {stipPct.toFixed(0)}% stip
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 flex-shrink-0" />
+                  </span>
+                </div>
+              </div>
+            )
+          })()}
         </div>
         <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
           <p className="text-xs text-gray-500 mb-1">Overhead</p>
@@ -444,6 +565,100 @@ export default function Compensation() {
           )}
         </div>
       </div>
+
+{/* Gross Revenue Breakdown */}
+      {annualGross > 0 && (
+        <div className="bg-gray-900 border border-gray-800 rounded-xl mb-6 overflow-hidden">
+          <button
+            onClick={() => setGrossBreakdownOpen(v => !v)}
+            className="w-full flex items-center justify-between px-5 py-3.5 text-left hover:bg-gray-800/50 transition-colors"
+          >
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-gray-500 uppercase tracking-wider">Gross Revenue Breakdown</span>
+              <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${cashView ? 'bg-emerald-900/50 text-emerald-400' : 'bg-gray-800 text-gray-500'}`}>
+                {cashView ? 'Cash' : 'Accrual'}
+              </span>
+            </div>
+            <div className="flex items-center gap-3">
+              <span className="text-sm font-semibold text-emerald-400">{formatCurrency(annualGross)}</span>
+              <svg className={`w-4 h-4 text-gray-500 transition-transform ${grossBreakdownOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              </svg>
+            </div>
+          </button>
+          {grossBreakdownOpen && (
+            <div className="px-5 pb-5 pt-1 space-y-4 border-t border-gray-800/60">
+              {/* Professional Fees */}
+              <div className="pt-3">
+                <p className="text-[10px] text-gray-600 uppercase tracking-wider mb-2">Professional Fees</p>
+                <div className="flex items-center justify-between">
+                  <span className="text-sm text-gray-400">Unit-Based Pay</span>
+                  <span className="text-sm font-semibold text-gray-200 tabular-nums">
+                    {formatCurrency(cashView ? cashStats.totalUnitPay : accrualUnitPay)}
+                  </span>
+                </div>
+              </div>
+              <div className="border-t border-gray-800" />
+              {/* Hospital Stipends */}
+              <div>
+                <p className="text-[10px] text-gray-600 uppercase tracking-wider mb-2">Hospital Stipends</p>
+                {stipendBreakdown.hospital.length === 0 ? (
+                  <p className="text-sm text-gray-600 italic">No hospital stipend data</p>
+                ) : (
+                  <div className="space-y-1.5">
+                    {stipendBreakdown.hospital.map(({ label, amount }) => (
+                      <div key={label} className="flex items-center justify-between">
+                        <span className="text-sm text-gray-400">{label}</span>
+                        <span className="text-sm font-medium text-gray-300 tabular-nums">{formatCurrency(amount)}</span>
+                      </div>
+                    ))}
+                    <div className="pt-1.5 border-t border-gray-800 flex items-center justify-between">
+                      <span className="text-sm text-gray-500">Total Hospital Stipends</span>
+                      <span className="text-sm font-semibold text-gray-200 tabular-nums">
+                        {formatCurrency(stipendBreakdown.hospital.reduce((s, c) => s + c.amount, 0))}
+                      </span>
+                    </div>
+                  </div>
+                )}
+              </div>
+              <div className="border-t border-gray-800" />
+              {/* ASC Stipends */}
+              <div>
+                <p className="text-[10px] text-gray-600 uppercase tracking-wider mb-2">ASC Stipends</p>
+                {stipendBreakdown.asc.length === 0 ? (
+                  <p className="text-sm text-gray-600 italic">No ASC stipend data</p>
+                ) : (
+                  <div className="space-y-1.5">
+                    {stipendBreakdown.asc.map(({ label, amount }) => (
+                      <div key={label} className="flex items-center justify-between">
+                        <span className="text-sm text-gray-400">{label}</span>
+                        <span className="text-sm font-medium text-gray-300 tabular-nums">{formatCurrency(amount)}</span>
+                      </div>
+                    ))}
+                    <div className="pt-1.5 border-t border-gray-800 flex items-center justify-between">
+                      <span className="text-sm text-gray-500">Total ASC Stipends</span>
+                      <span className="text-sm font-semibold text-gray-200 tabular-nums">
+                        {formatCurrency(stipendBreakdown.asc.reduce((s, c) => s + c.amount, 0))}
+                      </span>
+                    </div>
+                  </div>
+                )}
+              </div>
+              {/* Grand total */}
+              {(stipendBreakdown.hospital.length > 0 || stipendBreakdown.asc.length > 0) && (
+                <div className="border-t border-gray-700 pt-2 flex items-center justify-between">
+                  <span className="text-sm font-semibold text-gray-400">Total Stipends</span>
+                  <span className="text-sm font-bold text-emerald-400 tabular-nums">
+                    {formatCurrency(
+                      [...stipendBreakdown.hospital, ...stipendBreakdown.asc].reduce((s, c) => s + c.amount, 0)
+                    )}
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
 {/* Pie chart — Total Compensation breakdown */}
       {totalComp > 0 && (() => {

@@ -959,6 +959,7 @@ export default function AnnualSummary() {
           sub={isProjectionActive && wiTotal != null
             ? `Actual: ${formatCurrency(ytdTotal)} · ${deltaLabel(ytdTotal, wiTotal)}`
             : `${formatCurrency(ytdUnitPay)} unit · ${formatCurrency(ytdStipends)} stipends`}
+          splitBar={(wiTotal ?? ytdTotal) > 0 ? { unitPct: (projYtdUnitPay ?? ytdUnitPay) / (wiTotal ?? ytdTotal) * 100 } : undefined}
           private
         />
         <StatCard label="YTD Hours" value={formatHours(ytdHours)}

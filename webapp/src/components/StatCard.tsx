@@ -6,9 +6,11 @@ interface StatCardProps {
   sub?: string
   color?: 'default' | 'green' | 'indigo' | 'amber'
   private?: boolean
+  /** Two-segment split bar: unitPct 0–100, remainder shown as stipends */
+  splitBar?: { unitPct: number }
 }
 
-export default function StatCard({ label, value, sub, color = 'default', private: isPrivate = false }: StatCardProps) {
+export default function StatCard({ label, value, sub, color = 'default', private: isPrivate = false, splitBar }: StatCardProps) {
   const [hidden, setHidden] = useState(isPrivate)
 
   const valueColors = {
@@ -48,6 +50,28 @@ export default function StatCard({ label, value, sub, color = 'default', private
         {isPrivate && hidden ? '••••••' : value}
       </p>
       {sub && <p className="text-xs text-gray-600 mt-0.5">{sub}</p>}
+      {splitBar && (() => {
+        const unitPct = Math.max(0, Math.min(100, splitBar.unitPct))
+        const stipPct = 100 - unitPct
+        return (
+          <div className="mt-2.5">
+            <div className="flex h-1.5 rounded-full overflow-hidden">
+              <div className="bg-indigo-500" style={{ width: `${unitPct}%` }} />
+              <div className="flex-1 bg-emerald-600" />
+            </div>
+            <div className="flex justify-between mt-1.5">
+              <span className="flex items-center gap-1 text-[10px] text-gray-500">
+                <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 flex-shrink-0" />
+                {unitPct.toFixed(0)}% fees
+              </span>
+              <span className="flex items-center gap-1 text-[10px] text-gray-500">
+                {stipPct.toFixed(0)}% stip
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 flex-shrink-0" />
+              </span>
+            </div>
+          </div>
+        )
+      })()}
     </div>
   )
 }
