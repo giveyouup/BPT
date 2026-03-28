@@ -190,6 +190,25 @@ export default function Dashboard() {
     [selectedYear, reports, allSchedules, settings, allMappings]
   )
 
+  const selStats = useMemo(
+    () => yearStats.find((s) => s.id === selectedId) ?? yearStats.at(-1),
+    [yearStats, selectedId]
+  )
+
+  const prevAdjMonthDays = useMemo(() => {
+    if (!selStats) return []
+    const y = selStats.month === 1 ? selStats.year - 1 : selStats.year
+    const m = selStats.month === 1 ? 12 : selStats.month - 1
+    return computeCalendarMonthWorkingDays(y, m, reports, allSchedules, settings, allMappings)
+  }, [selStats, reports, allSchedules, settings, allMappings])
+
+  const nextAdjMonthDays = useMemo(() => {
+    if (!selStats) return []
+    const y = selStats.month === 12 ? selStats.year + 1 : selStats.year
+    const m = selStats.month === 12 ? 1 : selStats.month + 1
+    return computeCalendarMonthWorkingDays(y, m, reports, allSchedules, settings, allMappings)
+  }, [selStats, reports, allSchedules, settings, allMappings])
+
   if (reports.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center h-full text-center px-8">
@@ -213,14 +232,13 @@ export default function Dashboard() {
     )
   }
 
+  if (!selStats) return null
+
   const ytdUnits = yearStats.reduce((s, m) => s + m.totalDistributableUnits, 0)
   const ytdCompensation = yearStats.reduce((s, m) => s + m.totalCompensation, 0)
   const ytdHours = yearStats.reduce((s, m) => s + m.totalHours, 0)
 
-  // selStats: prefer selectedId if it's in the selected year, else last month of selected year
-  const selStats =
-    yearStats.find((s) => s.id === selectedId) ?? yearStats[yearStats.length - 1]
-  const effectiveRate = selStats && selStats.totalDistributableUnits > 0
+  const effectiveRate = selStats.totalDistributableUnits > 0
     ? selStats.unitCompensation / selStats.totalDistributableUnits
     : null
 
@@ -236,18 +254,12 @@ export default function Dashboard() {
   const lastDay  = lastDayOfMonth(selStats.year, selStats.month)
   const firstWeekKey = weekStart(firstDay)
   const lastWeekKey  = weekStart(lastDay)
-  const prevY = selStats.month === 1 ? selStats.year - 1 : selStats.year
-  const prevM = selStats.month === 1 ? 12 : selStats.month - 1
-  const nextY = selStats.month === 12 ? selStats.year + 1 : selStats.year
-  const nextM = selStats.month === 12 ? 1  : selStats.month + 1
   const prevAdjacent: WorkingDayStats[] = firstDay !== firstWeekKey
-    ? computeCalendarMonthWorkingDays(prevY, prevM, reports, allSchedules, settings, allMappings)
-        .filter(d => weekStart(d.date) === firstWeekKey)
+    ? prevAdjMonthDays.filter(d => weekStart(d.date) === firstWeekKey)
     : []
   const lastDayDow = new Date(selStats.year, selStats.month - 1, parseInt(lastDay.split('-')[2])).getDay()
   const nextAdjacent: WorkingDayStats[] = lastDayDow !== 0
-    ? computeCalendarMonthWorkingDays(nextY, nextM, reports, allSchedules, settings, allMappings)
-        .filter(d => weekStart(d.date) === lastWeekKey)
+    ? nextAdjMonthDays.filter(d => weekStart(d.date) === lastWeekKey)
     : []
   const weeks = groupByWeek([...prevAdjacent, ...monthDays, ...nextAdjacent])
   // maxWeekHours computed after weekProjHours (see below)
