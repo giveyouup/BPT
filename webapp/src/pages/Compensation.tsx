@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect, useRef } from 'react'
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from 'recharts'
 import { useData } from '../context/DataContext'
 import { computeCalendarYearStats, computeCashYearStats } from '../utils/calculations'
-import { formatCurrency, formatMonthYear, randomId } from '../utils/dateUtils'
+import { formatCurrency, formatMonthYear, formatDateShort, randomId } from '../utils/dateUtils'
 import type { ExpenseEntry, AnnualExpenses } from '../types'
 
 // ─── Category definitions ──────────────────────────────────────────────────────
@@ -308,7 +308,7 @@ export default function Compensation() {
         <h2 className="text-2xl font-bold text-gray-100">Compensation</h2>
         <div className="flex items-center gap-2 ml-2">
           {years.slice(0, 3).map(y => (
-            <button key={y} onClick={() => setSelectedYear(y)}
+            <button key={y} onClick={() => { setSelectedYear(y); setEditingCutoff(false) }}
               className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
                 y === selectedYear ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-gray-200'
               }`}>{y}</button>
@@ -316,7 +316,7 @@ export default function Compensation() {
           {years.length > 3 && (
             <select
               value={years.slice(3).includes(selectedYear) ? selectedYear : ''}
-              onChange={e => setSelectedYear(Number(e.target.value))}
+              onChange={e => { setSelectedYear(Number(e.target.value)); setEditingCutoff(false) }}
               className={`bg-gray-900 border rounded-md px-2 py-1 text-sm font-medium focus:outline-none focus:ring-1 focus:ring-indigo-500 ${
                 years.slice(3).includes(selectedYear) ? 'border-indigo-600 text-white' : 'border-gray-700 text-gray-400'
               }`}
@@ -379,22 +379,23 @@ export default function Compensation() {
                   >Clear</button>
                 )}
               </div>
-            ) : (
-              <div className="flex items-center gap-2">
-                <span className="text-[11px] text-emerald-300/80">
-                  {cashStats.unitPayStart === `${selectedYear}-01-01`
-                    ? `Jan 1 – Dec 31, ${selectedYear}`
-                    : `${cashStats.unitPayStart} – ${cashStats.unitPayEnd}`}
-                </span>
-                {!settings.cashCutoffs?.[selectedYear] && (
-                  <span className="text-[10px] text-gray-600">(standard)</span>
-                )}
-                <button
-                  onClick={() => { setCutoffInput(settings.cashCutoffs?.[selectedYear] ?? `${selectedYear}-12-31`); setEditingCutoff(true) }}
-                  className="text-[10px] text-gray-500 hover:text-gray-300 underline underline-offset-2"
-                >edit</button>
-              </div>
-            )}
+            ) : (() => {
+              const hasCustomCutoff = !!settings.cashCutoffs?.[selectedYear]
+              const endYear = cashStats.unitPayEnd.slice(0, 4)
+              const displayRange = `${formatDateShort(cashStats.unitPayStart)} – ${formatDateShort(cashStats.unitPayEnd)}, ${endYear}`
+              return (
+                <div className="flex items-center gap-2">
+                  <span className="text-[11px] text-emerald-300/80">{displayRange}</span>
+                  {!hasCustomCutoff && (
+                    <span className="text-[10px] text-gray-600">(standard)</span>
+                  )}
+                  <button
+                    onClick={() => { setCutoffInput(settings.cashCutoffs?.[selectedYear] ?? ''); setEditingCutoff(true) }}
+                    className="text-[10px] text-gray-500 hover:text-gray-300 underline underline-offset-2"
+                  >edit</button>
+                </div>
+              )
+            })()}
           </div>
           {/* Stipend row */}
           <div className="flex items-center gap-x-3">
