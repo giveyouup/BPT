@@ -41,7 +41,7 @@ const HEALTHCARE_KEYS  = new Set(['healthDental', 'healthMedical', 'healthVision
 const ACTIVE_KEYS      = new Set([...BUSINESS_KEYS, ...BENEFITS_KEYS, ...RETIREMENT_KEYS])
 const ALL_LEAVES       = [...BUSINESS_LEAVES, ...BENEFITS_LEAVES, ...RETIREMENT_LEAVES]
 
-type Section = 'business' | 'benefits' | 'retirement' // used by handleDeleteEntry
+type Section = 'business' | 'benefits' | 'retirement' | 'otherIncome'
 
 function initDraft(rec: AnnualExpenses | undefined, annualGross: number): Record<string, string> {
   const draft: Record<string, string> = {}
@@ -158,6 +158,7 @@ export default function Compensation() {
   const [bizCat, setBizCat] = useState(''); const [bizAmt, setBizAmt] = useState(''); const [bizNote, setBizNote] = useState('')
   const [benCat, setBenCat] = useState(''); const [benAmt, setBenAmt] = useState(''); const [benNote, setBenNote] = useState('')
   const [retCat, setRetCat] = useState(''); const [retAmt, setRetAmt] = useState(''); const [retNote, setRetNote] = useState('')
+  const [otherCat, setOtherCat] = useState(''); const [otherAmt, setOtherAmt] = useState(''); const [otherNote, setOtherNote] = useState('')
 
   const yearStats = useMemo(
     () => computeCalendarYearStats(selectedYear, reports, schedules, settings, stipendMappings),
@@ -242,7 +243,15 @@ export default function Compensation() {
               ascAdditional += day.additionalStipend
             }
           } else {
-            hospAdditional += day.additionalStipend
+            // Attribute to the specific hospital category if unambiguous, else "Additional"
+            const hospCatsOnDay = HOSP_CATS.filter(c =>
+              day.shiftTypes.some(r => c.pattern.test(resolveShiftAlias(r.toUpperCase())))
+            )
+            if (hospCatsOnDay.length === 1) {
+              hospTotals[hospCatsOnDay[0].label] += day.additionalStipend
+            } else {
+              hospAdditional += day.additionalStipend
+            }
           }
         }
       }
@@ -305,7 +314,7 @@ export default function Compensation() {
   function getOrCreate(): AnnualExpenses {
     return currentRecord ?? {
       id: String(selectedYear), year: selectedYear,
-      recurring: {}, entries: [], benefitsEntries: [], retirementEntries: [],
+      recurring: {}, entries: [], benefitsEntries: [], retirementEntries: [], otherIncomeEntries: [],
     }
   }
 
@@ -314,7 +323,8 @@ export default function Compensation() {
       Object.values(rec.recurring ?? {}).some(v => v !== 0) ||
       (rec.entries?.length ?? 0) > 0 ||
       (rec.benefitsEntries?.length ?? 0) > 0 ||
-      (rec.retirementEntries?.length ?? 0) > 0
+      (rec.retirementEntries?.length ?? 0) > 0 ||
+      (rec.otherIncomeEntries?.length ?? 0) > 0
     )
   }
 
@@ -358,6 +368,15 @@ export default function Compensation() {
     setRetCat(''); setRetAmt(''); setRetNote('')
   }
 
+  async function handleAddOther() {
+    const amt = parseFloat(otherAmt)
+    if (!otherCat.trim() || isNaN(amt) || amt === 0) return
+    const record = getOrCreate()
+    const entry: ExpenseEntry = { id: randomId(), category: otherCat.trim(), amount: amt, note: otherNote.trim() || undefined }
+    await saveAnnualExpenses({ ...record, otherIncomeEntries: [...(record.otherIncomeEntries ?? []), entry] })
+    setOtherCat(''); setOtherAmt(''); setOtherNote('')
+  }
+
   async function handleDeleteEntry(section: Section, entryId: string) {
     const record = getOrCreate()
     let updated: AnnualExpenses
@@ -365,8 +384,10 @@ export default function Compensation() {
       updated = { ...record, entries: (record.entries ?? []).filter(e => e.id !== entryId) }
     } else if (section === 'benefits') {
       updated = { ...record, benefitsEntries: (record.benefitsEntries ?? []).filter(e => e.id !== entryId) }
-    } else {
+    } else if (section === 'retirement') {
       updated = { ...record, retirementEntries: (record.retirementEntries ?? []).filter(e => e.id !== entryId) }
+    } else {
+      updated = { ...record, otherIncomeEntries: (record.otherIncomeEntries ?? []).filter(e => e.id !== entryId) }
     }
     if (!hasAnything(updated)) await deleteAnnualExpenses(updated.id)
     else await saveAnnualExpenses(updated)
@@ -381,13 +402,15 @@ export default function Compensation() {
       .reduce((s, [, v]) => s + v, 0)
   }
 
-  const businessExpenses = recurringSum(BUSINESS_KEYS) + (currentRecord?.entries?.reduce((s, e) => s + e.amount, 0) ?? 0)
-  const benefitsTotal    = recurringSum(BENEFITS_KEYS) + (currentRecord?.benefitsEntries?.reduce((s, e) => s + e.amount, 0) ?? 0)
-  const healthcareTotal  = recurringSum(HEALTHCARE_KEYS)
-  const retirementTotal  = recurringSum(RETIREMENT_KEYS) + (currentRecord?.retirementEntries?.reduce((s, e) => s + e.amount, 0) ?? 0)
-  const netIncome        = annualGross - businessExpenses - benefitsTotal - retirementTotal
-  const totalComp        = netIncome + benefitsTotal + retirementTotal
-  const overheadPct      = annualGross > 0 ? businessExpenses / annualGross * 100 : 0
+  const businessExpenses     = recurringSum(BUSINESS_KEYS) + (currentRecord?.entries?.reduce((s, e) => s + e.amount, 0) ?? 0)
+  const benefitsTotal        = recurringSum(BENEFITS_KEYS) + (currentRecord?.benefitsEntries?.reduce((s, e) => s + e.amount, 0) ?? 0)
+  const healthcareTotal      = recurringSum(HEALTHCARE_KEYS)
+  const retirementTotal      = recurringSum(RETIREMENT_KEYS) + (currentRecord?.retirementEntries?.reduce((s, e) => s + e.amount, 0) ?? 0)
+  const otherIncome          = (currentRecord?.otherIncomeEntries ?? []).reduce((s, e) => s + e.amount, 0)
+  const netIncome            = annualGross - businessExpenses - benefitsTotal - retirementTotal
+  const totalComp            = netIncome + otherIncome + benefitsTotal + retirementTotal
+  const overheadPct          = annualGross > 0 ? businessExpenses / annualGross * 100 : 0
+  const effectiveOverheadPct = (annualGross + otherIncome) > 0 ? businessExpenses / (annualGross + otherIncome) * 100 : 0
   const totalHours       = cashView
     ? cashStats.totalHours
     : yearStats.reduce((s, m) => s + m.totalHours, 0)
@@ -505,30 +528,75 @@ export default function Compensation() {
       )}
 
       {/* Stat cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3 mb-6">
+        {/* Total Gross Revenue — clinical + other income */}
+        {(() => {
+          const unitPay    = cashView ? cashStats.totalUnitPay : accrualUnitPay
+          const stipends   = annualGross - unitPay
+          const totalGross = annualGross + otherIncome
+          const unitPct    = totalGross > 0 ? Math.max(0, Math.min(100, unitPay    / totalGross * 100)) : 0
+          const stipPct    = totalGross > 0 ? Math.max(0, Math.min(100, stipends   / totalGross * 100)) : 0
+          const adminPct   = totalGross > 0 ? Math.max(0, Math.min(100, otherIncome / totalGross * 100)) : 0
+          return (
+            <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
+              <p className="text-xs text-gray-500 mb-1">Total Gross Revenue</p>
+              <p className="text-lg font-bold text-emerald-400">{formatCurrency(totalGross)}</p>
+              {totalGross > 0 && (
+                <div className="relative mt-2.5 group/bar">
+                  <div className="flex h-1.5 rounded-full overflow-hidden cursor-default">
+                    <div className="bg-indigo-500"  style={{ width: `${unitPct}%`  }} />
+                    <div className="bg-emerald-600" style={{ width: `${stipPct}%`  }} />
+                    <div className="flex-1 bg-amber-500" />
+                  </div>
+                  <div className="absolute bottom-full left-0 mb-2 hidden group-hover/bar:block z-20 bg-gray-950 border border-gray-700 rounded-lg shadow-xl p-2.5 w-36 space-y-1.5">
+                    <div className="flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-indigo-500 flex-shrink-0" />
+                      <span className="text-[11px] text-gray-400 flex-1">Fees</span>
+                      <span className="text-[11px] text-gray-300 tabular-nums">{unitPct.toFixed(0)}%</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="w-2 h-2 rounded-full bg-emerald-600 flex-shrink-0" />
+                      <span className="text-[11px] text-gray-400 flex-1">Stipends</span>
+                      <span className="text-[11px] text-gray-300 tabular-nums">{stipPct.toFixed(0)}%</span>
+                    </div>
+                    {otherIncome > 0 && (
+                      <div className="flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full bg-amber-500 flex-shrink-0" />
+                        <span className="text-[11px] text-gray-400 flex-1">Admin</span>
+                        <span className="text-[11px] text-gray-300 tabular-nums">{adminPct.toFixed(0)}%</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          )
+        })()}
+        {/* Gross Clinical Revenue */}
         <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
-          <p className="text-xs text-gray-500 mb-1">Gross Revenue</p>
+          <p className="text-xs text-gray-500 mb-1">Gross Clinical Revenue</p>
           <p className="text-lg font-bold text-emerald-400">{formatCurrency(annualGross)}</p>
           {annualGross > 0 && (() => {
-            const unitPay  = cashView ? cashStats.totalUnitPay : accrualUnitPay
-            const stipends = annualGross - unitPay
-            const unitPct  = Math.max(0, Math.min(100, unitPay / annualGross * 100))
-            const stipPct  = 100 - unitPct
+            const unitPay = cashView ? cashStats.totalUnitPay : accrualUnitPay
+            const unitPct = Math.max(0, Math.min(100, unitPay / annualGross * 100))
+            const stipPct = 100 - unitPct
             return (
-              <div className="mt-2.5">
-                <div className="flex h-1.5 rounded-full overflow-hidden">
+              <div className="relative mt-2.5 group/bar">
+                <div className="flex h-1.5 rounded-full overflow-hidden cursor-default">
                   <div className="bg-indigo-500" style={{ width: `${unitPct}%` }} />
                   <div className="flex-1 bg-emerald-600" />
                 </div>
-                <div className="flex justify-between mt-1.5">
-                  <span className="flex items-center gap-1 text-[10px] text-gray-500">
-                    <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 flex-shrink-0" />
-                    {unitPct.toFixed(0)}% fees
-                  </span>
-                  <span className="flex items-center gap-1 text-[10px] text-gray-500">
-                    {stipPct.toFixed(0)}% stip
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 flex-shrink-0" />
-                  </span>
+                <div className="absolute bottom-full left-0 mb-2 hidden group-hover/bar:block z-20 bg-gray-950 border border-gray-700 rounded-lg shadow-xl p-2.5 w-32 space-y-1.5">
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-indigo-500 flex-shrink-0" />
+                    <span className="text-[11px] text-gray-400 flex-1">Fees</span>
+                    <span className="text-[11px] text-gray-300 tabular-nums">{unitPct.toFixed(0)}%</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-emerald-600 flex-shrink-0" />
+                    <span className="text-[11px] text-gray-400 flex-1">Stipends</span>
+                    <span className="text-[11px] text-gray-300 tabular-nums">{stipPct.toFixed(0)}%</span>
+                  </div>
                 </div>
               </div>
             )
@@ -537,6 +605,9 @@ export default function Compensation() {
         <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
           <p className="text-xs text-gray-500 mb-1">Overhead</p>
           <p className="text-lg font-bold text-amber-400">{formatPct(overheadPct)}</p>
+          {otherIncome > 0 && (
+            <p className="text-[10px] text-gray-600 mt-1">{formatPct(effectiveOverheadPct)} effective w/ admin</p>
+          )}
         </div>
         <div className="relative bg-gray-900 border border-gray-800 rounded-xl p-4 group">
           <p className="text-xs text-gray-500 mb-1">Business Expenses</p>
@@ -660,6 +731,44 @@ export default function Compensation() {
         </div>
       )}
 
+{/* Other Income */}
+      <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden mb-6">
+        <div className="px-5 py-3 border-b border-gray-800 flex items-center justify-between">
+          <div>
+            <span className="text-sm font-semibold text-gray-300">Other Income</span>
+            <span className="text-[11px] text-gray-600 ml-2">Administrative &amp; committee</span>
+          </div>
+          {otherIncome > 0 && (
+            <span className="text-sm font-bold text-emerald-400 tabular-nums">{formatCurrency(otherIncome)}</span>
+          )}
+        </div>
+        <div className="pl-4 pr-5 py-4 border-l-4 border-emerald-800">
+          <EntryList entries={currentRecord?.otherIncomeEntries ?? []} onDelete={id => handleDeleteEntry('otherIncome', id)} />
+          <div className="flex flex-wrap items-end gap-2 pt-2">
+            <div className="flex-1 min-w-[130px]">
+              <label className="block text-[10px] text-gray-600 mb-1 uppercase tracking-wider">Source</label>
+              <input
+                list="other-cats"
+                value={otherCat} onChange={e => setOtherCat(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') handleAddOther() }}
+                placeholder="Description"
+                className="w-full bg-gray-800 border border-gray-700 rounded px-2.5 py-1.5 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+              />
+              <datalist id="other-cats">{['QA Committee','Credentials Committee','Department Chief','Medical Directorship','Teaching / Education','Other'].map(s => <option key={s} value={s} />)}</datalist>
+            </div>
+            <div className="w-28">
+              <label className="block text-[10px] text-gray-600 mb-1 uppercase tracking-wider">Amount</label>
+              <input type="number" step="1" value={otherAmt} onChange={e => setOtherAmt(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') handleAddOther() }} placeholder="0" className="w-full bg-gray-800 border border-gray-700 rounded px-2.5 py-1.5 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-indigo-500" />
+            </div>
+            <div className="flex-1 min-w-[90px]">
+              <label className="block text-[10px] text-gray-600 mb-1 uppercase tracking-wider">Note</label>
+              <input value={otherNote} onChange={e => setOtherNote(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') handleAddOther() }} placeholder="optional" className="w-full bg-gray-800 border border-gray-700 rounded px-2.5 py-1.5 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-indigo-500" />
+            </div>
+            <button onClick={handleAddOther} disabled={!otherCat.trim() || !otherAmt} className="px-3 py-1.5 bg-indigo-600 text-white text-sm rounded-md hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors font-medium">Add</button>
+          </div>
+        </div>
+      </div>
+
 {/* Pie chart — Total Compensation breakdown */}
       {totalComp > 0 && (() => {
         const freeformBen = (currentRecord?.benefitsEntries ?? []).reduce((s, e) => s + e.amount, 0)
@@ -667,9 +776,9 @@ export default function Compensation() {
 
         type Drill = 'benefits' | 'retirement' | null
         const topSlices = [
-          { label: 'Net Income',  value: Math.max(netIncome, 0),        hex: '#818cf8', drill: null as Drill },
-          { label: 'Benefits',    value: Math.max(benefitsTotal, 0),    hex: '#fb923c', drill: 'benefits' as Drill },
-          { label: 'Retirement',  value: Math.max(retirementTotal, 0),  hex: '#4ade80', drill: 'retirement' as Drill },
+          { label: otherIncome > 0 ? 'Net + Admin Income' : 'Net Income', value: Math.max(netIncome + otherIncome, 0), hex: '#818cf8', drill: null as Drill },
+          { label: 'Benefits',   value: Math.max(benefitsTotal, 0),   hex: '#fb923c', drill: 'benefits'   as Drill },
+          { label: 'Retirement', value: Math.max(retirementTotal, 0), hex: '#4ade80', drill: 'retirement' as Drill },
         ].filter(d => d.value > 0)
 
         const benefitsSlices = [

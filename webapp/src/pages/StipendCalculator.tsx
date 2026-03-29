@@ -205,12 +205,13 @@ export default function StipendCalculator() {
 
       const addl = additionalByDate.get(date) ?? 0
       if (addl > 0) {
-        const hasFsDay       = shiftTypes.some(r => /^FS\d*$/i.test(resolveShiftAlias(r.toUpperCase())))
-        const hasAlhambraDay = shiftTypes.some(r => /^A\d+$/i.test(resolveShiftAlias(r.toUpperCase())))
+        const groupsOnDay = new Set(
+          shiftTypes
+            .filter(r => !isOffDayShift(r))
+            .map(r => getStipendGroup(resolveShiftAlias(r.toUpperCase())))
+        )
         const addlGroup: StipendGroup | 'additional' =
-          hasFsDay && !hasAlhambraDay ? 'FS' :
-          hasAlhambraDay && !hasFsDay ? 'alhambra' :
-          'additional'
+          groupsOnDay.size === 1 ? [...groupsOnDay][0] : 'additional'
         row[addlGroup] += addl
         row.details.push({ date, shift: '—', group: addlGroup, isWeekend, amount: addl })
       }

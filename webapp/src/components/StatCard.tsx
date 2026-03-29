@@ -54,20 +54,22 @@ export default function StatCard({ label, value, sub, color = 'default', private
         const unitPct = Math.max(0, Math.min(100, splitBar.unitPct))
         const stipPct = 100 - unitPct
         return (
-          <div className="mt-2.5">
-            <div className="flex h-1.5 rounded-full overflow-hidden">
+          <div className="relative mt-2.5 group/bar">
+            <div className="flex h-1.5 rounded-full overflow-hidden cursor-default">
               <div className="bg-indigo-500" style={{ width: `${unitPct}%` }} />
               <div className="flex-1 bg-emerald-600" />
             </div>
-            <div className="flex justify-between mt-1.5">
-              <span className="flex items-center gap-1 text-[10px] text-gray-500">
-                <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 flex-shrink-0" />
-                {unitPct.toFixed(0)}% fees
-              </span>
-              <span className="flex items-center gap-1 text-[10px] text-gray-500">
-                {stipPct.toFixed(0)}% stip
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-600 flex-shrink-0" />
-              </span>
+            <div className="absolute bottom-full left-0 mb-2 hidden group-hover/bar:block z-20 bg-gray-950 border border-gray-700 rounded-lg shadow-xl p-2.5 w-32 space-y-1.5">
+              <div className="flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-indigo-500 flex-shrink-0" />
+                <span className="text-[11px] text-gray-400 flex-1">Fees</span>
+                <span className="text-[11px] text-gray-300 tabular-nums">{unitPct.toFixed(0)}%</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-emerald-600 flex-shrink-0" />
+                <span className="text-[11px] text-gray-400 flex-1">Stipends</span>
+                <span className="text-[11px] text-gray-300 tabular-nums">{stipPct.toFixed(0)}%</span>
+              </div>
             </div>
           </div>
         )
