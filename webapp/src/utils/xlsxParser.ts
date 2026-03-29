@@ -27,7 +27,11 @@ function parseNum(val: unknown): number | null {
 
 function parseServiceDate(val: unknown): string {
   if (typeof val === 'number') return excelSerialToISODate(val)
-  return String(val ?? '')
+  const s = String(val ?? '').trim()
+  // Convert MM/DD/YYYY or M/D/YYYY string to ISO YYYY-MM-DD
+  const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/)
+  if (m) return `${m[3]}-${m[1].padStart(2, '0')}-${m[2].padStart(2, '0')}`
+  return s
 }
 
 // ─── Raw Case Distribution Report format (PHIMED) ────────────────────────────
@@ -79,15 +83,15 @@ function findRawCols(rows: unknown[][]): RawCols {
     const rowAbove = rows[r - 1] ?? []
     for (let c = 0; c < rowAbove.length; c++) {
       const cell = String(rowAbove[c] ?? '').trim().toLowerCase()
-      if (cell === 'distribution')           map.distributionValue      = c
-      else if (cell === 'start')             map.startTime              = c
-      else if (cell === 'end')               map.endTime                = c
+      if (cell === 'distribution')           map.distributionValue       = c
+      else if (cell === 'start')             map.startTime               = c
+      else if (cell === 'end')               map.endTime                 = c
+      else if (cell === 'total')             map.totalTime               = c
       else if (cell === 'total distrib')     map.totalDistributableUnits = c
-      // "Total" label sits above the Total Time column, but only if not already "Total Distrib"
     }
-    // "Total Time" shares row r-1 label "Total" — find it between endTime and timeUnits
-    if (map.endTime != null && map.timeUnits != null) {
-      map.totalTime = map.endTime + 3  // consistent offset in both files
+    // Fallback: if "Total" label wasn't found in rowAbove, use empirical offset
+    if (map.totalTime == null && map.endTime != null) {
+      map.totalTime = map.endTime + 3
     }
 
     // If we found enough columns, use the dynamic map; otherwise fall back
@@ -101,12 +105,11 @@ function findRawCols(rows: unknown[][]): RawCols {
 }
 
 function isRawFormat(rows: unknown[][]): boolean {
-  // Clean format: row 0 col 0 is "Incident ID"
+  // Clean format: header is at row 0
   if (String(rows[0]?.[0] ?? '').trim().toLowerCase() === 'incident id') return false
-  // Raw format: data rows (large integers in col 0) don't start until row 8+
-  for (let i = 8; i < Math.min(rows.length, 20); i++) {
-    const val = rows[i]?.[0]
-    if (typeof val === 'number' && val > 100000) return true
+  // Raw format: title block precedes the header, so "Incident ID" label appears after row 0
+  for (let i = 1; i < Math.min(rows.length, 50); i++) {
+    if (String(rows[i]?.[0] ?? '').trim().toLowerCase() === 'incident id') return true
   }
   return false
 }
