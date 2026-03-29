@@ -135,6 +135,32 @@ function parseRawRows(rows: unknown[][]): LineItem[] {
   return items
 }
 
+// ─── Void/re-post netting ─────────────────────────────────────────────────────
+//
+// PHIMED billing corrections produce void+re-post pairs: rows sharing the same
+// (incidentId, ticketNum) where negatives exactly cancel the positives (net=0).
+// These are billing artifacts — the real entry lives either under a different
+// IncidentID for the same ticket, or under a sibling ticket (e.g. "03369S").
+// Drop any (incidentId, ticketNum) group whose TotalDistributableUnits sum to 0.
+
+function netOutVoidPairs(items: LineItem[]): LineItem[] {
+  // Group rows by (incidentId, ticketNum)
+  const groups = new Map<string, LineItem[]>()
+  for (const li of items) {
+    const key = `${li.incidentId}|${li.ticketNum}`
+    if (!groups.has(key)) groups.set(key, [])
+    groups.get(key)!.push(li)
+  }
+
+  const result: LineItem[] = []
+  for (const rows of groups.values()) {
+    const net = rows.reduce((s, li) => s + li.totalDistributableUnits, 0)
+    if (Math.abs(net) < 0.0001) continue  // void+re-post pair — drop entirely
+    result.push(...rows)
+  }
+  return result
+}
+
 // Scan footer rows for "Posted Date from MM/DD/YYYY to MM/DD/YYYY"
 function detectMonthFromRows(rows: unknown[][]): { month: number; year: number } | null {
   for (const row of rows) {
@@ -209,7 +235,7 @@ export function parseXlsx(buffer: ArrayBuffer): LineItem[] {
   if (rows.length < 2) throw new Error('No data found in spreadsheet')
 
   // Auto-detect raw PHIMED Case Distribution Report format
-  if (isRawFormat(rows)) return parseRawRows(rows)
+  if (isRawFormat(rows)) return netOutVoidPairs(parseRawRows(rows))
 
   // ── Clean/compact format (existing logic) ──────────────────────────────────
   // Col indices: 0=IncidentID, 1=ServiceDt, 2=TicketNum, 3=CPT/ASA,
@@ -244,7 +270,7 @@ export function parseXlsx(buffer: ArrayBuffer): LineItem[] {
     })
   }
 
-  return items
+  return netOutVoidPairs(items)
 }
 
 // Attempt to detect month/year from filename like "January 2026.xlsx"
