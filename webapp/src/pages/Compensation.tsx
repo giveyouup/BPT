@@ -38,7 +38,7 @@ const BUSINESS_KEYS    = new Set(BUSINESS_LEAVES.map(l => l.key))
 const BENEFITS_KEYS    = new Set(BENEFITS_LEAVES.map(l => l.key))
 const RETIREMENT_KEYS  = new Set(RETIREMENT_LEAVES.map(l => l.key))
 const HEALTHCARE_KEYS  = new Set(['healthDental', 'healthMedical', 'healthVision', 'healthBenicomp'])
-const ACTIVE_KEYS      = new Set([...BUSINESS_KEYS, ...BENEFITS_KEYS, ...RETIREMENT_KEYS])
+const ACTIVE_KEYS      = new Set([...BUSINESS_KEYS, ...BENEFITS_KEYS, ...RETIREMENT_KEYS, 'carryforwardIn', 'yearEndBalance'])
 const ALL_LEAVES       = [...BUSINESS_LEAVES, ...BENEFITS_LEAVES, ...RETIREMENT_LEAVES]
 
 type Section = 'business' | 'benefits' | 'retirement' | 'otherIncome'
@@ -61,6 +61,8 @@ function initDraft(rec: AnnualExpenses | undefined, annualGross: number): Record
       draft[leaf.key] = ''
     }
   }
+  draft['carryforwardIn']  = rec?.recurring?.['carryforwardIn']  !== undefined ? String(rec.recurring['carryforwardIn'])  : ''
+  draft['yearEndBalance']  = rec?.recurring?.['yearEndBalance']  !== undefined ? String(rec.recurring['yearEndBalance'])  : ''
   return draft
 }
 
@@ -285,6 +287,11 @@ export default function Compensation() {
     [annualExpenses, selectedYear]
   )
 
+  const prevYearRecord = useMemo(
+    () => annualExpenses.find(e => e.year === selectedYear - 1),
+    [annualExpenses, selectedYear]
+  )
+
   useEffect(() => {
     // Re-initialize the draft when:
     //   (a) the year changes, OR
@@ -407,8 +414,12 @@ export default function Compensation() {
   const healthcareTotal      = recurringSum(HEALTHCARE_KEYS)
   const retirementTotal      = recurringSum(RETIREMENT_KEYS) + (currentRecord?.retirementEntries?.reduce((s, e) => s + e.amount, 0) ?? 0)
   const otherIncome          = (currentRecord?.otherIncomeEntries ?? []).reduce((s, e) => s + e.amount, 0)
-  const netIncome            = annualGross - businessExpenses - benefitsTotal - retirementTotal
-  const totalComp            = netIncome + otherIncome + benefitsTotal + retirementTotal
+  const carryforwardIn       = currentRecord?.recurring?.['carryforwardIn']  ?? 0
+  const yearEndBalance       = currentRecord?.recurring?.['yearEndBalance']  ?? 0
+  const totalGrossRevenue    = annualGross + otherIncome + carryforwardIn - yearEndBalance
+  const clinicalNet          = annualGross - businessExpenses - benefitsTotal - retirementTotal
+  const netCompensation      = clinicalNet + otherIncome + carryforwardIn - yearEndBalance
+  const totalComp            = netCompensation + benefitsTotal + retirementTotal
   const overheadPct          = annualGross > 0 ? businessExpenses / annualGross * 100 : 0
   const effectiveOverheadPct = (annualGross + otherIncome) > 0 ? businessExpenses / (annualGross + otherIncome) * 100 : 0
   const totalHours       = cashView
@@ -529,19 +540,20 @@ export default function Compensation() {
 
       {/* Stat cards */}
       <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3 mb-6">
-        {/* Total Gross Revenue — clinical + other income */}
+        {/* Total Gross Revenue — clinical + other income + reconciliation */}
         {(() => {
           const unitPay    = cashView ? cashStats.totalUnitPay : accrualUnitPay
           const stipends   = annualGross - unitPay
-          const totalGross = annualGross + otherIncome
-          const unitPct    = totalGross > 0 ? Math.max(0, Math.min(100, unitPay    / totalGross * 100)) : 0
-          const stipPct    = totalGross > 0 ? Math.max(0, Math.min(100, stipends   / totalGross * 100)) : 0
-          const adminPct   = totalGross > 0 ? Math.max(0, Math.min(100, otherIncome / totalGross * 100)) : 0
+          const clinicalPlusOther = annualGross + otherIncome
+          const unitPct    = clinicalPlusOther > 0 ? Math.max(0, Math.min(100, unitPay     / clinicalPlusOther * 100)) : 0
+          const stipPct    = clinicalPlusOther > 0 ? Math.max(0, Math.min(100, stipends    / clinicalPlusOther * 100)) : 0
+          const adminPct   = clinicalPlusOther > 0 ? Math.max(0, Math.min(100, otherIncome / clinicalPlusOther * 100)) : 0
+          const netRecon   = carryforwardIn - yearEndBalance
           return (
             <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
               <p className="text-xs text-gray-500 mb-1">Total Gross Revenue</p>
-              <p className="text-lg font-bold text-emerald-400">{formatCurrency(totalGross)}</p>
-              {totalGross > 0 && (
+              <p className="text-lg font-bold text-emerald-400">{formatCurrency(totalGrossRevenue)}</p>
+              {clinicalPlusOther > 0 && (
                 <div className="relative mt-2.5 group/bar">
                   <div className="flex h-1.5 rounded-full overflow-hidden cursor-default">
                     <div className="bg-indigo-500"  style={{ width: `${unitPct}%`  }} />
@@ -568,6 +580,11 @@ export default function Compensation() {
                     )}
                   </div>
                 </div>
+              )}
+              {netRecon !== 0 && (
+                <p className={`text-[10px] mt-1.5 tabular-nums ${netRecon > 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                  {netRecon > 0 ? '+' : ''}{formatCurrency(netRecon)} reconciliation
+                </p>
               )}
             </div>
           )
@@ -769,6 +786,66 @@ export default function Compensation() {
         </div>
       </div>
 
+{/* Practice Reconciliation */}
+      <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden mb-6">
+        <div className="px-5 py-3 border-b border-gray-800 flex items-center justify-between">
+          <div>
+            <span className="text-sm font-semibold text-gray-300">Practice Reconciliation</span>
+            <span className="text-[11px] text-gray-600 ml-2">Year-end settlement adjustments</span>
+          </div>
+          {(carryforwardIn !== 0 || yearEndBalance !== 0) && (
+            <span className={`text-sm font-bold tabular-nums ${carryforwardIn - yearEndBalance >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+              {carryforwardIn - yearEndBalance >= 0 ? '+' : ''}{formatCurrency(carryforwardIn - yearEndBalance)}
+            </span>
+          )}
+        </div>
+        <div className="pl-4 pr-5 py-4 border-l-4 border-sky-800 space-y-4">
+          {/* Carryforward In */}
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <p className="text-sm text-gray-400">Prior Year Carryforward</p>
+              <p className="text-[11px] text-gray-600">Received from {selectedYear - 1} balance · positive = owed to you</p>
+              {(() => {
+                const suggested = prevYearRecord?.recurring?.['yearEndBalance']
+                const currentVal = parseFloat(draft['carryforwardIn'] ?? '') || 0
+                if (suggested != null && suggested !== 0 && currentVal === 0) {
+                  return (
+                    <button
+                      onClick={() => {
+                        setDraft(d => ({ ...d, carryforwardIn: String(suggested) }))
+                        setTimeout(() => handleBlur('carryforwardIn'), 0)
+                      }}
+                      className="text-[11px] text-sky-500 hover:text-sky-400 mt-0.5"
+                    >
+                      Pre-fill from {selectedYear - 1} year-end: {formatCurrency(suggested)}
+                    </button>
+                  )
+                }
+                return null
+              })()}
+            </div>
+            <AmountInput
+              value={draft['carryforwardIn'] ?? ''}
+              onChange={v => setDraft(d => ({ ...d, carryforwardIn: v }))}
+              onBlur={() => handleBlur('carryforwardIn')}
+            />
+          </div>
+          <div className="border-t border-gray-800" />
+          {/* Year-End Balance */}
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <p className="text-sm text-gray-400">Year-End Balance</p>
+              <p className="text-[11px] text-gray-600">Deferred to {selectedYear + 1} · positive = practice owes you</p>
+            </div>
+            <AmountInput
+              value={draft['yearEndBalance'] ?? ''}
+              onChange={v => setDraft(d => ({ ...d, yearEndBalance: v }))}
+              onBlur={() => handleBlur('yearEndBalance')}
+            />
+          </div>
+        </div>
+      </div>
+
 {/* Pie chart — Total Compensation breakdown */}
       {totalComp > 0 && (() => {
         const freeformBen = (currentRecord?.benefitsEntries ?? []).reduce((s, e) => s + e.amount, 0)
@@ -776,7 +853,7 @@ export default function Compensation() {
 
         type Drill = 'benefits' | 'retirement' | null
         const topSlices = [
-          { label: otherIncome > 0 ? 'Net + Admin Income' : 'Net Income', value: Math.max(netIncome + otherIncome, 0), hex: '#818cf8', drill: null as Drill },
+          { label: 'Net Income', value: Math.max(netCompensation, 0), hex: '#818cf8', drill: null as Drill },
           { label: 'Benefits',   value: Math.max(benefitsTotal, 0),   hex: '#fb923c', drill: 'benefits'   as Drill },
           { label: 'Retirement', value: Math.max(retirementTotal, 0), hex: '#4ade80', drill: 'retirement' as Drill },
         ].filter(d => d.value > 0)
