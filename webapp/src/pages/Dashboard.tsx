@@ -10,7 +10,7 @@ import {
 } from '../utils/dateUtils'
 import { shiftBadgeClass, isOffDayShift } from '../utils/shiftUtils'
 import { getCptCategory } from '../utils/cptLookup'
-import type { WorkingDayStats } from '../types'
+import type { WorkingDayStats, MonthlyReport, LineItem, Stipend } from '../types'
 
 
 function weekStart(isoDate: string): string {
@@ -48,7 +48,7 @@ function groupByWeek(workingDays: WorkingDayStats[]): WeekBucket[] {
 export default function Dashboard() {
   const navigate = useNavigate()
   const location = useLocation()
-  const { reports, schedules: allSchedules, settings, stipendMappings: allMappings, cptRanges, saveReport, saveManualShift, deleteManualShift } = useData()
+  const { reports, schedules: allSchedules, settings, stipendMappings: allMappings, cptRanges, saveReport, saveManualShift, deleteManualShift, activePhysicianId } = useData()
 
   const incomingDate = (location.state as { date?: string; week?: string } | null)?.date ?? null
   const incomingWeek = (location.state as { date?: string; week?: string } | null)?.week ?? null
@@ -122,9 +122,30 @@ export default function Dashboard() {
     setProjRateInput('')
   }, [selectedId])
 
+  const getOrCreateStubReport = (stats: typeof selStats) => {
+    if (!stats) return null
+    const existing = reports.find((r) => r.id === stats.id)
+    if (existing) return existing
+    return {
+      id: stats.id,
+      year: stats.year,
+      month: stats.month,
+      physicianId: activePhysicianId,
+      filename: `stub-${stats.id}`,
+      uploadDate: new Date().toISOString(),
+      unitDollarValue: 0,
+      paddingMinutes: settings.defaultPaddingMinutes,
+      defaultNoTimeHours: settings.defaultNoTimeHours,
+      lineItems: [] as LineItem[],
+      workingDayOverrides: {} as Record<string, number>,
+      dayStipends: {} as Record<string, number>,
+      stipends: [] as Stipend[],
+    }
+  }
+
   const saveDayStipend = async (date: string) => {
     if (!selStats) return
-    const report = reports.find((r) => r.id === selStats.id)
+    const report = getOrCreateStubReport(selStats)
     if (!report) return
     const amount = parseFloat(dayStipendInput)
     const dayStipends = { ...report.dayStipends }
@@ -133,12 +154,12 @@ export default function Dashboard() {
     } else {
       delete dayStipends[date]
     }
-    await saveReport({ ...report, dayStipends })
+    await saveReport({ ...report, dayStipends } as MonthlyReport)
     setEditingDayDate(null)
   }
   const saveHoursOverride = async (date: string) => {
     if (!selStats) return
-    const report = reports.find((r) => r.id === selStats.id)
+    const report = getOrCreateStubReport(selStats)
     if (!report) return
     const hours = parseFloat(hoursInput)
     const workingDayOverrides = { ...report.workingDayOverrides }
@@ -147,13 +168,13 @@ export default function Dashboard() {
     } else {
       delete workingDayOverrides[date]
     }
-    await saveReport({ ...report, workingDayOverrides })
+    await saveReport({ ...report, workingDayOverrides } as MonthlyReport)
     setEditingHoursDate(null)
   }
 
   const saveDayNote = async (date: string) => {
     if (!selStats) return
-    const report = reports.find((r) => r.id === selStats.id)
+    const report = getOrCreateStubReport(selStats)
     if (!report) return
     const text = noteInput.trim()
     const dayNotes = { ...(report.dayNotes ?? {}) }
@@ -162,7 +183,7 @@ export default function Dashboard() {
     } else {
       delete dayNotes[date]
     }
-    await saveReport({ ...report, dayNotes })
+    await saveReport({ ...report, dayNotes } as MonthlyReport)
     setEditingNoteDate(null)
   }
 
@@ -765,11 +786,11 @@ export default function Dashboard() {
                             ) : (
                               <button
                                 onClick={() => { setEditingDayDate(day.date); setDayStipendInput(day.additionalStipend > 0 ? day.additionalStipend.toFixed(2) : '') }}
-                                className="text-right w-full hover:text-indigo-400 transition-colors"
+                                className="text-right w-full flex justify-end"
                               >
                                 {day.additionalStipend > 0
-                                  ? <span className="text-emerald-400">{formatCurrency(day.additionalStipend)}</span>
-                                  : <span className="text-gray-700">+</span>}
+                                  ? <span className="text-emerald-400 border-b border-dashed border-emerald-700 bg-gray-800/50 rounded px-1 hover:bg-gray-700/50 transition-colors">{formatCurrency(day.additionalStipend)}</span>
+                                  : <span className="text-gray-600 bg-gray-800/50 rounded px-1 hover:bg-gray-700/50 transition-colors">+</span>}
                               </button>
                             )}
                           </td>
@@ -822,11 +843,40 @@ export default function Dashboard() {
                             <td colSpan={13} className="pb-3 pt-1 px-2">
                               {/* Mobile-only: show fields hidden from the main row */}
                               <div className="sm:hidden grid grid-cols-3 gap-x-4 gap-y-1 mb-3 text-xs">
+                                <div><span className="text-gray-600">Stipend</span><span className="ml-1 text-emerald-400">{(isProj ? dayProj!.stipendAmount : day.stipendAmount) > 0 ? formatCurrency(isProj ? dayProj!.stipendAmount : day.stipendAmount) : '—'}</span></div>
+                                <div onClick={(e) => e.stopPropagation()}>
+                                  <span className="text-gray-600">Addl</span>
+                                  {!isProj && editingDayDate === day.date ? (
+                                    <span className="inline-flex items-center gap-1 ml-1">
+                                      <input
+                                        type="number" step="0.01" placeholder="0"
+                                        value={dayStipendInput}
+                                        onChange={(e) => setDayStipendInput(e.target.value)}
+                                        onKeyDown={(e) => {
+                                          if (e.key === 'Enter') saveDayStipend(day.date)
+                                          if (e.key === 'Escape') setEditingDayDate(null)
+                                        }}
+                                        className="w-16 bg-gray-800 border border-gray-600 rounded px-1.5 py-0.5 text-xs text-gray-100 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                                        autoFocus
+                                      />
+                                      <button onClick={() => saveDayStipend(day.date)} className="text-indigo-400 hover:text-indigo-300 text-xs">✓</button>
+                                      <button onClick={() => setEditingDayDate(null)} className="text-gray-600 hover:text-gray-400 text-xs">✕</button>
+                                    </span>
+                                  ) : (
+                                    <button
+                                      onClick={() => { setEditingDayDate(day.date); setDayStipendInput(day.additionalStipend > 0 ? day.additionalStipend.toFixed(2) : '') }}
+                                      className="ml-1 bg-gray-800/50 rounded px-1 hover:bg-gray-700/50 transition-colors"
+                                    >
+                                      {day.additionalStipend > 0
+                                        ? <span className="text-emerald-400 border-b border-dashed border-emerald-700">{formatCurrency(day.additionalStipend)}</span>
+                                        : <span className="text-gray-600">+</span>}
+                                    </button>
+                                  )}
+                                </div>
+                                <div><span className="text-gray-600">Unit Pay</span><span className="ml-1 text-emerald-400">{isProj ? `~${formatCurrency(dayProj!.projectedUnitPay)}` : day.unitPay > 0 ? formatCurrency(day.unitPay) : '—'}</span></div>
                                 <div><span className="text-gray-600">Cases</span><span className="ml-1 text-gray-400">{isProj ? '—' : day.caseCount > 0 ? day.caseCount : '—'}</span></div>
                                 <div><span className="text-gray-600">Units</span><span className="ml-1 text-indigo-400">{isProj ? `~${dayProj!.projectedUnits.toFixed(2)}` : day.totalUnits > 0 ? day.totalUnits.toFixed(2) : '—'}</span></div>
                                 <div><span className="text-gray-600">Hours</span><span className="ml-1 text-gray-400">{isProj ? `~${formatHours(dayProj!.projectedHours)}` : day.hours > 0 ? formatHours(day.hours) : '—'}</span></div>
-                                <div><span className="text-gray-600">Unit Pay</span><span className="ml-1 text-emerald-400">{isProj ? `~${formatCurrency(dayProj!.projectedUnitPay)}` : day.unitPay > 0 ? formatCurrency(day.unitPay) : '—'}</span></div>
-                                <div><span className="text-gray-600">Stipend</span><span className="ml-1 text-emerald-400">{(isProj ? dayProj!.stipendAmount : day.stipendAmount) > 0 ? formatCurrency(isProj ? dayProj!.stipendAmount : day.stipendAmount) : '—'}</span></div>
                               </div>
                               {dayCases.length === 0 ? (
                                 <p className="text-gray-600 italic">No case details available.</p>
