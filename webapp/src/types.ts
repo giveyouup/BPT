@@ -143,6 +143,7 @@ export interface Settings {
   holidays: Record<number, string[]> // year -> ["YYYY-MM-DD", ...]
   stipendMappingOverrides?: Record<string, string> // "YYYY-MM" -> mapping id (for months without a report)
   cashCutoffs?: Record<number, string>             // year -> ISO date "YYYY-MM-DD" (end of unit-pay cash period)
+  promotedStipendCodes?: string[]                  // shift codes broken out of "Other G"/"Other" into their own column
 }
 
 export interface CptRange {

@@ -10,6 +10,7 @@ const DEFAULT_SETTINGS: Settings = {
   clinicalDayStart: '06:30',
   shiftHours: { APS: 10, APS_weekend: 10, BR: 9, NIR: 10 },
   holidays: {},
+  promotedStipendCodes: [],
 }
 
 function normalizeReport(r: MonthlyReport): MonthlyReport {
