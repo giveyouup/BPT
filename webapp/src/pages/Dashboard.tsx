@@ -249,6 +249,12 @@ export default function Dashboard() {
         >
           Upload First Report
         </button>
+        <button
+          onClick={() => navigate('/help')}
+          className="mt-3 text-xs text-gray-500 hover:text-gray-300 underline underline-offset-2 transition-colors"
+        >
+          New here? Read the setup guide
+        </button>
       </div>
     )
   }

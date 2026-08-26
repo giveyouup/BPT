@@ -12,6 +12,7 @@ import Audits from './pages/Audits'
 import Settings from './pages/Settings'
 import CptRangesPage from './pages/CptRangesPage'
 import Compensation from './pages/Compensation'
+import Help from './pages/Help'
 
 function AppContent() {
   const { loading, loadError } = useData()
@@ -66,6 +67,7 @@ function AppContent() {
         <Route path="/settings" element={<Settings />} />
         <Route path="/settings/cpt-ranges" element={<CptRangesPage />} />
         <Route path="/compensation" element={<Compensation />} />
+        <Route path="/help" element={<Help />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </Layout>
