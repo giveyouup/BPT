@@ -560,7 +560,11 @@ export default function AnnualSummary() {
       stipends: Math.round(s.totalStipends),
       wiStipends: projStip != null ? Math.round(projStip) : undefined,
       total: Math.round(s.totalCompensation),
-      hours: Math.round(s.totalHours * 10) / 10,
+      hours: Math.round(
+        (shiftDataCutoff
+          ? s.workingDays.filter((d) => d.date <= shiftDataCutoff).reduce((sum, d) => sum + d.hours, 0)
+          : s.totalHours) * 10
+      ) / 10,
       ratePerUnit: s.totalDistributableUnits > 0
         ? Math.round((s.unitCompensation / s.totalDistributableUnits) * 100) / 100
         : 0,
@@ -568,11 +572,22 @@ export default function AnnualSummary() {
     }
   })
 
+  // Months entirely after the billing cutoff have no units/hours data at all — drop them from
+  // billing-derived monthly charts (Units, Dollar/Unit Trend, Hours Worked) so they don't render
+  // trailing empty columns. This only trims the tail (months are chronological), so indices still
+  // line up with yearStats for bar clicks. Monthly Compensation keeps the full chartData since it
+  // intentionally includes accrued-but-unbilled stipends for scheduled future months.
+  const cutoffMonthIndex = shiftDataCutoff
+    ? yearStats.findIndex((s) => `${s.year}-${String(s.month).padStart(2, '0')}-01` > shiftDataCutoff)
+    : -1
+  const cutoffChartData = cutoffMonthIndex === -1 ? chartData : chartData.slice(0, cutoffMonthIndex)
+
   // ── Weekly hours data ─────────────────────────────────────────────────────
   const weeklyHoursData = useMemo(() => {
     const weekMap = new Map<string, number>()
     for (const month of yearStats) {
       for (const day of month.workingDays) {
+        if (shiftDataCutoff && day.date > shiftDataCutoff) continue
         const [y, m, d] = day.date.split('-').map(Number)
         const date = new Date(y, m - 1, d)
         const dow = date.getDay()
@@ -587,7 +602,7 @@ export default function AnnualSummary() {
         const [, m, d] = iso.split('-').map(Number)
         return { week: `${getMonthName(m).slice(0, 3)} ${d}`, iso, hours: Math.round(hours * 10) / 10 }
       })
-  }, [yearStats])
+  }, [yearStats, shiftDataCutoff])
 
   // ── End-of-day time distribution ──────────────────────────────────────────
   const endTimeDistribution = useMemo(() => {
@@ -612,6 +627,7 @@ export default function AnnualSummary() {
 
     for (const month of yearStats) {
       for (const day of month.workingDays) {
+        if (shiftDataCutoff && day.date > shiftDataCutoff) continue
         const activeShifts = day.shiftTypes.filter((s) => !isOffDayShift(s))
         if (activeShifts.length === 0) continue
 
@@ -665,7 +681,7 @@ export default function AnnualSummary() {
       }
     }
     return { buckets, excludedDays }
-  }, [yearStats, settings.shiftHours, settings.clinicalDayStart])
+  }, [yearStats, settings.shiftHours, settings.clinicalDayStart, shiftDataCutoff])
 
   // ── Per-shift day map (mirrors buildShiftStats attribution logic exactly) ────
   const shiftDayMap = useMemo(() => {
@@ -1038,7 +1054,7 @@ export default function AnnualSummary() {
         <div className="bg-gray-900 rounded-xl border border-gray-800 p-5">
           <h3 className="text-sm font-semibold text-gray-300 mb-4">Units per Month</h3>
           <ResponsiveContainer width="100%" height={200}>
-            <BarChart data={chartData} margin={{ top: 0, right: 8, bottom: 0, left: -10 }}>
+            <BarChart data={cutoffChartData} margin={{ top: 0, right: 8, bottom: 0, left: -10 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
               <XAxis dataKey="month" {...AXIS_PROPS} />
               <YAxis {...AXIS_PROPS} />
@@ -1046,9 +1062,9 @@ export default function AnnualSummary() {
               <Bar dataKey="units" fill="#6366f1" radius={[4, 4, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
-          {yearStats.length > 0 && (
+          {cutoffChartData.length > 0 && (
             <p className="text-xs text-gray-600 mt-2 text-right">
-              Avg <span className="text-gray-400 font-medium">{(ytdUnits / yearStats.length).toFixed(1)}</span> units/month
+              Avg <span className="text-gray-400 font-medium">{(ytdUnits / cutoffChartData.length).toFixed(1)}</span> units/month
             </p>
           )}
         </div>
@@ -1103,7 +1119,7 @@ export default function AnnualSummary() {
         <div className="bg-gray-900 rounded-xl border border-gray-800 p-5">
           <h3 className="text-sm font-semibold text-gray-300 mb-4">Dollar per Unit Trend</h3>
           <ResponsiveContainer width="100%" height={200}>
-            <LineChart data={chartData} margin={{ top: 0, right: 8, bottom: 0, left: 0 }}>
+            <LineChart data={cutoffChartData} margin={{ top: 0, right: 8, bottom: 0, left: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
               <XAxis dataKey="month" {...AXIS_PROPS} />
               <YAxis {...AXIS_PROPS} tickFormatter={(v) => `$${v.toFixed(0)}`} domain={['auto', 'auto']} />
@@ -1135,7 +1151,7 @@ export default function AnnualSummary() {
           </div>
           <ResponsiveContainer width="100%" height={200}>
             <BarChart
-              data={hoursView === 'month' ? chartData : weeklyHoursData}
+              data={hoursView === 'month' ? cutoffChartData : weeklyHoursData}
               margin={{ top: 0, right: 8, bottom: 0, left: -10 }}
               style={{ cursor: 'pointer' }}
               onMouseMove={handleHoursChartMouseMove}
@@ -1152,9 +1168,12 @@ export default function AnnualSummary() {
             </BarChart>
           </ResponsiveContainer>
           {(() => {
-            const totalHours = yearStats.reduce((s, m) => s + m.totalHours, 0)
-            const avgWeekly = weeklyHoursData.length > 0 ? totalHours / weeklyHoursData.length : null
-            const avgMonthly = chartData.length > 0 ? totalHours / chartData.length : null
+            const avgWeekly = weeklyHoursData.length > 0
+              ? weeklyHoursData.reduce((s, w) => s + w.hours, 0) / weeklyHoursData.length
+              : null
+            const avgMonthly = cutoffChartData.length > 0
+              ? cutoffChartData.reduce((s, m) => s + m.hours, 0) / cutoffChartData.length
+              : null
             return (
               <>
                 <div className="mt-3 flex items-center justify-between gap-4 text-xs text-gray-500">
