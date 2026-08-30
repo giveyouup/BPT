@@ -126,78 +126,46 @@ export default function Help() {
       </Section>
 
       <Section id="schedule" title="Uploading Your Schedule">
-        <p>Two ways to get shift assignments in — use either one, or both:</p>
-        <div>
-          <p className="text-gray-300 font-medium text-xs uppercase tracking-wide mb-1">Schedule ICS</p>
+        <p>
           <Where>
             <button onClick={() => navigate('/upload')} className="text-indigo-400 hover:text-indigo-300 underline underline-offset-2">
               Upload Report
             </button>{' '}
-            → "Schedule ICS" tab.
+            → "Schedule Upload" tab.
           </Where>
+        </p>
+        <p>
+          <span className="text-gray-300 font-medium">Default: upload the published monthly PDF schedule.</span>{' '}
+          Drop in the grid PDF and BRACT reads the month, finds your row, and shows a confirmation before saving.
+          If a cell can't be read reliably, you'll be asked to resolve it manually.
+        </p>
+        <p>If the PDF doesn't parse cleanly, two fallback options are also available on the same tab:</p>
+        <div>
+          <p className="text-gray-300 font-medium text-xs uppercase tracking-wide mb-1">Schedule ICS</p>
           <p className="mt-1">
-            An iCalendar (.ics) file exported from your calendar app. Shift assignments must be all-day events,
-            with the title containing the shift code (e.g., G1, G2, G3, APS, GI, V, POSTCALL). Multiple events
-            on the same day merge into a single entry. After parsing, you can restrict the import to a date range.
+            An iCalendar (.ics) export from your calendar app — all-day events with the shift code in the title
+            (e.g., G1, G2, G3, APS, GI, V, POSTCALL). Same-day events merge; you can restrict the import to a date range.
           </p>
         </div>
         <div>
           <p className="text-gray-300 font-medium text-xs uppercase tracking-wide mb-1">Grid Paste</p>
-          <Where>
-            <button onClick={() => navigate('/upload')} className="text-indigo-400 hover:text-indigo-300 underline underline-offset-2">
-              Upload Report
-            </button>{' '}
-            → "Grid Paste" tab.
-          </Where>
-          <p className="mt-1">Paste one row copied straight out of your schedule spreadsheet, in three steps:</p>
-          <ol className="list-decimal pl-5 space-y-1.5 mt-1">
-            <li>Pick the month.</li>
-            <li>
-              <span className="text-gray-300">Weekend selector:</span> by default only weekdays are expected.
-              For each weekend in the month, BRACT shows a toggle chip (e.g. "Jul 5–6") — turn it on only if
-              that weekend actually has a column (an assignment, including a blocked "\") in your schedule grid.
-              Each weekend you enable adds its day(s) to the expected entry count shown below the chips, so the
-              pasted row lines up token-for-token with the columns your grid actually has for that month.
-            </li>
-            <li>
-              Paste the row of shift assignments as a single line of text, with a space separating each one —
-              for example: <span className="font-mono text-gray-300">G11 G4 BR BIR NIR Endo</span>. This is
-              exactly what you get from copying a row straight out of Excel. The number of tokens must match the
-              expected entry count exactly. A <span className="font-mono">\</span> token marks a blocked weekend
-              and creates no entry for that day.
-            </li>
-          </ol>
+          <p className="mt-1">
+            Pick the month, then paste one row copied straight out of your schedule spreadsheet as a single
+            space-separated line (e.g. <span className="font-mono text-gray-300">G11 G4 BR BIR NIR Endo</span>) —
+            toggle on any weekends that have a column first, so the token count matches. A{' '}
+            <span className="font-mono">\</span> token marks a blocked weekend with no entry.
+          </p>
           <p className="mt-1.5">
             If a code is "X" and BRACT can't infer it from context (a Postcall day following a G1/G2 call),
             you'll be asked to resolve it manually before saving.
           </p>
-          <p className="mt-1.5">
-            <span className="text-gray-300 font-medium">Save button:</span> it only enables once the textbox
-            has exactly the right number of entries (and every "X" above has been resolved). If it stays greyed
-            out, your row has either missing or extra entries relative to Step 2. Common causes:
-          </p>
-          <ul className="list-disc pl-5 space-y-1 mt-1">
-            <li>
-              An <span className="font-mono">X</span> or <span className="font-mono">/</span> entry in the
-              published schedule — only a literal backslash <span className="font-mono">\</span> is recognized
-              as a blocked/skip marker. If your grid marks a blocked weekend with <span className="font-mono">/</span>{' '}
-              (or anything other than <span className="font-mono">\</span>), paste it as-is and make sure the
-              corresponding weekend chip in Step 2 is still toggled on so that day is counted.
-            </li>
-            <li>
-              A <span className="font-mono">V</span> (vacation) stretch that spans a weekend, where the weekend
-              chip for that block wasn't toggled on in Step 2 — the pasted row includes tokens for those weekend
-              days, but BRACT isn't expecting them yet, so the count comes up short or long.
-            </li>
-          </ul>
           <p className="mt-1.5 text-amber-400/90">
             Important: each assignment you paste here (G11, BR, NIR, Endo, etc.) must match a key in column A of
-            your Stipend Rate Schedule exactly (case-insensitive) for BRACT to pick it up and calculate pay for
-            that shift — see the Stipend Rate Schedules section below for the key format.
+            your Stipend Rate Schedule exactly (case-insensitive) — see the Stipend Rate Schedules section below.
           </p>
         </div>
         <p className="text-xs text-gray-500">
-          Both methods run the same conflict/duplicate check against previously imported schedules for
+          All three methods run the same conflict/duplicate check against previously imported schedules for
           overlapping dates before saving.
         </p>
       </Section>
