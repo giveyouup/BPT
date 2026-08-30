@@ -1,9 +1,9 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { api, type MaintenanceResult } from '../api'
 import { useNavigate } from 'react-router-dom'
 import { useData } from '../context/DataContext'
 import { computeFederalHolidays, getFederalHolidayLabels } from '../utils/shiftUtils'
-import { formatDateFull, formatMonthYear, lastDayOfMonth, MONTH_ABBREVS, randomId } from '../utils/dateUtils'
+import { formatDateFull, formatMonthYear, lastDayOfMonth, MONTH_ABBREVS } from '../utils/dateUtils'
 import { parseStipendMapping } from '../utils/stipendMappingParser'
 import type { StipendMapping, StipendRate } from '../types'
 
@@ -79,35 +79,31 @@ export default function Settings() {
     deleteStipendMapping,
     cptRanges,
     physicians,
-    activePhysicianId,
     savePhysician,
-    deletePhysician,
   } = useData()
 
   const [settings, setSettings] = useState(apiSettings)
   const [saved, setSaved] = useState(false)
   const [defaultsOpen, setDefaultsOpen] = useState(false)
 
-  // ── Physicians ──────────────────────────────────────────────────────────────
-  const [newPhysicianName, setNewPhysicianName] = useState('')
-  const [editingPhysicianId, setEditingPhysicianId] = useState<string | null>(null)
-  const [editingPhysicianName, setEditingPhysicianName] = useState('')
+  // ── Your name (single-user: there's always exactly one physician record) ──
+  const activePhysician = physicians[0]
+  const [physicianName, setPhysicianName] = useState('')
   const [physicianSaving, setPhysicianSaving] = useState(false)
+  const [physicianSaved, setPhysicianSaved] = useState(false)
   const [physicianError, setPhysicianError] = useState<string | null>(null)
 
-  const doSavePhysician = (p: { id: string; name: string }, onDone?: () => void) => {
+  useEffect(() => {
+    if (activePhysician) setPhysicianName(activePhysician.name)
+  }, [activePhysician?.name])
+
+  const handleSavePhysicianName = () => {
+    if (!activePhysician || !physicianName.trim()) return
     setPhysicianSaving(true)
     setPhysicianError(null)
-    let promise: Promise<void>
-    try {
-      promise = savePhysician(p)
-    } catch (err) {
-      setPhysicianError(String(err))
-      setPhysicianSaving(false)
-      return
-    }
-    promise
-      .then(() => onDone?.())
+    setPhysicianSaved(false)
+    savePhysician({ id: activePhysician.id, name: physicianName.trim() })
+      .then(() => { setPhysicianSaved(true); setTimeout(() => setPhysicianSaved(false), 2000) })
       .catch((err) => setPhysicianError(String(err)))
       .finally(() => setPhysicianSaving(false))
   }
@@ -450,91 +446,27 @@ export default function Settings() {
         )}
       </div>
 
-      {/* Physicians */}
+      {/* Your name */}
       <section className="bg-gray-900 rounded-xl border border-gray-800 p-6 mb-6">
-        <h3 className="text-sm font-semibold text-gray-300 mb-4">Physicians</h3>
-        <div className="space-y-2 mb-4">
-          {physicians.map((p) => (
-            <div key={p.id} className="flex items-center gap-2 bg-gray-800/50 rounded-lg px-3 py-2">
-              {editingPhysicianId === p.id ? (
-                <>
-                  <input
-                    autoFocus
-                    value={editingPhysicianName}
-                    onChange={(e) => setEditingPhysicianName(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        doSavePhysician({ id: p.id, name: editingPhysicianName.trim() || p.name }, () => setEditingPhysicianId(null))
-                      } else if (e.key === 'Escape') {
-                        setEditingPhysicianId(null)
-                      }
-                    }}
-                    className="flex-1 bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm text-gray-100 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                  />
-                  <button
-                    disabled={physicianSaving}
-                    onClick={() => doSavePhysician({ id: p.id, name: editingPhysicianName.trim() || p.name }, () => setEditingPhysicianId(null))}
-                    className="text-xs px-2 py-1 bg-indigo-600 text-white rounded hover:bg-indigo-500 transition-colors"
-                  >Save</button>
-                  <button onClick={() => setEditingPhysicianId(null)} className="text-xs px-2 py-1 text-gray-400 hover:text-gray-200 transition-colors">Cancel</button>
-                </>
-              ) : (
-                <>
-                  <span className="w-5 h-5 rounded-full bg-indigo-600 flex items-center justify-center text-white text-[10px] font-bold flex-shrink-0">
-                    {p.name[0].toUpperCase()}
-                  </span>
-                  <span className="flex-1 text-sm text-gray-200">{p.name}</span>
-                  {p.id === activePhysicianId && (
-                    <span className="text-[10px] text-indigo-400 font-medium px-1.5 py-0.5 bg-indigo-500/10 rounded">active</span>
-                  )}
-                  <button
-                    onClick={() => { setEditingPhysicianId(p.id); setEditingPhysicianName(p.name) }}
-                    className="text-gray-500 hover:text-gray-300 transition-colors"
-                    title="Rename"
-                  >
-                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-                    </svg>
-                  </button>
-                  {physicians.length > 1 && (
-                    <button
-                      onClick={() => { if (confirm(`Delete ${p.name}? Their data will no longer be accessible.`)) deletePhysician(p.id) }}
-                      className="text-gray-600 hover:text-red-400 transition-colors"
-                      title="Delete"
-                    >
-                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                      </svg>
-                    </button>
-                  )}
-                </>
-              )}
-            </div>
-          ))}
-        </div>
+        <h3 className="text-sm font-semibold text-gray-300 mb-4">Your Name</h3>
         <div className="flex gap-2">
           <input
-            value={newPhysicianName}
-            onChange={(e) => setNewPhysicianName(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && newPhysicianName.trim()) {
-                doSavePhysician({ id: randomId(), name: newPhysicianName.trim() }, () => setNewPhysicianName(''))
-              }
-            }}
-            placeholder="New physician name"
+            value={physicianName}
+            onChange={(e) => setPhysicianName(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') handleSavePhysicianName() }}
+            placeholder="Your name"
             className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 placeholder-gray-600"
           />
           <button
-            disabled={!newPhysicianName.trim() || physicianSaving}
-            onClick={() => doSavePhysician({ id: randomId(), name: newPhysicianName.trim() }, () => setNewPhysicianName(''))}
+            disabled={!physicianName.trim() || physicianSaving}
+            onClick={handleSavePhysicianName}
             className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
           >
-            Add
+            {physicianSaving ? 'Saving…' : 'Save'}
           </button>
         </div>
-        {physicianError && (
-          <p className="mt-2 text-xs text-red-400">{physicianError}</p>
-        )}
+        {physicianSaved && <p className="mt-2 text-xs text-emerald-400">Saved.</p>}
+        {physicianError && <p className="mt-2 text-xs text-red-400">{physicianError}</p>}
       </section>
 
       {/* Defaults (collapsible) */}

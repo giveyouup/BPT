@@ -10,7 +10,6 @@ const TOC = [
   { id: 'cpt-ranges', label: 'CPT Code Ranges' },
   { id: 'backup', label: 'Backup, Restore & Maintenance' },
   { id: 'views', label: 'Where to Find Your Data' },
-  { id: 'physicians', label: 'Multiple Physicians' },
 ]
 
 function Section({ id, title, children }: { id: string; title: string; children: React.ReactNode }) {
@@ -63,9 +62,7 @@ export default function Help() {
         <p>Recommended order for a new setup:</p>
         <ol className="list-decimal pl-5 space-y-1.5">
           <li>
-            In <span className="text-gray-300">Settings → Physicians</span>, click the edit (pencil) icon next
-            to the existing physician and change the name to your own. Add additional physicians there too if
-            you're tracking more than one provider.
+            In <span className="text-gray-300">Settings → Your Name</span>, enter your name.
           </li>
           <li>
             Configure <span className="text-gray-300">Federal Holidays</span> and a{' '}
@@ -302,14 +299,6 @@ export default function Help() {
           <li><span className="text-gray-300 font-medium">Schedule Calendar</span> — month-by-month calendar view of imported shifts, with manual add/edit per day.</li>
           <li><span className="text-gray-300 font-medium">Audits</span> — reconciliation and discrepancy checks across reports and schedules.</li>
         </ul>
-      </Section>
-
-      <Section id="physicians" title="Multiple Physicians">
-        <p>
-          If you track more than one physician's data, add them in <span className="text-gray-300">Settings → Physicians</span>,
-          then switch between them using the selector pinned at the bottom of the sidebar. Uploads and edits always
-          apply to whichever physician is currently active.
-        </p>
       </Section>
     </div>
   )

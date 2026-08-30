@@ -87,62 +87,6 @@ function MonthPicker({ value, onChange, placeholder = 'Select' }: {
   )
 }
 
-// ─── Physician confirmation modal ─────────────────────────────────────────────
-
-function PhysicianConfirmModal({ physicianName, label, onConfirm, onCancel, saving }: {
-  physicianName: string
-  label: string
-  onConfirm: () => void
-  onCancel: () => void
-  saving?: boolean
-}) {
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
-      <div className="bg-gray-900 border border-gray-700 rounded-2xl p-6 w-full max-w-sm shadow-2xl">
-        <div className="flex items-center gap-3 mb-4">
-          <div className="w-10 h-10 rounded-full bg-indigo-600 flex items-center justify-center text-white font-bold text-sm flex-shrink-0">
-            {physicianName[0]?.toUpperCase() ?? '?'}
-          </div>
-          <div>
-            <p className="text-xs text-gray-400 uppercase tracking-wider font-semibold">Confirm physician</p>
-            <p className="text-sm font-semibold text-gray-100 mt-0.5">{physicianName}</p>
-          </div>
-        </div>
-        <p className="text-sm text-gray-300 mb-6">
-          This {label} will be saved under <span className="text-white font-medium">{physicianName}</span>. Continue?
-        </p>
-        <div className="flex gap-3">
-          <button
-            onClick={onCancel}
-            disabled={saving}
-            className="flex-1 px-4 py-2 rounded-lg border border-gray-700 text-sm text-gray-400 hover:bg-gray-800 hover:text-gray-200 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            Cancel
-          </button>
-          <button
-            onClick={onConfirm}
-            disabled={saving}
-            className="flex-1 px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-500 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            {saving ? 'Saving…' : `Save for ${physicianName}`}
-          </button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function PhysicianBadge({ name }: { name: string }) {
-  return (
-    <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-indigo-500/10 border border-indigo-500/30 text-xs text-indigo-300">
-      <span className="w-4 h-4 rounded-full bg-indigo-600 flex items-center justify-center text-white text-[9px] font-bold flex-shrink-0">
-        {name[0]?.toUpperCase() ?? '?'}
-      </span>
-      {name}
-    </div>
-  )
-}
-
 // ─── PCR Upload ───────────────────────────────────────────────────────────────
 
 function PcrUploadTab() {
@@ -164,8 +108,6 @@ function PcrUploadTab() {
   const [saving, setSaving] = useState(false)
   const [showConflict, setShowConflict] = useState(false)
   const [multiMonthMode, setMultiMonthMode] = useState<'none' | 'prompt' | 'split' | 'single'>('none')
-  const [showPhysicianConfirm, setShowPhysicianConfirm] = useState(false)
-  const [pendingAction, setPendingAction] = useState<'single' | 'split' | null>(null)
 
   // ── PDF import (server-side OCR) ──────────────────────────────────────────
   const [pdfSections, setPdfSections] = useState<PcrPdfSection[] | null>(null)
@@ -762,9 +704,8 @@ function PcrUploadTab() {
 
         {!showConflict && multiMonthMode !== 'split' && (
           <div className="space-y-2">
-            {activePhysician && <div className="flex items-center gap-2 text-xs text-gray-500">Saving for: <PhysicianBadge name={activePhysician.name} /></div>}
             <button
-              onClick={() => { setPendingAction('single'); setShowPhysicianConfirm(true) }}
+              onClick={handleSave}
               disabled={!parsed || saving || multiMonthMode === 'prompt'}
               className="w-full py-2.5 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-500 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
             >
@@ -774,9 +715,8 @@ function PcrUploadTab() {
         )}
         {multiMonthMode === 'split' && (
           <div className="space-y-2">
-            {activePhysician && <div className="flex items-center gap-2 text-xs text-gray-500">Saving for: <PhysicianBadge name={activePhysician.name} /></div>}
             <button
-              onClick={() => { setPendingAction('split'); setShowPhysicianConfirm(true) }}
+              onClick={handleSplitSave}
               disabled={!splitGroups || saving}
               className="w-full py-2.5 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-500 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
             >
@@ -785,20 +725,6 @@ function PcrUploadTab() {
           </div>
         )}
       </div>
-      {showPhysicianConfirm && activePhysician && (
-        <PhysicianConfirmModal
-          physicianName={activePhysician.name}
-          label={pendingAction === 'split' ? 'batch of reports' : 'report'}
-          saving={saving}
-          onCancel={() => { setShowPhysicianConfirm(false); setPendingAction(null) }}
-          onConfirm={() => {
-            setShowPhysicianConfirm(false)
-            if (pendingAction === 'split') handleSplitSave()
-            else handleSave()
-            setPendingAction(null)
-          }}
-        />
-      )}
     </div>
   )
 }
@@ -823,13 +749,11 @@ function ScheduleUploadTab() {
   const [rangeStart, setRangeStart] = useState('')
   const [rangeEnd, setRangeEnd] = useState('')
   const [showRangeModal, setShowRangeModal] = useState(false)
-  const [showPhysicianConfirm, setShowPhysicianConfirm] = useState(false)
 
   const [conflicts, setConflicts] = useState<ConflictEntry[]>([])
   const [showConflictModal, setShowConflictModal] = useState(false)
   const [pendingEntries, setPendingEntries] = useState<ShiftEntry[]>([])
   const [isDuplicate, setIsDuplicate] = useState(false)
-  const [pendingImportSource, setPendingImportSource] = useState<'ics' | 'pdf' | null>(null)
 
   const [saved, setSaved] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -846,7 +770,6 @@ function ScheduleUploadTab() {
     setParsedEvents(null)
     setPdfResult(null)
     setPdfXResolutions({})
-    setPendingImportSource(null)
   }
 
   const handleIcsFile = useCallback(async (f: File) => {
@@ -1212,14 +1135,12 @@ function ScheduleUploadTab() {
             </div>
           )}
 
-          {activePhysician && <div className="flex items-center gap-2 text-xs text-gray-500">Saving for: <PhysicianBadge name={activePhysician.name} /></div>}
-
           <button
-            onClick={() => { setPendingImportSource('pdf'); setShowPhysicianConfirm(true) }}
+            onClick={handlePdfImport}
             disabled={pdfDayList.length === 0 || !pdfAllXResolved || saving}
             className="w-full py-2.5 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-500 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            Import
+            {saving ? 'Saving…' : 'Import'}
           </button>
         </div>
       )}
@@ -1340,10 +1261,9 @@ function ScheduleUploadTab() {
             <p className="text-xs text-gray-500 mb-5">
               {filteredEvents.length} events in selected range
             </p>
-            {activePhysician && <div className="flex items-center gap-2 text-xs text-gray-500 mb-4">Saving for: <PhysicianBadge name={activePhysician.name} /></div>}
             <div className="flex gap-3">
               <button
-                onClick={() => { setShowRangeModal(false); setPendingImportSource('ics'); setShowPhysicianConfirm(true) }}
+                onClick={() => { setShowRangeModal(false); handleReviewImport() }}
                 disabled={filteredEvents.length === 0}
                 className="flex-1 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-500 transition-colors disabled:opacity-40"
               >
@@ -1437,24 +1357,6 @@ function ScheduleUploadTab() {
             </div>
           </div>
         </div>
-      )}
-      {showPhysicianConfirm && activePhysician && (
-        <PhysicianConfirmModal
-          physicianName={activePhysician.name}
-          label="schedule"
-          saving={saving}
-          onCancel={() => {
-            setShowPhysicianConfirm(false)
-            if (pendingImportSource === 'ics') setShowRangeModal(true)
-            setPendingImportSource(null)
-          }}
-          onConfirm={() => {
-            setShowPhysicianConfirm(false)
-            if (pendingImportSource === 'pdf') handlePdfImport()
-            else handleReviewImport()
-            setPendingImportSource(null)
-          }}
-        />
       )}
     </div>
   )
@@ -1868,8 +1770,7 @@ function StipendRatesTab() {
 // ─── Grid Paste ───────────────────────────────────────────────────────────────
 
 function SchedulePasteTab() {
-  const { schedules, saveSchedule, physicians, activePhysicianId } = useData()
-  const activePhysician = physicians.find(p => p.id === activePhysicianId)
+  const { schedules, saveSchedule } = useData()
 
   const now = new Date()
   const nextMonthDate = new Date(now.getFullYear(), now.getMonth() + 1, 1)
@@ -1880,7 +1781,6 @@ function SchedulePasteTab() {
   const [parseResult, setParseResult]       = useState<ParseScheduleResult | null>(null)
   const [saving, setSaving] = useState(false)
   const [saved,  setSaved]  = useState(false)
-  const [showPhysicianConfirm, setShowPhysicianConfirm] = useState(false)
 
   const [conflicts,         setConflicts]         = useState<ConflictEntry[]>([])
   const [showConflictModal, setShowConflictModal] = useState(false)
@@ -2212,23 +2112,14 @@ function SchedulePasteTab() {
       )}
 
       <div className="space-y-2">
-        {activePhysician && <div className="flex items-center gap-2 text-xs text-gray-500">Saving for: <PhysicianBadge name={activePhysician.name} /></div>}
         <button
-          onClick={() => setShowPhysicianConfirm(true)}
+          onClick={handleSave}
           disabled={!parseResult?.entries.length || !!parseResult?.error || saving || !allXResolved}
           className="w-full py-2.5 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-500 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
         >
           {saving ? 'Saving…' : `Save ${MONTH_ABBREVS[month - 1]} ${year} Schedule`}
         </button>
       </div>
-      {showPhysicianConfirm && activePhysician && (
-        <PhysicianConfirmModal
-          physicianName={activePhysician.name}
-          label="schedule"
-          onCancel={() => setShowPhysicianConfirm(false)}
-          onConfirm={() => { setShowPhysicianConfirm(false); handleSave() }}
-        />
-      )}
 
       {/* Conflict modal */}
       {showConflictModal && (
