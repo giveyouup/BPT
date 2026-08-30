@@ -6,7 +6,7 @@ on:
       - su
 
 env:
-  IMAGE_NAME: bijano/bract-su
+  IMAGE_NAME: bijano/bract
 
 jobs:
   build-and-push:
