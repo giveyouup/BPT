@@ -97,24 +97,34 @@ export default function Help() {
           </button>{' '}
           → "PCR Report" tab.
         </Where>
-        <p>
-          Expects an Excel (.xlsx) export from the PCR billing system, one row per billing line item.
-          Required columns: Incident ID, Service Date, Ticket #, CPT/ASA code, Modifier, Unit Value,
-          Distribution Value, Start Time, End Time, and Total Time.
-        </p>
-        <p>
-          <span className="text-gray-300 font-medium">Getting the file:</span> PCR billing data has to be
-          requested from Jennifer Greenwell at the office. Ideally, ask for it on an ongoing monthly basis so
-          each report lines up with one calendar month — but an entire year can be imported all at once if
-          needed, at the cost of losing monthly granularity. Simply ask her to send the Excel version of the
-          PCR billing details page.
-        </p>
+        <p>Two ways to get a month's billing data in:</p>
+        <div>
+          <p className="text-gray-300 font-medium text-xs uppercase tracking-wide mb-1">PDF (easiest)</p>
+          <p className="mt-1">
+            Drop in a PDF of the Case Distribution Report — it's read with OCR, so there's nothing to
+            request from the office first. The report is often bundled with unrelated pages; the correct
+            page range is auto-detected, but it's worth a quick check before parsing. Because it's OCR'd
+            from a scan, occasional misreads are possible (a garbled ticket number or modifier, for
+            example) — spot-check the preview totals against the source PDF, especially for larger reports.
+          </p>
+        </div>
+        <div>
+          <p className="text-gray-300 font-medium text-xs uppercase tracking-wide mb-1">Excel export (cleaner, faster)</p>
+          <p className="mt-1">
+            An Excel (.xlsx) export from the PCR billing system, one row per billing line item — more
+            reliable since no OCR is involved, but it has to be requested from Jennifer Greenwell at the
+            CASE office. Ideally ask for it on an ongoing monthly basis so each report lines up with one
+            calendar month — but an entire year can be imported all at once if needed, at the cost of
+            losing monthly granularity. Simply ask her to send the Excel version of the PCR billing
+            details page.
+          </p>
+        </div>
         <ul className="list-disc pl-5 space-y-1.5">
           <li>Month and year are auto-detected from the filename or file contents — override manually if needed.</li>
           <li>Dollar Value per Unit pre-fills from a prior report for the same month, if one exists.</li>
           <li>Hours Padding and Default Hours (no-time days) pre-fill from your Settings defaults but can be adjusted per report.</li>
           <li>Re-uploading a month you've already saved shows a conflict warning before it overwrites.</li>
-          <li>Files spanning 3+ distinct months offer an automatic split into separate monthly reports.</li>
+          <li>Excel files spanning 3+ distinct months offer an automatic split into separate monthly reports (a PDF is always a single month, so this doesn't apply).</li>
         </ul>
       </Section>
 

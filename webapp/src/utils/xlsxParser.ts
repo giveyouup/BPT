@@ -146,7 +146,7 @@ function parseRawRows(rows: unknown[][]): LineItem[] {
 // IncidentID for the same ticket, or under a sibling ticket (e.g. "03369S").
 // Drop any (incidentId, ticketNum) group whose TotalDistributableUnits sum to 0.
 
-function netOutVoidPairs(items: LineItem[]): LineItem[] {
+export function netOutVoidPairs(items: LineItem[]): LineItem[] {
   // Group rows by (incidentId, ticketNum)
   const groups = new Map<string, LineItem[]>()
   for (const li of items) {

@@ -1,5 +1,7 @@
 import express from 'express'
+import multer from 'multer'
 import path from 'path'
+import { detectPcrSections, extractPcrLineItems } from './pdfParser'
 import {
   getPhysicians, upsertPhysician, deletePhysician,
   getReports, getReport, upsertReport, deleteReport,
@@ -15,6 +17,10 @@ import {
 
 const app = express()
 const PORT = parseInt(process.env.PORT ?? '3001', 10)
+const pdfUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 25 * 1024 * 1024 },
+})
 
 app.use(express.json({ limit: '50mb' }))
 
@@ -52,6 +58,38 @@ app.put('/api/reports/:id', (req, res) => {
 app.delete('/api/reports/:id', (req, res) => {
   deleteReport(req.params.id)
   res.json({ ok: true })
+})
+
+// ─── PCR PDF import (OCR) ───────────────────────────────────────────────────────
+//
+// PCR reports are sometimes only available as scanned PDFs (no text layer)
+// rather than the native .xlsx export, often bundled with unrelated pages.
+// These endpoints shell out to the vendored Python/Tesseract OCR pipeline
+// (server/pcr-pdf/parse_pcr_pdf.py) to locate the report pages and extract
+// LineItem-shaped data, mirroring what the client-side xlsx parser produces.
+
+app.post('/api/pcr-pdf/detect', pdfUpload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded' })
+  try {
+    const result = await detectPcrSections(req.file.buffer)
+    res.json(result)
+  } catch (err) {
+    console.error('PDF detect failed:', err)
+    res.status(500).json({ error: String(err) })
+  }
+})
+
+app.post('/api/pcr-pdf/extract', pdfUpload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded' })
+  const pages = req.body.pages as string | undefined
+  if (!pages) return res.status(400).json({ error: 'pages is required' })
+  try {
+    const result = await extractPcrLineItems(req.file.buffer, pages)
+    res.json(result)
+  } catch (err) {
+    console.error('PDF extract failed:', err)
+    res.status(500).json({ error: String(err) })
+  }
 })
 
 // ─── Schedules ────────────────────────────────────────────────────────────────

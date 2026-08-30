@@ -1,4 +1,30 @@
-import type { MonthlyReport, Schedule, Settings, StipendMapping, CptRange, Physician, MonthlyExpenses, AnnualExpenses } from './types'
+import type { MonthlyReport, Schedule, Settings, StipendMapping, CptRange, Physician, MonthlyExpenses, AnnualExpenses, LineItem } from './types'
+
+export interface PcrPdfSection {
+  startPage: number
+  endPage: number
+  doctorName: string
+}
+
+export interface PcrPdfDetectResult {
+  pageCount: number
+  sections: PcrPdfSection[]
+}
+
+export interface PcrPdfExtractResult {
+  doctorName: string
+  criteria: Record<string, string>
+  lineItems: LineItem[]
+}
+
+async function reqForm<T>(url: string, form: FormData): Promise<T> {
+  const res = await fetch('/api' + url, { method: 'POST', body: form })
+  if (!res.ok) {
+    const body = await res.json().catch(() => null)
+    throw new Error(body?.error || `API POST ${url}: ${res.status}`)
+  }
+  return res.json() as Promise<T>
+}
 
 export interface MaintenanceResult {
   walBusy: boolean
@@ -71,5 +97,18 @@ export const api = {
   },
   db: {
     maintenance: () => req<MaintenanceResult>('POST', '/db/maintenance'),
+  },
+  pcrPdf: {
+    detect: (file: File) => {
+      const form = new FormData()
+      form.append('file', file)
+      return reqForm<PcrPdfDetectResult>('/pcr-pdf/detect', form)
+    },
+    extract: (file: File, pages: string) => {
+      const form = new FormData()
+      form.append('file', file)
+      form.append('pages', pages)
+      return reqForm<PcrPdfExtractResult>('/pcr-pdf/extract', form)
+    },
   },
 }

@@ -1,6 +1,8 @@
 import { useState, useCallback, useMemo, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { parseXlsx, detectMonthYear, detectMonthYearFromBuffer, isRawXlsx, exportCleanXlsx } from '../utils/xlsxParser'
+import { parseXlsx, detectMonthYear, detectMonthYearFromBuffer, isRawXlsx, exportCleanXlsx, netOutVoidPairs } from '../utils/xlsxParser'
+import { api } from '../api'
+import type { PcrPdfSection } from '../api'
 import { exportStipendMappings } from '../utils/exportXlsx'
 import { parseICS } from '../utils/icsParser'
 import { parseStipendMappings } from '../utils/stipendMappingParser'
@@ -139,33 +141,115 @@ function PcrUploadTab() {
   const [showPhysicianConfirm, setShowPhysicianConfirm] = useState(false)
   const [pendingAction, setPendingAction] = useState<'single' | 'split' | null>(null)
 
-  const handleFile = useCallback(async (f: File) => {
-    setFile(f)
+  // ── PDF import (server-side OCR) ──────────────────────────────────────────
+  const [pdfSections, setPdfSections] = useState<PcrPdfSection[] | null>(null)
+  const [selectedSectionIdx, setSelectedSectionIdx] = useState(0)
+  const [pageRangeInput, setPageRangeInput] = useState('')
+  const [pdfBusy, setPdfBusy] = useState<'detecting' | 'extracting' | null>(null)
+
+  // Applies parsed line items the same way regardless of source (xlsx or PDF):
+  // detect month/year, prefill $/unit from an existing report, and flag
+  // multi-month uploads for the split prompt. `checkMultiMonth` is false for
+  // PDFs -- a PDF page range is always a single Case Distribution Report for
+  // one month, so the split prompt doesn't apply (unlike an xlsx export,
+  // which can span an arbitrary date range).
+  const applyParsedItems = useCallback((
+    items: LineItem[],
+    detected: { month: number; year: number } | null,
+    checkMultiMonth = true,
+  ) => {
+    if (detected) {
+      setMonth(detected.month)
+      setYear(detected.year)
+      const existingId = `${detected.year}-${String(detected.month).padStart(2, '0')}`
+      const existingReport = reports.find((r) => r.id === existingId)
+      if (existingReport) setUnitValue((existingReport.unitDollarValue ?? 0).toFixed(2))
+    }
+    setParsed(items)
+    if (checkMultiMonth) {
+      const distinctMonths = new Set(items.map((li) => li.serviceDate.slice(0, 7)))
+      if (distinctMonths.size >= 3) setMultiMonthMode('prompt')
+    }
+  }, [reports])
+
+  // Parse "MM/DD/YYYY" or "M/D/YYYY" (as found in the PDF's criteria line)
+  const monthYearFromCriteriaDate = (s: string | undefined): { month: number; year: number } | null => {
+    const m = s?.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/)
+    return m ? { month: parseInt(m[1]), year: parseInt(m[3]) } : null
+  }
+
+  const resetUploadState = () => {
     setParseError(null)
     setParsed(null)
     setWasRaw(false)
     setShowConflict(false)
     setMultiMonthMode('none')
+    setPdfSections(null)
+    setPdfBusy(null)
+  }
+
+  const handleXlsxFile = useCallback(async (f: File) => {
     try {
       const buffer = await f.arrayBuffer()
       const detected = detectMonthYear(f.name) ?? detectMonthYearFromBuffer(buffer)
-      if (detected) {
-        setMonth(detected.month)
-        setYear(detected.year)
-        const existingId = `${detected.year}-${String(detected.month).padStart(2, '0')}`
-        const existingReport = reports.find((r) => r.id === existingId)
-        if (existingReport) setUnitValue((existingReport.unitDollarValue ?? 0).toFixed(2))
-      }
       const raw = isRawXlsx(buffer)
       setWasRaw(raw)
       const items = parseXlsx(buffer)
-      setParsed(items)
-      const distinctMonths = new Set(items.map((li) => li.serviceDate.slice(0, 7)))
-      if (distinctMonths.size >= 3) setMultiMonthMode('prompt')
+      applyParsedItems(items, detected)
     } catch (e) {
       setParseError(e instanceof Error ? e.message : 'Failed to parse file')
     }
-  }, [reports])
+  }, [applyParsedItems])
+
+  const handlePdfFile = useCallback(async (f: File) => {
+    setPdfBusy('detecting')
+    try {
+      const { sections } = await api.pcrPdf.detect(f)
+      if (sections.length === 0) {
+        setParseError('No Case Distribution Report pages found in this PDF.')
+        setPdfBusy(null)
+        return
+      }
+      // Prefer the section matching the active physician's name, if any.
+      const activeIdx = activePhysician
+        ? sections.findIndex((s) => s.doctorName.toLowerCase().includes(activePhysician.name.toLowerCase().split(' ')[0]))
+        : -1
+      const idx = activeIdx >= 0 ? activeIdx : 0
+      setSelectedSectionIdx(idx)
+      setPageRangeInput(`${sections[idx].startPage}-${sections[idx].endPage}`)
+      setPdfSections(sections)
+      setPdfBusy(null)
+    } catch (e) {
+      setParseError(e instanceof Error ? e.message : 'Failed to scan PDF')
+      setPdfBusy(null)
+    }
+  }, [activePhysician])
+
+  const handleParsePdfPages = async () => {
+    if (!file) return
+    setPdfBusy('extracting')
+    setParseError(null)
+    try {
+      const result = await api.pcrPdf.extract(file, pageRangeInput)
+      const items = netOutVoidPairs(result.lineItems)
+      const detected = detectMonthYear(file.name) ?? monthYearFromCriteriaDate(result.criteria.date_from)
+      applyParsedItems(items, detected, false)
+    } catch (e) {
+      setParseError(e instanceof Error ? e.message : 'Failed to extract PDF pages')
+    } finally {
+      setPdfBusy(null)
+    }
+  }
+
+  const handleFile = useCallback((f: File) => {
+    setFile(f)
+    resetUploadState()
+    if (f.name.toLowerCase().endsWith('.pdf')) {
+      handlePdfFile(f)
+    } else {
+      handleXlsxFile(f)
+    }
+  }, [handlePdfFile, handleXlsxFile])
 
   const onDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault()
@@ -265,10 +349,8 @@ function PcrUploadTab() {
       <div className="bg-gray-800/30 border border-gray-700/50 rounded-lg px-4 py-3 mb-5">
         <p className="text-xs font-semibold text-gray-400 mb-1">Expected format</p>
         <p className="text-xs text-gray-500">
-          Excel (.xlsx) export from the PCR billing system. Each row represents one billing line item.
-          Required columns: Incident ID, Service Date, Ticket #, CPT/ASA code, Modifier, Unit Value,
-          Distribution Value, Start Time, End Time, and Total Time. Service dates are extracted automatically
-          from the filename if present.
+          You can upload a PDF of the Case Distribution Report — it's read with OCR. For cleaner, faster
+          results, upload the Excel export instead, available on request from the CASE office.
         </p>
       </div>
       {/* Drop zone */}
@@ -292,7 +374,7 @@ function PcrUploadTab() {
               </svg>
             </div>
             <p className="text-sm font-medium text-gray-200">{file.name}</p>
-            <button onClick={() => { setFile(null); setParsed(null) }}
+            <button onClick={() => { setFile(null); resetUploadState() }}
               className="text-xs text-gray-500 hover:text-gray-300 mt-1">Remove</button>
           </div>
         ) : (
@@ -301,15 +383,83 @@ function PcrUploadTab() {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
                 d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
             </svg>
-            <p className="text-sm text-gray-400 mb-1">Drop your .xlsx file here</p>
+            <p className="text-sm text-gray-400 mb-1">Drop your .xlsx or .pdf file here</p>
             <label className="cursor-pointer">
               <span className="text-xs text-indigo-400 font-medium hover:text-indigo-300">or click to browse</span>
-              <input type="file" accept=".xlsx,.xls" className="hidden"
+              <input type="file" accept=".xlsx,.xls,.pdf" className="hidden"
                 onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f) }} />
             </label>
           </div>
         )}
       </div>
+
+      {pdfBusy === 'detecting' && (
+        <div className="flex items-center gap-2 bg-gray-800/50 border border-gray-700 rounded-lg px-4 py-3 mb-6 text-sm text-gray-400">
+          <svg className="w-4 h-4 animate-spin text-indigo-400" fill="none" viewBox="0 0 24 24">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+          </svg>
+          Scanning pages for the Case Distribution Report…
+        </div>
+      )}
+
+      {pdfSections && !parsed && (
+        <div className="bg-gray-900 rounded-xl border border-gray-800 p-5 mb-6 space-y-4">
+          <p className="text-sm font-semibold text-gray-200">
+            {pdfSections.length === 1 ? 'Detected report pages' : `Detected ${pdfSections.length} report sections`}
+          </p>
+          {pdfSections.length > 1 && (
+            <div>
+              <label className="block text-xs font-semibold text-gray-400 mb-1.5">Doctor / Section</label>
+              <select
+                value={selectedSectionIdx}
+                onChange={(e) => {
+                  const idx = parseInt(e.target.value)
+                  setSelectedSectionIdx(idx)
+                  setPageRangeInput(`${pdfSections[idx].startPage}-${pdfSections[idx].endPage}`)
+                }}
+                className={inputCls}
+              >
+                {pdfSections.map((s, i) => (
+                  <option key={i} value={i}>
+                    {s.doctorName || '(unlabeled)'} — pages {s.startPage}–{s.endPage}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+          {pdfSections.length === 1 && (
+            <p className="text-xs text-gray-500">
+              {pdfSections[0].doctorName || '(doctor name not detected)'} — pages {pdfSections[0].startPage}–{pdfSections[0].endPage}
+            </p>
+          )}
+          <div>
+            <label className="block text-xs font-semibold text-gray-400 mb-1.5">
+              Pages to parse <span className="text-gray-600 font-normal">(edit if the detected range looks wrong)</span>
+            </label>
+            <input
+              type="text"
+              value={pageRangeInput}
+              onChange={(e) => setPageRangeInput(e.target.value)}
+              placeholder="e.g. 6-10"
+              className={inputCls}
+            />
+          </div>
+          <button
+            onClick={handleParsePdfPages}
+            disabled={!pageRangeInput || pdfBusy === 'extracting'}
+            className="w-full py-2.5 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-500 transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+          >
+            {pdfBusy === 'extracting' && (
+              <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+              </svg>
+            )}
+            {pdfBusy === 'extracting' ? 'Reading pages (OCR)…' : 'Parse Pages'}
+          </button>
+        </div>
+      )}
 
       {parseError && (
         <div className="bg-red-900/30 border border-red-800 rounded-lg px-4 py-3 mb-6 text-sm text-red-400">
