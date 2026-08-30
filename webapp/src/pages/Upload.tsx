@@ -2,7 +2,7 @@ import { useState, useCallback, useMemo, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { parseXlsx, detectMonthYear, detectMonthYearFromBuffer, isRawXlsx, exportCleanXlsx, netOutVoidPairs } from '../utils/xlsxParser'
 import { api } from '../api'
-import type { PcrPdfSection } from '../api'
+import type { PcrPdfSection, SchedulePdfResult } from '../api'
 import { exportStipendMappings } from '../utils/exportXlsx'
 import { parseICS } from '../utils/icsParser'
 import { parseStipendMappings } from '../utils/stipendMappingParser'
@@ -15,6 +15,29 @@ import { useData } from '../context/DataContext'
 import type { LineItem, ShiftEntry, Schedule, StipendMapping, StipendRate } from '../types'
 
 function genId() { return `sched-${Date.now()}-${Math.random().toString(36).slice(2)}` }
+
+// Fuzzy match between a physician's stored full name and a name extracted
+// from a PDF (usually just a surname, e.g. "Osmani" or "187 - OSMANI, BIJAN").
+// Bidirectional substring on name tokens so it works whichever string is the
+// terser one. Used both to auto-suggest a match and to warn when the
+// currently-selected extraction doesn't look like the active physician.
+function namesLikelyMatch(physicianName: string, extractedName: string): boolean {
+  if (!physicianName || !extractedName) return false
+  const allTokens = physicianName.toLowerCase().split(/\s+/).filter(Boolean)
+  // Prefer tokens longer than 2 chars (avoids a lone initial like "A."
+  // substring-matching almost anything); fall back to all tokens only if
+  // every one is that short (e.g. a physician named "Jo Le").
+  const tokens = allTokens.filter((t) => t.length > 2)
+  const useTokens = tokens.length > 0 ? tokens : allTokens
+  // PCR doctor names are formatted "NNN - SURNAME, FIRSTNAME" -- when a comma
+  // is present, compare only against the part before it (the surname).
+  // Otherwise two different physicians who happen to share a first name
+  // would falsely "match" just because the first name also appears in the
+  // string (e.g. "Bijan Smith" vs "187 - OSMANI, BIJAN").
+  const commaIdx = extractedName.indexOf(',')
+  const compareAgainst = (commaIdx >= 0 ? extractedName.slice(0, commaIdx) : extractedName).toLowerCase()
+  return useTokens.some((t) => compareAgainst.includes(t) || t.includes(compareAgainst))
+}
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────
 
@@ -66,11 +89,12 @@ function MonthPicker({ value, onChange, placeholder = 'Select' }: {
 
 // ─── Physician confirmation modal ─────────────────────────────────────────────
 
-function PhysicianConfirmModal({ physicianName, label, onConfirm, onCancel }: {
+function PhysicianConfirmModal({ physicianName, label, onConfirm, onCancel, saving }: {
   physicianName: string
   label: string
   onConfirm: () => void
   onCancel: () => void
+  saving?: boolean
 }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
@@ -90,15 +114,17 @@ function PhysicianConfirmModal({ physicianName, label, onConfirm, onCancel }: {
         <div className="flex gap-3">
           <button
             onClick={onCancel}
-            className="flex-1 px-4 py-2 rounded-lg border border-gray-700 text-sm text-gray-400 hover:bg-gray-800 hover:text-gray-200 transition-colors"
+            disabled={saving}
+            className="flex-1 px-4 py-2 rounded-lg border border-gray-700 text-sm text-gray-400 hover:bg-gray-800 hover:text-gray-200 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
             Cancel
           </button>
           <button
             onClick={onConfirm}
-            className="flex-1 px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-500 transition-colors"
+            disabled={saving}
+            className="flex-1 px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-500 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            Save for {physicianName}
+            {saving ? 'Saving…' : `Save for ${physicianName}`}
           </button>
         </div>
       </div>
@@ -212,7 +238,7 @@ function PcrUploadTab() {
       }
       // Prefer the section matching the active physician's name, if any.
       const activeIdx = activePhysician
-        ? sections.findIndex((s) => s.doctorName.toLowerCase().includes(activePhysician.name.toLowerCase().split(' ')[0]))
+        ? sections.findIndex((s) => namesLikelyMatch(activePhysician.name, s.doctorName))
         : -1
       const idx = activeIdx >= 0 ? activeIdx : 0
       setSelectedSectionIdx(idx)
@@ -261,6 +287,11 @@ function PcrUploadTab() {
   const reportId = `${year}-${String(month).padStart(2, '0')}`
   const existing = reports.find((r) => r.id === reportId)
 
+  const selectedSection = pdfSections?.[selectedSectionIdx]
+  const pdfDoctorMismatch = !!(
+    selectedSection && activePhysician && !namesLikelyMatch(activePhysician.name, selectedSection.doctorName)
+  )
+
   const totalUnits = parsed ? parsed.reduce((s, li) => s + li.totalDistributableUnits, 0) : 0
   const uniqueTickets = parsed ? new Set(parsed.map((li) => li.ticketNum)).size : 0
   const serviceDates = parsed ? [...new Set(parsed.map((li) => li.serviceDate))].sort() : []
@@ -271,7 +302,7 @@ function PcrUploadTab() {
     : 0
 
   const handleSave = async () => {
-    if (!parsed) return
+    if (!parsed || saving) return
     if (existing && !showConflict) {
       setShowConflict(true)
       return
@@ -312,7 +343,7 @@ function PcrUploadTab() {
   }, [parsed, multiMonthMode])
 
   const handleSplitSave = async () => {
-    if (!splitGroups || !file) return
+    if (!splitGroups || !file || saving) return
     setSaving(true)
     try {
       for (const [ym, items] of splitGroups) {
@@ -432,6 +463,18 @@ function PcrUploadTab() {
             <p className="text-xs text-gray-500">
               {pdfSections[0].doctorName || '(doctor name not detected)'} — pages {pdfSections[0].startPage}–{pdfSections[0].endPage}
             </p>
+          )}
+          {pdfDoctorMismatch && (
+            <div className="flex items-start gap-2 bg-amber-900/20 border border-amber-700/50 rounded-lg px-3 py-2 text-xs text-amber-300">
+              <svg className="w-4 h-4 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <span>
+                The detected doctor ("{selectedSection?.doctorName || 'unlabeled'}") doesn't look like a match for{' '}
+                <strong>{activePhysician?.name}</strong>, who this will be saved under. Double-check the section
+                before parsing.
+              </span>
+            </div>
           )}
           <div>
             <label className="block text-xs font-semibold text-gray-400 mb-1.5">
@@ -746,6 +789,7 @@ function PcrUploadTab() {
         <PhysicianConfirmModal
           physicianName={activePhysician.name}
           label={pendingAction === 'split' ? 'batch of reports' : 'report'}
+          saving={saving}
           onCancel={() => { setShowPhysicianConfirm(false); setPendingAction(null) }}
           onConfirm={() => {
             setShowPhysicianConfirm(false)
@@ -785,14 +829,27 @@ function ScheduleUploadTab() {
   const [showConflictModal, setShowConflictModal] = useState(false)
   const [pendingEntries, setPendingEntries] = useState<ShiftEntry[]>([])
   const [isDuplicate, setIsDuplicate] = useState(false)
+  const [pendingImportSource, setPendingImportSource] = useState<'ics' | 'pdf' | null>(null)
 
   const [saved, setSaved] = useState(false)
+  const [saving, setSaving] = useState(false)
 
-  const handleFile = useCallback(async (f: File) => {
-    setFile(f)
-    setParseError(null)
+  // ── PDF import (server-side text extraction) ──────────────────────────────
+  const [pdfParsing, setPdfParsing] = useState(false)
+  const [pdfResult, setPdfResult] = useState<SchedulePdfResult | null>(null)
+  const [pdfMonthYear, setPdfMonthYear] = useState('')
+  const [pdfSelectedRow, setPdfSelectedRow] = useState(0)
+  const [pdfXResolutions, setPdfXResolutions] = useState<Record<string, 'H' | 'V' | 'Postcall'>>({})
+
+  const resetFile = () => {
+    setFile(null)
     setParsedEvents(null)
-    setSaved(false)
+    setPdfResult(null)
+    setPdfXResolutions({})
+    setPendingImportSource(null)
+  }
+
+  const handleIcsFile = useCallback(async (f: File) => {
     try {
       const text = await f.text()
       const events = parseICS(text)
@@ -811,6 +868,41 @@ function ScheduleUploadTab() {
     }
   }, [])
 
+  const handleSchedulePdfFile = useCallback(async (f: File) => {
+    setPdfParsing(true)
+    try {
+      const result = await api.schedulePdf.parse(f)
+      setPdfResult(result)
+      if (result.month && result.year) {
+        setPdfMonthYear(`${result.year}-${String(result.month).padStart(2, '0')}`)
+      }
+      // Best-guess row match against the active physician's name (surname-style
+      // tokens, since PDF rows are typically just a surname).
+      let bestIdx = 0
+      if (activePhysician) {
+        const idx = result.rows.findIndex((r) => namesLikelyMatch(activePhysician.name, r.name))
+        if (idx >= 0) bestIdx = idx
+      }
+      setPdfSelectedRow(bestIdx)
+    } catch (e) {
+      setParseError(e instanceof Error ? e.message : 'Failed to parse schedule PDF')
+    } finally {
+      setPdfParsing(false)
+    }
+  }, [activePhysician])
+
+  const handleFile = useCallback((f: File) => {
+    resetFile()
+    setFile(f)
+    setParseError(null)
+    setSaved(false)
+    if (f.name.toLowerCase().endsWith('.pdf')) {
+      handleSchedulePdfFile(f)
+    } else {
+      handleIcsFile(f)
+    }
+  }, [handleSchedulePdfFile, handleIcsFile])
+
   const onDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault()
     setDragging(false)
@@ -822,18 +914,79 @@ function ScheduleUploadTab() {
     (e) => (!rangeStart || e.date >= rangeStart) && (!rangeEnd || e.date <= rangeEnd)
   ) ?? []
 
-  const handleReviewImport = () => {
-    setShowRangeModal(false)
+  const selectedPdfRow = pdfResult?.rows[pdfSelectedRow]
+  const pdfRowMismatch = !!(
+    selectedPdfRow && activePhysician && !namesLikelyMatch(activePhysician.name, selectedPdfRow.name)
+  )
 
-    // Group multiple events per date into shiftTypes[]
-    const byDate = new Map<string, string[]>()
-    for (const e of filteredEvents) {
-      if (!byDate.has(e.date)) byDate.set(e.date, [])
-      byDate.get(e.date)!.push(...parseShiftSummary(e.summary))
-    }
-    const newEntries: ShiftEntry[] = [...byDate.entries()].map(([date, shiftTypes]) => ({ date, shiftTypes }))
+  // Day-by-day {date, shift} list for the selected PDF row, remapped to the
+  // confirmed month/year (so overriding a misdetected month needs no
+  // re-parse) and with blank cells dropped before any further processing.
+  const pdfDayList = useMemo(() => {
+    if (!pdfResult || !pdfMonthYear) return []
+    const row = pdfResult.rows[pdfSelectedRow]
+    if (!row) return []
+    const [y, m] = pdfMonthYear.split('-').map(Number)
+    const daysInMonth = new Date(y, m, 0).getDate()
+    return row.shifts
+      .slice(0, daysInMonth)
+      .map((shift, i) => ({
+        date: `${y}-${String(m).padStart(2, '0')}-${String(i + 1).padStart(2, '0')}`,
+        shift,
+      }))
+      .filter((e) => e.shift.trim() !== '')
+  }, [pdfResult, pdfMonthYear, pdfSelectedRow])
 
-    // Check for conflicts with existing schedules
+  // If the confirmed month has more days than the PDF had columns for (e.g.
+  // the month was overridden after a misdetection), the trailing day(s) have
+  // no source data at all -- flag it rather than silently dropping them.
+  const pdfMonthLongerThanDetected = useMemo(() => {
+    if (!pdfResult || !pdfMonthYear) return false
+    const row = pdfResult.rows[pdfSelectedRow]
+    if (!row) return false
+    const [y, m] = pdfMonthYear.split('-').map(Number)
+    return new Date(y, m, 0).getDate() > row.shifts.length
+  }, [pdfResult, pdfMonthYear, pdfSelectedRow])
+
+  // "X" is ambiguous shorthand (holiday/vacation/postcall) -- same resolution
+  // logic as Grid Paste: auto-resolve to Postcall if the previous day was a
+  // G1/G2 call shift (checked against this same row first, then stored
+  // schedules), otherwise the user must pick one below.
+  const pdfXEntries = useMemo(() => {
+    const parsedMap = new Map(pdfDayList.map((e) => [e.date, e.shift]))
+    const storedMap = new Map<string, string[]>()
+    for (const sched of [...schedules].filter((s) => s.id !== 'manual_shifts').sort((a, b) => a.uploadDate.localeCompare(b.uploadDate)))
+      for (const entry of sched.entries)
+        storedMap.set(entry.date, entry.shiftTypes)
+
+    return pdfDayList
+      .filter((e) => e.shift.trim().toUpperCase() === 'X')
+      .map((e) => {
+        const [y, m, d] = e.date.split('-').map(Number)
+        const prev = new Date(y, m - 1, d - 1)
+        const prevStr = `${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, '0')}-${String(prev.getDate()).padStart(2, '0')}`
+        const prevShift = parsedMap.get(prevStr)
+        const prevShifts = prevShift ? [prevShift] : (storedMap.get(prevStr) ?? [])
+        const isPostcall = prevShifts.some((s) => { const v = s.trim().toUpperCase(); return v === 'G1' || v === 'G2' })
+        return { date: e.date, autoLabel: isPostcall ? 'Postcall' as const : null }
+      })
+  }, [pdfDayList, schedules])
+
+  const pdfUnresolvedXDates = useMemo(
+    () => pdfXEntries.filter((x) => x.autoLabel === null).map((x) => x.date),
+    [pdfXEntries],
+  )
+  const pdfAllXResolved = pdfUnresolvedXDates.every((d) => pdfXResolutions[d])
+
+  function pdfResolvedShift(e: { date: string; shift: string }): string {
+    if (e.shift.trim().toUpperCase() !== 'X') return e.shift
+    const xe = pdfXEntries.find((x) => x.date === e.date)
+    return xe?.autoLabel ?? pdfXResolutions[e.date] ?? e.shift
+  }
+
+  // Conflict/duplicate detection + save -- shared by both the ICS and PDF
+  // import paths (each just builds newEntries differently upstream).
+  const reviewAndSave = (newEntries: ShiftEntry[]) => {
     const existingMap = new Map<string, string[]>()
     const sortedExisting = [...schedules].sort((a, b) => a.uploadDate.localeCompare(b.uploadDate))
     for (const sched of sortedExisting) {
@@ -879,19 +1032,44 @@ function ScheduleUploadTab() {
     }
   }
 
-  const doSave = async (entries: ShiftEntry[], rejectedDates: string[]) => {
-    const finalEntries = entries.filter((e) => !rejectedDates.includes(e.date))
-    const schedule: Schedule = {
-      id: genId(),
-      filename: file!.name,
-      uploadDate: new Date().toISOString(),
-      entries: finalEntries,
+  const handleReviewImport = () => {
+    setShowRangeModal(false)
+    // Group multiple events per date into shiftTypes[]
+    const byDate = new Map<string, string[]>()
+    for (const e of filteredEvents) {
+      if (!byDate.has(e.date)) byDate.set(e.date, [])
+      byDate.get(e.date)!.push(...parseShiftSummary(e.summary))
     }
-    await saveSchedule(schedule)
-    setSaved(true)
-    setShowConflictModal(false)
-    setParsedEvents(null)
-    setFile(null)
+    const newEntries: ShiftEntry[] = [...byDate.entries()].map(([date, shiftTypes]) => ({ date, shiftTypes }))
+    reviewAndSave(newEntries)
+  }
+
+  const handlePdfImport = () => {
+    const newEntries: ShiftEntry[] = pdfDayList.map((e) => ({
+      date: e.date,
+      shiftTypes: parseShiftSummary(pdfResolvedShift(e)),
+    }))
+    reviewAndSave(newEntries)
+  }
+
+  const doSave = async (entries: ShiftEntry[], rejectedDates: string[]) => {
+    if (saving) return
+    setSaving(true)
+    try {
+      const finalEntries = entries.filter((e) => !rejectedDates.includes(e.date))
+      const schedule: Schedule = {
+        id: genId(),
+        filename: file!.name,
+        uploadDate: new Date().toISOString(),
+        entries: finalEntries,
+      }
+      await saveSchedule(schedule)
+      setSaved(true)
+      setShowConflictModal(false)
+      resetFile()
+    } finally {
+      setSaving(false)
+    }
   }
 
   const handleApplyConflicts = async () => {
@@ -906,10 +1084,9 @@ function ScheduleUploadTab() {
       <div className="bg-gray-800/30 border border-gray-700/50 rounded-lg px-4 py-3 mb-5">
         <p className="text-xs font-semibold text-gray-400 mb-1">Expected format</p>
         <p className="text-xs text-gray-500">
-          iCalendar file (.ics) exported from your calendar application. Shift assignments must be
-          all-day events. The event title should contain the shift type (e.g., G1, G2, G3, APS, GI, V, POSTCALL).
-          Multiple events on the same day are combined into a single entry. You can select a date range
-          after parsing to import only a subset of events.
+          Upload the monthly schedule grid PDF — you'll pick your row and confirm the month before
+          importing. Alternatively, upload an .ics file exported from your calendar app, with shifts as
+          all-day events (title containing the shift code, e.g. G1, G2, APS, V).
         </p>
       </div>
       {/* Drop zone */}
@@ -933,8 +1110,10 @@ function ScheduleUploadTab() {
               </svg>
             </div>
             <p className="text-sm font-medium text-gray-200">{file.name}</p>
-            <p className="text-xs text-gray-500 mt-0.5">{parsedEvents?.length ?? 0} events parsed</p>
-            <button onClick={() => { setFile(null); setParsedEvents(null) }}
+            <p className="text-xs text-gray-500 mt-0.5">
+              {pdfResult ? `${pdfResult.rows.length} physician row(s) found` : `${parsedEvents?.length ?? 0} events parsed`}
+            </p>
+            <button onClick={resetFile}
               className="text-xs text-gray-500 hover:text-gray-300 mt-1">Remove</button>
           </div>
         ) : (
@@ -943,15 +1122,107 @@ function ScheduleUploadTab() {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
                 d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
             </svg>
-            <p className="text-sm text-gray-400 mb-1">Drop your .ics schedule file here</p>
+            <p className="text-sm text-gray-400 mb-1">Drop your .ics or .pdf schedule file here</p>
             <label className="cursor-pointer">
               <span className="text-xs text-indigo-400 font-medium hover:text-indigo-300">or click to browse</span>
-              <input type="file" accept=".ics" className="hidden"
+              <input type="file" accept=".ics,.pdf" className="hidden"
                 onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f) }} />
             </label>
           </div>
         )}
       </div>
+
+      {pdfParsing && (
+        <div className="flex items-center gap-2 bg-gray-800/50 border border-gray-700 rounded-lg px-4 py-3 mb-6 text-sm text-gray-400">
+          <svg className="w-4 h-4 animate-spin text-indigo-400" fill="none" viewBox="0 0 24 24">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+          </svg>
+          Reading schedule PDF…
+        </div>
+      )}
+
+      {pdfResult && !saved && (
+        <div className="bg-gray-900 rounded-xl border border-gray-800 p-5 mb-6 space-y-4">
+          <p className="text-sm font-semibold text-gray-200">Confirm import</p>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-semibold text-gray-400 mb-1.5">Month</label>
+              <MonthPicker value={pdfMonthYear} onChange={setPdfMonthYear} />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-gray-400 mb-1.5">Physician row</label>
+              <select
+                value={pdfSelectedRow}
+                onChange={(e) => setPdfSelectedRow(parseInt(e.target.value))}
+                className={`${SEL_CLS} w-full`}
+              >
+                {pdfResult.rows.map((r, i) => (
+                  <option key={i} value={i}>{r.name}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <p className="text-xs text-gray-500">
+            {pdfMonthYear
+              ? `${pdfDayList.length} day${pdfDayList.length !== 1 ? 's' : ''} with a shift assigned.`
+              : 'Select a month above to continue.'}
+          </p>
+
+          {pdfMonthLongerThanDetected && (
+            <p className="text-xs text-amber-400">
+              The selected month has more days than this PDF's grid had columns for — the last day(s)
+              of the month won't be imported since there's no source data for them.
+            </p>
+          )}
+
+          {pdfRowMismatch && (
+            <div className="flex items-start gap-2 bg-amber-900/20 border border-amber-700/50 rounded-lg px-3 py-2 text-xs text-amber-300">
+              <svg className="w-4 h-4 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <span>
+                The selected row ("{selectedPdfRow?.name}") doesn't look like a match for{' '}
+                <strong>{activePhysician?.name}</strong>, who this will be saved under. Double-check the row
+                before importing.
+              </span>
+            </div>
+          )}
+
+          {pdfUnresolvedXDates.length > 0 && (
+            <div className="space-y-2 pt-2 border-t border-gray-800">
+              <p className="text-xs font-semibold text-amber-400">
+                {pdfUnresolvedXDates.length} "X" day{pdfUnresolvedXDates.length !== 1 ? 's' : ''} need clarification
+              </p>
+              {pdfUnresolvedXDates.map((date) => (
+                <div key={date} className="flex items-center justify-between gap-3">
+                  <span className="text-xs text-gray-400">{formatDateFull(date)}</span>
+                  <select
+                    value={pdfXResolutions[date] ?? ''}
+                    onChange={(e) => setPdfXResolutions((prev) => ({ ...prev, [date]: e.target.value as 'H' | 'V' | 'Postcall' }))}
+                    className={SEL_CLS}
+                  >
+                    <option value="">Choose…</option>
+                    <option value="H">Holiday</option>
+                    <option value="V">Vacation</option>
+                    <option value="Postcall">Postcall</option>
+                  </select>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {activePhysician && <div className="flex items-center gap-2 text-xs text-gray-500">Saving for: <PhysicianBadge name={activePhysician.name} /></div>}
+
+          <button
+            onClick={() => { setPendingImportSource('pdf'); setShowPhysicianConfirm(true) }}
+            disabled={pdfDayList.length === 0 || !pdfAllXResolved || saving}
+            className="w-full py-2.5 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-500 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            Import
+          </button>
+        </div>
+      )}
 
       {saved && (
         <div className="bg-emerald-900/30 border border-emerald-800 rounded-lg px-4 py-3 mb-6 text-sm text-emerald-400">
@@ -974,12 +1245,13 @@ function ScheduleUploadTab() {
               <div className="flex items-center gap-3">
                 <button
                   onClick={() => { setIsDuplicate(false); doSave(pendingEntries, []) }}
-                  className="px-3 py-1.5 bg-amber-700 hover:bg-amber-600 text-white text-xs rounded-md font-medium transition-colors"
+                  disabled={saving}
+                  className="px-3 py-1.5 bg-amber-700 hover:bg-amber-600 text-white text-xs rounded-md font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   Import Anyway
                 </button>
                 <button
-                  onClick={() => { setIsDuplicate(false); setFile(null); setParsedEvents(null) }}
+                  onClick={() => { setIsDuplicate(false); resetFile() }}
                   className="text-xs text-gray-500 hover:text-gray-300"
                 >
                   Cancel
@@ -1071,14 +1343,14 @@ function ScheduleUploadTab() {
             {activePhysician && <div className="flex items-center gap-2 text-xs text-gray-500 mb-4">Saving for: <PhysicianBadge name={activePhysician.name} /></div>}
             <div className="flex gap-3">
               <button
-                onClick={() => { setShowRangeModal(false); setShowPhysicianConfirm(true) }}
+                onClick={() => { setShowRangeModal(false); setPendingImportSource('ics'); setShowPhysicianConfirm(true) }}
                 disabled={filteredEvents.length === 0}
                 className="flex-1 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-500 transition-colors disabled:opacity-40"
               >
                 Review Import
               </button>
               <button
-                onClick={() => { setShowRangeModal(false); setFile(null); setParsedEvents(null) }}
+                onClick={() => { setShowRangeModal(false); resetFile() }}
                 className="px-4 py-2 text-gray-400 hover:text-gray-200 text-sm"
               >
                 Cancel
@@ -1149,16 +1421,18 @@ function ScheduleUploadTab() {
               </button>
               <div className="flex-1" />
               <button
-                onClick={() => { setShowConflictModal(false); setFile(null); setParsedEvents(null) }}
-                className="px-4 py-2 text-gray-400 hover:text-gray-200 text-sm"
+                onClick={() => { setShowConflictModal(false); resetFile() }}
+                disabled={saving}
+                className="px-4 py-2 text-gray-400 hover:text-gray-200 text-sm disabled:opacity-40 disabled:cursor-not-allowed"
               >
                 Cancel
               </button>
               <button
                 onClick={handleApplyConflicts}
-                className="px-5 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-500 transition-colors"
+                disabled={saving}
+                className="px-5 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-500 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
               >
-                Apply Selected Changes
+                {saving ? 'Saving…' : 'Apply Selected Changes'}
               </button>
             </div>
           </div>
@@ -1168,8 +1442,18 @@ function ScheduleUploadTab() {
         <PhysicianConfirmModal
           physicianName={activePhysician.name}
           label="schedule"
-          onCancel={() => { setShowPhysicianConfirm(false); setShowRangeModal(true) }}
-          onConfirm={() => { setShowPhysicianConfirm(false); handleReviewImport() }}
+          saving={saving}
+          onCancel={() => {
+            setShowPhysicianConfirm(false)
+            if (pendingImportSource === 'ics') setShowRangeModal(true)
+            setPendingImportSource(null)
+          }}
+          onConfirm={() => {
+            setShowPhysicianConfirm(false)
+            if (pendingImportSource === 'pdf') handlePdfImport()
+            else handleReviewImport()
+            setPendingImportSource(null)
+          }}
         />
       )}
     </div>
@@ -1677,22 +1961,26 @@ function SchedulePasteTab() {
   }
 
   const doSave = async (entries: ShiftEntry[], rejectedDates: string[]) => {
-    const finalEntries = entries.filter(e => !rejectedDates.includes(e.date))
+    if (saving) return
     setSaving(true)
-    await saveSchedule({
-      id: genId(),
-      filename: `Grid Paste — ${MONTH_ABBREVS[month - 1]} ${year}`,
-      uploadDate: new Date().toISOString(),
-      entries: finalEntries,
-    })
-    setSaved(true)
-    setSaving(false)
-    setShowConflictModal(false)
-    reset()
+    try {
+      const finalEntries = entries.filter(e => !rejectedDates.includes(e.date))
+      await saveSchedule({
+        id: genId(),
+        filename: `Grid Paste — ${MONTH_ABBREVS[month - 1]} ${year}`,
+        uploadDate: new Date().toISOString(),
+        entries: finalEntries,
+      })
+      setSaved(true)
+      setShowConflictModal(false)
+      reset()
+    } finally {
+      setSaving(false)
+    }
   }
 
   const handleSave = () => {
-    if (!parseResult?.entries.length || parseResult.error) return
+    if (!parseResult?.entries.length || parseResult.error || saving) return
 
     // Resolve X entries to their final labels before storing
     const newEntries: ShiftEntry[] = parseResult.entries.map(e => ({
@@ -1768,7 +2056,8 @@ function SchedulePasteTab() {
               <div className="flex items-center gap-3">
                 <button
                   onClick={() => { setIsDuplicate(false); doSave(pendingEntries, []) }}
-                  className="px-3 py-1.5 bg-amber-700 hover:bg-amber-600 text-white text-xs rounded-md font-medium transition-colors"
+                  disabled={saving}
+                  className="px-3 py-1.5 bg-amber-700 hover:bg-amber-600 text-white text-xs rounded-md font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                 >
                   Import Anyway
                 </button>
@@ -2015,7 +2304,7 @@ export default function Upload() {
 
       <div className="flex border-b border-gray-800 mb-6">
         <button className={tabCls('pcr')} onClick={() => setTab('pcr')}>PCR Report</button>
-        <button className={tabCls('schedule')} onClick={() => setTab('schedule')}>Schedule ICS</button>
+        <button className={tabCls('schedule')} onClick={() => setTab('schedule')}>Schedule Upload</button>
         <button className={tabCls('paste')} onClick={() => setTab('paste')}>Grid Paste</button>
         <button className={tabCls('stipend')} onClick={() => setTab('stipend')}>Stipend Rates</button>
       </div>

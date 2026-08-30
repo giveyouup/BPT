@@ -216,7 +216,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
   }
 
   const deleteReport = async (id: string) => {
-    await api.reports.delete(id)
+    await api.reports.delete(id, activePhysicianId)
     setRawReports((prev) => prev.filter((r) => r.id !== id))
   }
 
@@ -306,7 +306,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
   }
 
   const deleteMonthlyExpenses = async (id: string) => {
-    await api.expenses.delete(id)
+    await api.expenses.delete(id, activePhysicianId)
     setMonthlyExpenses((prev) => prev.filter((r) => r.id !== id))
   }
 
@@ -321,7 +321,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
   }
 
   const deleteAnnualExpenses = async (id: string) => {
-    await api.annualExpenses.delete(id)
+    await api.annualExpenses.delete(id, activePhysicianId)
     setAnnualExpenses((prev) => prev.filter((r) => r.id !== id))
   }
 

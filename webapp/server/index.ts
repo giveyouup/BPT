@@ -2,6 +2,7 @@ import express from 'express'
 import multer from 'multer'
 import path from 'path'
 import { detectPcrSections, extractPcrLineItems } from './pdfParser'
+import { parseSchedulePdf } from './schedulePdfParser'
 import {
   getPhysicians, upsertPhysician, deletePhysician,
   getReports, getReport, upsertReport, deleteReport,
@@ -46,7 +47,9 @@ app.get('/api/reports', (req, res) => {
 })
 
 app.get('/api/reports/:id', (req, res) => {
-  const r = getReport(req.params.id)
+  const physicianId = req.query.physicianId as string | undefined
+  if (!physicianId) return res.status(400).json({ error: 'physicianId required' })
+  const r = getReport(req.params.id, physicianId)
   r ? res.json(r) : res.status(404).json({ error: 'Not found' })
 })
 
@@ -56,7 +59,9 @@ app.put('/api/reports/:id', (req, res) => {
 })
 
 app.delete('/api/reports/:id', (req, res) => {
-  deleteReport(req.params.id)
+  const physicianId = req.query.physicianId as string | undefined
+  if (!physicianId) return res.status(400).json({ error: 'physicianId required' })
+  deleteReport(req.params.id, physicianId)
   res.json({ ok: true })
 })
 
@@ -88,6 +93,24 @@ app.post('/api/pcr-pdf/extract', pdfUpload.single('file'), async (req, res) => {
     res.json(result)
   } catch (err) {
     console.error('PDF extract failed:', err)
+    res.status(500).json({ error: String(err) })
+  }
+})
+
+// ─── Schedule PDF import ────────────────────────────────────────────────────────
+//
+// The monthly schedule is published as a wide grid PDF (physicians as rows,
+// days as columns). Shells out to server/schedule-pdf/parse_schedule_pdf.py,
+// which reads the PDF's embedded text layer directly (no OCR) and returns
+// every detected physician row so the client can pick one.
+
+app.post('/api/schedule-pdf/parse', pdfUpload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded' })
+  try {
+    const result = await parseSchedulePdf(req.file.buffer)
+    res.json(result)
+  } catch (err) {
+    console.error('Schedule PDF parse failed:', err)
     res.status(500).json({ error: String(err) })
   }
 })
@@ -185,7 +208,9 @@ app.put('/api/expenses/:id', (req, res) => {
 })
 
 app.delete('/api/expenses/:id', (req, res) => {
-  deleteMonthlyExpenses(req.params.id)
+  const physicianId = req.query.physicianId as string | undefined
+  if (!physicianId) return res.status(400).json({ error: 'physicianId required' })
+  deleteMonthlyExpenses(req.params.id, physicianId)
   res.json({ ok: true })
 })
 
@@ -199,7 +224,9 @@ app.put('/api/annual-expenses/:id', (req, res) => {
   res.json({ ok: true })
 })
 app.delete('/api/annual-expenses/:id', (req, res) => {
-  deleteAnnualExpenses(req.params.id)
+  const physicianId = req.query.physicianId as string | undefined
+  if (!physicianId) return res.status(400).json({ error: 'physicianId required' })
+  deleteAnnualExpenses(req.params.id, physicianId)
   res.json({ ok: true })
 })
 

@@ -90,6 +90,33 @@ function migrateManualShiftsTable(defaultPhysicianId: string) {
   db.exec('ALTER TABLE manual_shifts_v2 RENAME TO manual_shifts')
 }
 
+// reports/monthly_expenses/annual_expenses are keyed by a semantic id
+// ("YYYY-MM" or "YYYY") that is NOT physician-specific. Before this fix, id
+// alone was the PRIMARY KEY, so two physicians saving data for the same
+// month/year would silently overwrite each other's row via INSERT OR
+// REPLACE. This recreates each table with a composite (id, physician_id)
+// key -- same recreate-copy-rename approach as migrateManualShiftsTable
+// above, applied in place to existing data (no data loss: every row already
+// has a physician_id by the time this runs, and since only one physician's
+// data exists in a not-yet-migrated database, no (id, physician_id) pair can
+// collide during the copy).
+function migrateToCompositePhysicianKey(table: string, defaultPhysicianId: string) {
+  const cols = db.pragma(`table_info(${table})`) as { name: string; pk: number }[]
+  if (cols.filter((c) => c.pk > 0).length > 1) return // already composite-keyed
+  db.prepare(`UPDATE ${table} SET physician_id = ? WHERE physician_id IS NULL`).run(defaultPhysicianId)
+  db.exec(`
+    CREATE TABLE ${table}_v2 (
+      id TEXT NOT NULL,
+      physician_id TEXT NOT NULL,
+      data TEXT NOT NULL,
+      PRIMARY KEY (id, physician_id)
+    )
+  `)
+  db.exec(`INSERT INTO ${table}_v2 (id, physician_id, data) SELECT id, physician_id, data FROM ${table}`)
+  db.exec(`DROP TABLE ${table}`)
+  db.exec(`ALTER TABLE ${table}_v2 RENAME TO ${table}`)
+}
+
 const defaultPhysicianId = ensureDefaultPhysician()
 addColumnIfMissing('reports', 'physician_id')
 addColumnIfMissing('schedules', 'physician_id')
@@ -98,6 +125,10 @@ migrateManualShiftsTable(defaultPhysicianId)
 // Assign orphaned rows to default physician
 db.prepare('UPDATE reports SET physician_id = ? WHERE physician_id IS NULL').run(defaultPhysicianId)
 db.prepare('UPDATE schedules SET physician_id = ? WHERE physician_id IS NULL').run(defaultPhysicianId)
+
+migrateToCompositePhysicianKey('reports', defaultPhysicianId)
+migrateToCompositePhysicianKey('monthly_expenses', defaultPhysicianId)
+migrateToCompositePhysicianKey('annual_expenses', defaultPhysicianId)
 
 // ─── CPT seed ─────────────────────────────────────────────────────────────────
 
@@ -150,8 +181,8 @@ export function getReports(physicianId?: string): MonthlyReport[] {
     .map((r) => ({ ...JSON.parse(r.data), physicianId: r.physician_id }))
 }
 
-export function getReport(id: string): MonthlyReport | undefined {
-  const row = db.prepare('SELECT data FROM reports WHERE id = ?').get(id) as { data: string } | undefined
+export function getReport(id: string, physicianId: string): MonthlyReport | undefined {
+  const row = db.prepare('SELECT data FROM reports WHERE id = ? AND physician_id = ?').get(id, physicianId) as { data: string } | undefined
   return row ? JSON.parse(row.data) : undefined
 }
 
@@ -160,8 +191,8 @@ export function upsertReport(report: MonthlyReport): void {
   db.prepare('INSERT OR REPLACE INTO reports (id, physician_id, data) VALUES (?, ?, ?)').run(report.id, physicianId, JSON.stringify(report))
 }
 
-export function deleteReport(id: string): void {
-  db.prepare('DELETE FROM reports WHERE id = ?').run(id)
+export function deleteReport(id: string, physicianId: string): void {
+  db.prepare('DELETE FROM reports WHERE id = ? AND physician_id = ?').run(id, physicianId)
 }
 
 // ─── Schedules ────────────────────────────────────────────────────────────────
@@ -277,8 +308,8 @@ export function upsertMonthlyExpenses(record: MonthlyExpenses): void {
   db.prepare('INSERT OR REPLACE INTO monthly_expenses (id, physician_id, data) VALUES (?, ?, ?)').run(record.id, physicianId, JSON.stringify(record))
 }
 
-export function deleteMonthlyExpenses(id: string): void {
-  db.prepare('DELETE FROM monthly_expenses WHERE id = ?').run(id)
+export function deleteMonthlyExpenses(id: string, physicianId: string): void {
+  db.prepare('DELETE FROM monthly_expenses WHERE id = ? AND physician_id = ?').run(id, physicianId)
 }
 
 // ─── Annual Expenses ──────────────────────────────────────────────────────────
@@ -294,12 +325,17 @@ export function getAnnualExpenses(physicianId?: string): AnnualExpenses[] {
 }
 
 export function upsertAnnualExpenses(record: AnnualExpenses): void {
-  const physicianId = record.physicianId ?? null
+  // Previously defaulted to NULL physician_id ("global" record) when unset,
+  // but NULL doesn't participate in uniqueness the same way in a composite
+  // (id, physician_id) key -- repeated saves of a null-physician record
+  // would accumulate duplicate rows instead of replacing. Default to
+  // defaultPhysicianId instead, matching upsertMonthlyExpenses.
+  const physicianId = record.physicianId ?? defaultPhysicianId
   db.prepare('INSERT OR REPLACE INTO annual_expenses (id, physician_id, data) VALUES (?, ?, ?)').run(record.id, physicianId, JSON.stringify(record))
 }
 
-export function deleteAnnualExpenses(id: string): void {
-  db.prepare('DELETE FROM annual_expenses WHERE id = ?').run(id)
+export function deleteAnnualExpenses(id: string, physicianId: string): void {
+  db.prepare('DELETE FROM annual_expenses WHERE id = ? AND physician_id = ?').run(id, physicianId)
 }
 
 // ─── Export / Import ──────────────────────────────────────────────────────────

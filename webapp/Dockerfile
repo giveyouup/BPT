@@ -42,8 +42,10 @@ COPY --from=prod-deps /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/dist-server ./dist-server
 COPY server/pcr-pdf ./dist-server/server/pcr-pdf
+COPY server/schedule-pdf ./dist-server/server/schedule-pdf
 RUN pip install --no-cache-dir --break-system-packages \
-      -r dist-server/server/pcr-pdf/requirements.txt
+      -r dist-server/server/pcr-pdf/requirements.txt \
+      -r dist-server/server/schedule-pdf/requirements.txt
 COPY package.json ./
 EXPOSE 3001
 ENV DATA_DIR=/opt/stacks/BPT

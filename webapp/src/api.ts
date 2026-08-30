@@ -17,6 +17,18 @@ export interface PcrPdfExtractResult {
   lineItems: LineItem[]
 }
 
+export interface SchedulePdfRow {
+  name: string
+  shifts: string[]
+}
+
+export interface SchedulePdfResult {
+  month: number | null
+  year: number | null
+  sourcePage: number
+  rows: SchedulePdfRow[]
+}
+
 async function reqForm<T>(url: string, form: FormData): Promise<T> {
   const res = await fetch('/api' + url, { method: 'POST', body: form })
   if (!res.ok) {
@@ -54,7 +66,7 @@ export const api = {
   reports: {
     list: (physicianId: string) => req<MonthlyReport[]>('GET', `/reports?physicianId=${encodeURIComponent(physicianId)}`),
     upsert: (r: MonthlyReport) => req<void>('PUT', `/reports/${r.id}`, r),
-    delete: (id: string) => req<void>('DELETE', `/reports/${id}`),
+    delete: (id: string, physicianId: string) => req<void>('DELETE', `/reports/${id}?physicianId=${encodeURIComponent(physicianId)}`),
   },
   schedules: {
     list: (physicianId: string) => req<Schedule[]>('GET', `/schedules?physicianId=${encodeURIComponent(physicianId)}`),
@@ -85,15 +97,15 @@ export const api = {
   expenses: {
     list: (physicianId: string) => req<MonthlyExpenses[]>('GET', `/expenses?physicianId=${encodeURIComponent(physicianId)}`),
     upsert: (r: MonthlyExpenses) => req<void>('PUT', `/expenses/${r.id}`, r),
-    delete: (id: string) => req<void>('DELETE', `/expenses/${id}`),
+    delete: (id: string, physicianId: string) => req<void>('DELETE', `/expenses/${id}?physicianId=${encodeURIComponent(physicianId)}`),
   },
   annualExpenses: {
     list: (physicianId?: string) =>
       fetch(`/api/annual-expenses${physicianId ? `?physicianId=${physicianId}` : ''}`).then(r => r.json()) as Promise<AnnualExpenses[]>,
     upsert: (record: AnnualExpenses) =>
       fetch(`/api/annual-expenses/${record.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(record) }).then(r => r.json()),
-    delete: (id: string) =>
-      fetch(`/api/annual-expenses/${id}`, { method: 'DELETE' }).then(r => r.json()),
+    delete: (id: string, physicianId: string) =>
+      fetch(`/api/annual-expenses/${id}?physicianId=${encodeURIComponent(physicianId)}`, { method: 'DELETE' }).then(r => r.json()),
   },
   db: {
     maintenance: () => req<MaintenanceResult>('POST', '/db/maintenance'),
@@ -109,6 +121,13 @@ export const api = {
       form.append('file', file)
       form.append('pages', pages)
       return reqForm<PcrPdfExtractResult>('/pcr-pdf/extract', form)
+    },
+  },
+  schedulePdf: {
+    parse: (file: File) => {
+      const form = new FormData()
+      form.append('file', file)
+      return reqForm<SchedulePdfResult>('/schedule-pdf/parse', form)
     },
   },
 }
