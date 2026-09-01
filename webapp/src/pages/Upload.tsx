@@ -2,7 +2,7 @@ import { useState, useCallback, useMemo, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { parseXlsx, detectMonthYear, detectMonthYearFromBuffer, isRawXlsx, exportCleanXlsx, netOutVoidPairs } from '../utils/xlsxParser'
 import { api } from '../api'
-import type { PcrPdfSection, SchedulePdfResult } from '../api'
+import type { PcrPdfSection, SchedulePdfResult, SchedulePdfRow } from '../api'
 import { exportStipendMappings } from '../utils/exportXlsx'
 import { parseICS } from '../utils/icsParser'
 import { parseStipendMappings } from '../utils/stipendMappingParser'
@@ -37,6 +37,37 @@ function namesLikelyMatch(physicianName: string, extractedName: string): boolean
   const commaIdx = extractedName.indexOf(',')
   const compareAgainst = (commaIdx >= 0 ? extractedName.slice(0, commaIdx) : extractedName).toLowerCase()
   return useTokens.some((t) => compareAgainst.includes(t) || t.includes(compareAgainst))
+}
+
+// First letter of a name's first token, when there IS a first token to take
+// it from (a two-plus-word name like "Andrew Brown" or "A. Brown" -- a
+// bare one-word name like "Brown" or "Osmani" carries no initial info).
+// Used only to break ties between rows that already matched on surname.
+function firstInitial(name: string): string | null {
+  const tokens = name.trim().split(/\s+/).filter(Boolean)
+  if (tokens.length < 2) return null
+  const first = tokens[0].replace(/\.$/, '')
+  return first ? first[0].toLowerCase() : null
+}
+
+// Schedule-grid rows disambiguate same-surname physicians with a leading
+// first initial (e.g. "A. Brown" vs "M. Brown"), but `namesLikelyMatch`
+// alone only compares surnames, so both rows "match" a physician named
+// just "Brown" -- or even "Andrew Brown", since it OR-matches on any token
+// and never required the first name to agree. This narrows a physician's
+// candidate rows to one when their own name's initial agrees with exactly
+// one candidate's -- deliberately only a *tie-breaker*: it's never applied
+// unless there's already more than one surname match, so a physician whose
+// recorded first name doesn't match a grid nickname's initial (rare, but
+// possible) still gets their one real row when there's no other candidate
+// to confuse it with.
+function resolveRowMatches(physicianName: string, rows: SchedulePdfRow[]): SchedulePdfRow[] {
+  const candidates = rows.filter((r) => namesLikelyMatch(physicianName, r.name))
+  if (candidates.length <= 1) return candidates
+  const physicianInitial = firstInitial(physicianName)
+  if (!physicianInitial) return candidates
+  const narrowed = candidates.filter((r) => firstInitial(r.name) === physicianInitial)
+  return narrowed.length === 1 ? narrowed : candidates
 }
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────
@@ -800,10 +831,14 @@ function ScheduleUploadTab() {
         setPdfMonthYear(`${result.year}-${String(result.month).padStart(2, '0')}`)
       }
       // Best-guess row match against the active physician's name (surname-style
-      // tokens, since PDF rows are typically just a surname).
+      // tokens, since PDF rows are typically just a surname -- unless the
+      // physician's own name carries a first initial that resolves a
+      // same-surname collision down to one row, e.g. "Andrew Brown" against
+      // "A. Brown" / "M. Brown").
       let bestIdx = 0
       if (activePhysician) {
-        const idx = result.rows.findIndex((r) => namesLikelyMatch(activePhysician.name, r.name))
+        const resolved = resolveRowMatches(activePhysician.name, result.rows)
+        const idx = resolved.length > 0 ? result.rows.indexOf(resolved[0]) : -1
         if (idx >= 0) bestIdx = idx
       }
       setPdfSelectedRow(bestIdx)
@@ -841,6 +876,17 @@ function ScheduleUploadTab() {
   const pdfRowMismatch = !!(
     selectedPdfRow && activePhysician && !namesLikelyMatch(activePhysician.name, selectedPdfRow.name)
   )
+  // A bare surname can match more than one row (e.g. "Brown" matching both
+  // "A. Brown" and "M. Brown") -- the auto-select above just picks the
+  // first one, so warn even when the currently-selected row does match,
+  // since it might be the wrong one of several. Only still-ambiguous
+  // candidates are reported here -- if the physician's own name carries a
+  // first initial that already resolved this down to one row, there's
+  // nothing to warn about.
+  const pdfMultipleRowMatches = useMemo(() => {
+    if (!pdfResult || !activePhysician) return []
+    return resolveRowMatches(activePhysician.name, pdfResult.rows)
+  }, [pdfResult, activePhysician])
 
   // Day-by-day {date, shift} list for the selected PDF row, remapped to the
   // confirmed month/year (so overriding a misdetected month needs no
@@ -1108,6 +1154,19 @@ function ScheduleUploadTab() {
                 The selected row ("{selectedPdfRow?.name}") doesn't look like a match for{' '}
                 <strong>{activePhysician?.name}</strong>, who this will be saved under. Double-check the row
                 before importing.
+              </span>
+            </div>
+          )}
+
+          {!pdfRowMismatch && pdfMultipleRowMatches.length > 1 && (
+            <div className="flex items-start gap-2 bg-amber-900/20 border border-amber-700/50 rounded-lg px-3 py-2 text-xs text-amber-300">
+              <svg className="w-4 h-4 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <span>
+                {pdfMultipleRowMatches.length} rows in this grid look like a possible match for{' '}
+                <strong>{activePhysician?.name}</strong> ({pdfMultipleRowMatches.map((r) => `"${r.name}"`).join(', ')}).
+                Confirm the physician row above is the right one before importing.
               </span>
             </div>
           )}
