@@ -2,7 +2,7 @@ import { useState, useCallback, useMemo, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { parseXlsx, detectMonthYear, detectMonthYearFromBuffer, isRawXlsx, exportCleanXlsx, netOutVoidPairs } from '../utils/xlsxParser'
 import { api } from '../api'
-import type { PcrPdfSection, SchedulePdfResult } from '../api'
+import type { PcrPdfSection, SchedulePdfResult, SchedulePdfRow } from '../api'
 import { exportStipendMappings } from '../utils/exportXlsx'
 import { parseICS } from '../utils/icsParser'
 import { parseStipendMappings } from '../utils/stipendMappingParser'
@@ -12,7 +12,7 @@ import { getWeekendPairs, buildDayList, parseScheduleText } from '../utils/sched
 import type { ParseScheduleResult } from '../utils/schedulePaste'
 import { formatMonthYear, formatDateFull, lastDayOfMonth, MONTH_ABBREVS, getMonthName } from '../utils/dateUtils'
 import { useData } from '../context/DataContext'
-import type { LineItem, ShiftEntry, Schedule, StipendMapping, StipendRate } from '../types'
+import type { LineItem, ShiftEntry, Schedule, StipendMapping, StipendRate, Physician } from '../types'
 
 function genId() { return `sched-${Date.now()}-${Math.random().toString(36).slice(2)}` }
 
@@ -37,6 +37,37 @@ function namesLikelyMatch(physicianName: string, extractedName: string): boolean
   const commaIdx = extractedName.indexOf(',')
   const compareAgainst = (commaIdx >= 0 ? extractedName.slice(0, commaIdx) : extractedName).toLowerCase()
   return useTokens.some((t) => compareAgainst.includes(t) || t.includes(compareAgainst))
+}
+
+// First letter of a name's first token, when there IS a first token to take
+// it from (a two-plus-word name like "Andrew Brown" or "A. Brown" -- a
+// bare one-word name like "Brown" or "Osmani" carries no initial info).
+// Used only to break ties between rows that already matched on surname.
+function firstInitial(name: string): string | null {
+  const tokens = name.trim().split(/\s+/).filter(Boolean)
+  if (tokens.length < 2) return null
+  const first = tokens[0].replace(/\.$/, '')
+  return first ? first[0].toLowerCase() : null
+}
+
+// Schedule-grid rows disambiguate same-surname physicians with a leading
+// first initial (e.g. "A. Brown" vs "M. Brown"), but `namesLikelyMatch`
+// alone only compares surnames, so both rows "match" a physician named
+// just "Brown" -- or even "Andrew Brown", since it OR-matches on any token
+// and never required the first name to agree. This narrows a physician's
+// candidate rows to one when their own name's initial agrees with exactly
+// one candidate's -- deliberately only a *tie-breaker*: it's never applied
+// unless there's already more than one surname match, so a physician whose
+// recorded first name doesn't match a grid nickname's initial (rare, but
+// possible) still gets their one real row when there's no other candidate
+// to confuse it with.
+function resolveRowMatches(physicianName: string, rows: SchedulePdfRow[]): SchedulePdfRow[] {
+  const candidates = rows.filter((r) => namesLikelyMatch(physicianName, r.name))
+  if (candidates.length <= 1) return candidates
+  const physicianInitial = firstInitial(physicianName)
+  if (!physicianInitial) return candidates
+  const narrowed = candidates.filter((r) => firstInitial(r.name) === physicianInitial)
+  return narrowed.length === 1 ? narrowed : candidates
 }
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────
@@ -812,6 +843,131 @@ interface ConflictEntry {
   accept: boolean
 }
 
+// Diffs a set of freshly-parsed shift entries against a physician's existing
+// saved schedules -- shared by the ICS/PDF single-row import path and the
+// per-physician bulk-import cards below, each of which supplies its own
+// "existing" list (the active physician's for the former, a fetched list for
+// the latter, since DataContext only ever caches the active physician's data).
+function diffScheduleEntries(
+  existing: Schedule[],
+  newEntries: ShiftEntry[],
+): { conflicts: ConflictEntry[]; isDuplicate: boolean } {
+  const existingMap = new Map<string, string[]>()
+  const sortedExisting = [...existing].sort((a, b) => a.uploadDate.localeCompare(b.uploadDate))
+  for (const sched of sortedExisting) {
+    for (const entry of sched.entries) {
+      existingMap.set(entry.date, entry.shiftTypes)
+    }
+  }
+
+  const conflicts: ConflictEntry[] = []
+  for (const entry of newEntries) {
+    const current = existingMap.get(entry.date)
+    const currentSorted = current ? [...current].sort().join(',') : ''
+    const newSorted = [...entry.shiftTypes].sort().join(',')
+    if (current && currentSorted !== newSorted) {
+      conflicts.push({
+        date: entry.date,
+        currentShifts: current,
+        newShifts: entry.shiftTypes,
+        accept: true,
+      })
+    }
+  }
+
+  // Pure duplicate: all new entries match existing exactly, nothing new
+  const allMatch = newEntries.length > 0 && newEntries.every((e) => {
+    const current = existingMap.get(e.date)
+    if (!current) return false
+    return [...e.shiftTypes].sort().join(',') === [...current].sort().join(',')
+  })
+  const hasNewDates = newEntries.some((e) => !existingMap.has(e.date))
+  const isDuplicate = allMatch && !hasNewDates && conflicts.length === 0
+
+  return { conflicts, isDuplicate }
+}
+
+// Shared by ScheduleUploadTab's own ICS/single-row-PDF flow and each
+// per-physician bulk-import card below, so the review table isn't
+// duplicated a third time.
+function ConflictModal({ conflicts, onToggle, onAcceptAll, onRejectAll, onApply, onCancel, saving }: {
+  conflicts: ConflictEntry[]
+  onToggle: (index: number, accept: boolean) => void
+  onAcceptAll: () => void
+  onRejectAll: () => void
+  onApply: () => void
+  onCancel: () => void
+  saving: boolean
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+      <div className="bg-gray-900 border border-gray-700 rounded-2xl p-6 w-full max-w-2xl shadow-2xl max-h-[80vh] flex flex-col">
+        <h3 className="text-base font-semibold text-gray-100 mb-1">Resolve Conflicts</h3>
+        <p className="text-xs text-gray-500 mb-4">
+          {conflicts.length} date{conflicts.length !== 1 ? 's' : ''} already have shift assignments.
+          Choose which changes to apply.
+        </p>
+        <div className="flex-1 overflow-y-auto mb-4">
+          <table className="w-full text-sm">
+            <thead className="sticky top-0 bg-gray-900">
+              <tr className="border-b border-gray-800">
+                <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Date</th>
+                <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Current</th>
+                <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">New</th>
+                <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Accept</th>
+              </tr>
+            </thead>
+            <tbody>
+              {conflicts.map((c, i) => (
+                <tr key={c.date} className="border-b border-gray-800">
+                  <td className="px-3 py-2.5 text-gray-300">{formatDateFull(c.date)}</td>
+                  <td className="px-3 py-2.5">
+                    <span className="font-mono text-xs bg-gray-800 text-gray-400 px-2 py-0.5 rounded">{c.currentShifts.join(', ')}</span>
+                  </td>
+                  <td className="px-3 py-2.5">
+                    <span className="font-mono text-xs bg-indigo-900/40 text-indigo-400 px-2 py-0.5 rounded">{c.newShifts.join(', ')}</span>
+                  </td>
+                  <td className="px-3 py-2.5">
+                    <input
+                      type="checkbox"
+                      checked={c.accept}
+                      onChange={(e) => onToggle(i, e.target.checked)}
+                      className="accent-indigo-500"
+                    />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div className="flex items-center gap-3 border-t border-gray-800 pt-4">
+          <button onClick={onAcceptAll} className="text-xs text-indigo-400 hover:text-indigo-300">
+            Accept all
+          </button>
+          <button onClick={onRejectAll} className="text-xs text-gray-500 hover:text-gray-300">
+            Reject all
+          </button>
+          <div className="flex-1" />
+          <button
+            onClick={onCancel}
+            disabled={saving}
+            className="px-4 py-2 text-gray-400 hover:text-gray-200 text-sm disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={onApply}
+            disabled={saving}
+            className="px-5 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-500 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {saving ? 'Saving…' : 'Apply Selected Changes'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function ScheduleUploadTab() {
   const { schedules, saveSchedule, deleteSchedule, physicians, activePhysicianId } = useData()
   const activePhysician = physicians.find(p => p.id === activePhysicianId)
@@ -877,10 +1033,14 @@ function ScheduleUploadTab() {
         setPdfMonthYear(`${result.year}-${String(result.month).padStart(2, '0')}`)
       }
       // Best-guess row match against the active physician's name (surname-style
-      // tokens, since PDF rows are typically just a surname).
+      // tokens, since PDF rows are typically just a surname -- unless the
+      // physician's own name carries a first initial that resolves a
+      // same-surname collision down to one row, e.g. "Andrew Brown" against
+      // "A. Brown" / "M. Brown").
       let bestIdx = 0
       if (activePhysician) {
-        const idx = result.rows.findIndex((r) => namesLikelyMatch(activePhysician.name, r.name))
+        const resolved = resolveRowMatches(activePhysician.name, result.rows)
+        const idx = resolved.length > 0 ? result.rows.indexOf(resolved[0]) : -1
         if (idx >= 0) bestIdx = idx
       }
       setPdfSelectedRow(bestIdx)
@@ -918,6 +1078,17 @@ function ScheduleUploadTab() {
   const pdfRowMismatch = !!(
     selectedPdfRow && activePhysician && !namesLikelyMatch(activePhysician.name, selectedPdfRow.name)
   )
+  // A bare surname can match more than one row (e.g. "Brown" matching both
+  // "A. Brown" and "M. Brown") -- the auto-select above just picks the
+  // first one, so warn even when the currently-selected row does match,
+  // since it might be the wrong one of several. Only still-ambiguous
+  // candidates are reported here -- if the physician's own name carries a
+  // first initial that already resolved this down to one row, there's
+  // nothing to warn about.
+  const pdfMultipleRowMatches = useMemo(() => {
+    if (!pdfResult || !activePhysician) return []
+    return resolveRowMatches(activePhysician.name, pdfResult.rows)
+  }, [pdfResult, activePhysician])
 
   // Day-by-day {date, shift} list for the selected PDF row, remapped to the
   // confirmed month/year (so overriding a misdetected month needs no
@@ -984,42 +1155,37 @@ function ScheduleUploadTab() {
     return xe?.autoLabel ?? pdfXResolutions[e.date] ?? e.shift
   }
 
+  // Physicians other than the one currently being imported above whose name
+  // fuzzy-matches at least one grid row -- surfaced as an opt-in bulk-import
+  // section below. Physicians with no matching row never appear here (no
+  // auto-creating profiles, no "no match" clutter). Grouped by physician
+  // (not by row) so a physician always appears at most once here -- a bare
+  // surname like "Brown" can substring-match multiple distinct rows (e.g.
+  // "A. Brown" and "M. Brown"), and mapping row-first would silently
+  // resolve both of those rows to the same profile, letting one card
+  // import a different person's data under it. `resolveRowMatches` narrows
+  // that down to a single row when the physician's own name carries a
+  // first initial that agrees with exactly one candidate; when it can't
+  // be narrowed, `matches` carries all of them so the card can force an
+  // explicit pick instead of guessing.
+  const otherMatchedRows = useMemo(() => {
+    if (!pdfResult) return []
+    return physicians
+      .filter((p) => p.id !== activePhysicianId)
+      .map((physician) => ({
+        physician,
+        matches: resolveRowMatches(physician.name, pdfResult.rows),
+      }))
+      .filter((m): m is { physician: Physician; matches: SchedulePdfRow[] } => m.matches.length > 0)
+  }, [pdfResult, physicians, activePhysicianId])
+
   // Conflict/duplicate detection + save -- shared by both the ICS and PDF
   // import paths (each just builds newEntries differently upstream).
   const reviewAndSave = (newEntries: ShiftEntry[]) => {
-    const existingMap = new Map<string, string[]>()
-    const sortedExisting = [...schedules].sort((a, b) => a.uploadDate.localeCompare(b.uploadDate))
-    for (const sched of sortedExisting) {
-      for (const entry of sched.entries) {
-        existingMap.set(entry.date, entry.shiftTypes)
-      }
-    }
-
-    const detected: ConflictEntry[] = []
-    for (const entry of newEntries) {
-      const current = existingMap.get(entry.date)
-      const currentSorted = current ? [...current].sort().join(',') : ''
-      const newSorted = [...entry.shiftTypes].sort().join(',')
-      if (current && currentSorted !== newSorted) {
-        detected.push({
-          date: entry.date,
-          currentShifts: current,
-          newShifts: entry.shiftTypes,
-          accept: true,
-        })
-      }
-    }
-
+    const { conflicts: detected, isDuplicate: dup } = diffScheduleEntries(schedules, newEntries)
     setPendingEntries(newEntries)
 
-    // Detect pure duplicate: all new entries match existing exactly, nothing new
-    const allMatch = newEntries.length > 0 && newEntries.every((e) => {
-      const current = existingMap.get(e.date)
-      if (!current) return false
-      return [...e.shiftTypes].sort().join(',') === [...current].sort().join(',')
-    })
-    const hasNewDates = newEntries.some((e) => !existingMap.has(e.date))
-    if (allMatch && !hasNewDates && detected.length === 0) {
+    if (dup) {
       setIsDuplicate(true)
       return
     }
@@ -1189,6 +1355,19 @@ function ScheduleUploadTab() {
             </div>
           )}
 
+          {!pdfRowMismatch && pdfMultipleRowMatches.length > 1 && (
+            <div className="flex items-start gap-2 bg-amber-900/20 border border-amber-700/50 rounded-lg px-3 py-2 text-xs text-amber-300">
+              <svg className="w-4 h-4 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <span>
+                {pdfMultipleRowMatches.length} rows in this grid look like a possible match for{' '}
+                <strong>{activePhysician?.name}</strong> ({pdfMultipleRowMatches.map((r) => `"${r.name}"`).join(', ')}).
+                Confirm the physician row above is the right one before importing.
+              </span>
+            </div>
+          )}
+
           {pdfUnresolvedXDates.length > 0 && (
             <div className="space-y-2 pt-2 border-t border-gray-800">
               <p className="text-xs font-semibold text-amber-400">
@@ -1221,6 +1400,29 @@ function ScheduleUploadTab() {
           >
             Import
           </button>
+        </div>
+      )}
+
+      {pdfResult && pdfMonthYear && otherMatchedRows.length > 0 && (
+        <div className="bg-gray-900 rounded-xl border border-gray-800 p-5 mb-6 space-y-3">
+          <div>
+            <p className="text-sm font-semibold text-gray-200">Other physicians found in this schedule</p>
+            <p className="text-xs text-gray-500 mt-0.5">
+              These rows matched an existing physician profile and will import to{' '}
+              <span className="text-gray-300 font-medium">
+                {formatMonthYear(Number(pdfMonthYear.split('-')[0]), Number(pdfMonthYear.split('-')[1]))}
+              </span>{' '}
+              — the same month selected above. Each imports independently.
+            </p>
+          </div>
+          {otherMatchedRows.map(({ physician, matches }) => (
+            <MatchedPhysicianImportCard
+              key={physician.id}
+              physician={physician}
+              matches={matches}
+              monthYear={pdfMonthYear}
+            />
+          ))}
         </div>
       )}
 
@@ -1362,81 +1564,15 @@ function ScheduleUploadTab() {
 
       {/* Conflict resolution modal */}
       {showConflictModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-          <div className="bg-gray-900 border border-gray-700 rounded-2xl p-6 w-full max-w-2xl shadow-2xl max-h-[80vh] flex flex-col">
-            <h3 className="text-base font-semibold text-gray-100 mb-1">Resolve Conflicts</h3>
-            <p className="text-xs text-gray-500 mb-4">
-              {conflicts.length} date{conflicts.length !== 1 ? 's' : ''} already have shift assignments.
-              Choose which changes to apply.
-            </p>
-            <div className="flex-1 overflow-y-auto mb-4">
-              <table className="w-full text-sm">
-                <thead className="sticky top-0 bg-gray-900">
-                  <tr className="border-b border-gray-800">
-                    <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Date</th>
-                    <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Current</th>
-                    <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">New</th>
-                    <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Accept</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {conflicts.map((c, i) => (
-                    <tr key={c.date} className="border-b border-gray-800">
-                      <td className="px-3 py-2.5 text-gray-300">{formatDateFull(c.date)}</td>
-                      <td className="px-3 py-2.5">
-                        <span className="font-mono text-xs bg-gray-800 text-gray-400 px-2 py-0.5 rounded">{c.currentShifts.join(', ')}</span>
-                      </td>
-                      <td className="px-3 py-2.5">
-                        <span className="font-mono text-xs bg-indigo-900/40 text-indigo-400 px-2 py-0.5 rounded">{c.newShifts.join(', ')}</span>
-                      </td>
-                      <td className="px-3 py-2.5">
-                        <input
-                          type="checkbox"
-                          checked={c.accept}
-                          onChange={(e) =>
-                            setConflicts((prev) =>
-                              prev.map((x, j) => j === i ? { ...x, accept: e.target.checked } : x)
-                            )
-                          }
-                          className="accent-indigo-500"
-                        />
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <div className="flex items-center gap-3 border-t border-gray-800 pt-4">
-              <button
-                onClick={() => setConflicts((prev) => prev.map((c) => ({ ...c, accept: true })))}
-                className="text-xs text-indigo-400 hover:text-indigo-300"
-              >
-                Accept all
-              </button>
-              <button
-                onClick={() => setConflicts((prev) => prev.map((c) => ({ ...c, accept: false })))}
-                className="text-xs text-gray-500 hover:text-gray-300"
-              >
-                Reject all
-              </button>
-              <div className="flex-1" />
-              <button
-                onClick={() => { setShowConflictModal(false); resetFile() }}
-                disabled={saving}
-                className="px-4 py-2 text-gray-400 hover:text-gray-200 text-sm disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleApplyConflicts}
-                disabled={saving}
-                className="px-5 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-500 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                {saving ? 'Saving…' : 'Apply Selected Changes'}
-              </button>
-            </div>
-          </div>
-        </div>
+        <ConflictModal
+          conflicts={conflicts}
+          onToggle={(i, accept) => setConflicts((prev) => prev.map((x, j) => j === i ? { ...x, accept } : x))}
+          onAcceptAll={() => setConflicts((prev) => prev.map((c) => ({ ...c, accept: true })))}
+          onRejectAll={() => setConflicts((prev) => prev.map((c) => ({ ...c, accept: false })))}
+          onApply={handleApplyConflicts}
+          onCancel={() => { setShowConflictModal(false); resetFile() }}
+          saving={saving}
+        />
       )}
       {showPhysicianConfirm && activePhysician && (
         <PhysicianConfirmModal
@@ -1454,6 +1590,245 @@ function ScheduleUploadTab() {
             else handleReviewImport()
             setPendingImportSource(null)
           }}
+        />
+      )}
+    </div>
+  )
+}
+
+// Self-contained per-row bulk-import card for a schedule-grid PDF row that
+// matched a physician other than the one currently active. Deliberately
+// independent of ScheduleUploadTab's state -- it fetches and saves against
+// its own physician id directly via `api`, since DataContext only ever
+// caches the active physician's schedules.
+function MatchedPhysicianImportCard({ physician, matches, monthYear }: {
+  physician: Physician
+  matches: SchedulePdfRow[]
+  monthYear: string
+}) {
+  const [existing, setExisting] = useState<Schedule[] | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  // A bare surname (e.g. "Brown") can match more than one row in the same
+  // grid (e.g. "A. Brown" and "M. Brown") -- when that happens, force an
+  // explicit pick instead of guessing which one is really this physician.
+  const [selectedRowIdx, setSelectedRowIdx] = useState(() => (matches.length === 1 ? 0 : -1))
+  useEffect(() => { setSelectedRowIdx(matches.length === 1 ? 0 : -1) }, [matches])
+  const row = selectedRowIdx >= 0 ? matches[selectedRowIdx] : null
+  const [xResolutions, setXResolutions] = useState<Record<string, 'H' | 'V' | 'Postcall'>>({})
+  const [conflicts, setConflicts] = useState<ConflictEntry[]>([])
+  const [showConflictModal, setShowConflictModal] = useState(false)
+  const [pendingEntries, setPendingEntries] = useState<ShiftEntry[]>([])
+  const [isDuplicate, setIsDuplicate] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [saved, setSaved] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    api.schedules.list(physician.id)
+      .then((scheds) => { if (!cancelled) setExisting(scheds) })
+      .catch((e) => { if (!cancelled) setLoadError(e instanceof Error ? e.message : 'Failed to load existing schedules') })
+    return () => { cancelled = true }
+  }, [physician.id])
+
+  const monthLabel = useMemo(() => {
+    const [y, m] = monthYear.split('-').map(Number)
+    return formatMonthYear(y, m)
+  }, [monthYear])
+
+  const dayList = useMemo(() => {
+    if (!row) return []
+    const [y, m] = monthYear.split('-').map(Number)
+    const daysInMonth = new Date(y, m, 0).getDate()
+    return row.shifts
+      .slice(0, daysInMonth)
+      .map((shift, i) => ({
+        date: `${y}-${String(m).padStart(2, '0')}-${String(i + 1).padStart(2, '0')}`,
+        shift,
+      }))
+      .filter((e) => e.shift.trim() !== '')
+  }, [row, monthYear])
+
+  const xEntries = useMemo(() => {
+    const parsedMap = new Map(dayList.map((e) => [e.date, e.shift]))
+    const storedMap = new Map<string, string[]>()
+    for (const sched of [...(existing ?? [])].filter((s) => s.id !== 'manual_shifts').sort((a, b) => a.uploadDate.localeCompare(b.uploadDate)))
+      for (const entry of sched.entries)
+        storedMap.set(entry.date, entry.shiftTypes)
+
+    return dayList
+      .filter((e) => e.shift.trim().toUpperCase() === 'X')
+      .map((e) => {
+        const [y, m, d] = e.date.split('-').map(Number)
+        const prev = new Date(y, m - 1, d - 1)
+        const prevStr = `${prev.getFullYear()}-${String(prev.getMonth() + 1).padStart(2, '0')}-${String(prev.getDate()).padStart(2, '0')}`
+        const prevShift = parsedMap.get(prevStr)
+        const prevShifts = prevShift ? [prevShift] : (storedMap.get(prevStr) ?? [])
+        const isPostcall = prevShifts.some((s) => { const v = s.trim().toUpperCase(); return v === 'G1' || v === 'G2' })
+        return { date: e.date, autoLabel: isPostcall ? 'Postcall' as const : null }
+      })
+  }, [dayList, existing])
+
+  const unresolvedXDates = useMemo(
+    () => xEntries.filter((x) => x.autoLabel === null).map((x) => x.date),
+    [xEntries],
+  )
+  const allXResolved = unresolvedXDates.every((d) => xResolutions[d])
+
+  function resolvedShift(e: { date: string; shift: string }): string {
+    if (e.shift.trim().toUpperCase() !== 'X') return e.shift
+    const xe = xEntries.find((x) => x.date === e.date)
+    return xe?.autoLabel ?? xResolutions[e.date] ?? e.shift
+  }
+
+  const doSave = async (entries: ShiftEntry[], rejectedDates: string[]) => {
+    if (saving) return
+    setSaving(true)
+    setSaveError(null)
+    try {
+      const finalEntries = entries.filter((e) => !rejectedDates.includes(e.date))
+      const schedule: Schedule = {
+        id: genId(),
+        physicianId: physician.id,
+        filename: `${row?.name ?? physician.name} (grid import)`,
+        uploadDate: new Date().toISOString(),
+        entries: finalEntries,
+      }
+      await api.schedules.upsert(schedule)
+      setSaved(true)
+      setShowConflictModal(false)
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : 'Failed to save schedule')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleImport = () => {
+    if (!row) return
+    const newEntries: ShiftEntry[] = dayList.map((e) => ({
+      date: e.date,
+      shiftTypes: parseShiftSummary(resolvedShift(e)),
+    }))
+    const { conflicts: detected, isDuplicate: dup } = diffScheduleEntries(existing ?? [], newEntries)
+    setPendingEntries(newEntries)
+    if (dup) {
+      setIsDuplicate(true)
+      return
+    }
+    if (detected.length > 0) {
+      setConflicts(detected)
+      setShowConflictModal(true)
+    } else {
+      doSave(newEntries, [])
+    }
+  }
+
+  const handleApplyConflicts = async () => {
+    const rejected = conflicts.filter((c) => !c.accept).map((c) => c.date)
+    await doSave(pendingEntries, rejected)
+  }
+
+  if (loadError) {
+    return (
+      <div className="flex items-center justify-between gap-3 bg-gray-800/40 border border-red-900/50 rounded-lg px-4 py-3 text-xs text-red-400">
+        <span>{physician.name}: {loadError}</span>
+      </div>
+    )
+  }
+
+  return (
+    <div className="bg-gray-800/40 border border-gray-700/50 rounded-lg px-4 py-3">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2 min-w-0">
+          <PhysicianBadge name={physician.name} />
+          {matches.length === 1 ? (
+            <span className="text-xs text-gray-500 truncate">matched row "{matches[0].name}" → {monthLabel}</span>
+          ) : (
+            <span className="text-xs text-gray-500 flex-shrink-0">matched row → {monthLabel}</span>
+          )}
+        </div>
+        {saved ? (
+          <span className="text-xs text-emerald-400 font-medium flex-shrink-0">Imported</span>
+        ) : existing === null ? (
+          <span className="text-xs text-gray-500 flex-shrink-0">Loading…</span>
+        ) : (
+          <button
+            onClick={handleImport}
+            disabled={!row || dayList.length === 0 || !allXResolved || saving}
+            className="px-4 py-1.5 bg-indigo-600 text-white rounded-lg text-xs font-medium hover:bg-indigo-500 transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex-shrink-0"
+          >
+            {saving ? 'Saving…' : row ? `Import (${dayList.length} days)` : 'Import'}
+          </button>
+        )}
+      </div>
+
+      {!saved && matches.length > 1 && (
+        <div className="flex items-start gap-2 mt-3 pt-3 border-t border-gray-700/50 bg-amber-900/20 border-t-amber-700/50 -mx-4 -mb-3 px-4 py-3 rounded-b-lg">
+          <svg className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          <div className="flex-1 space-y-1.5">
+            <p className="text-xs text-amber-300">
+              "{physician.name}" matches {matches.length} rows in this grid — pick which one is theirs before importing.
+            </p>
+            <select
+              value={selectedRowIdx}
+              onChange={(e) => setSelectedRowIdx(parseInt(e.target.value))}
+              className={`${SEL_CLS} w-full`}
+            >
+              <option value={-1}>Choose…</option>
+              {matches.map((m, i) => (
+                <option key={i} value={i}>{m.name}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+      )}
+
+      {!saved && unresolvedXDates.length > 0 && (
+        <div className="space-y-1.5 mt-3 pt-3 border-t border-gray-700/50">
+          <p className="text-xs font-semibold text-amber-400">
+            {unresolvedXDates.length} "X" day{unresolvedXDates.length !== 1 ? 's' : ''} need clarification
+          </p>
+          {unresolvedXDates.map((date) => (
+            <div key={date} className="flex items-center justify-between gap-3">
+              <span className="text-xs text-gray-400">{formatDateFull(date)}</span>
+              <select
+                value={xResolutions[date] ?? ''}
+                onChange={(e) => setXResolutions((prev) => ({ ...prev, [date]: e.target.value as 'H' | 'V' | 'Postcall' }))}
+                className={SEL_CLS}
+              >
+                <option value="">Choose…</option>
+                <option value="H">Holiday</option>
+                <option value="V">Vacation</option>
+                <option value="Postcall">Postcall</option>
+              </select>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {isDuplicate && (
+        <div className="mt-3 pt-3 border-t border-gray-700/50 text-xs text-amber-400/80">
+          All entries match a schedule already imported for {physician.name} — nothing new to save.
+          <button onClick={() => { setIsDuplicate(false); doSave(pendingEntries, []) }} className="ml-2 text-amber-300 underline underline-offset-2">
+            Import anyway
+          </button>
+        </div>
+      )}
+
+      {saveError && <p className="mt-3 pt-3 border-t border-gray-700/50 text-xs text-red-400">{saveError}</p>}
+
+      {showConflictModal && (
+        <ConflictModal
+          conflicts={conflicts}
+          onToggle={(i, accept) => setConflicts((prev) => prev.map((x, j) => j === i ? { ...x, accept } : x))}
+          onAcceptAll={() => setConflicts((prev) => prev.map((c) => ({ ...c, accept: true })))}
+          onRejectAll={() => setConflicts((prev) => prev.map((c) => ({ ...c, accept: false })))}
+          onApply={handleApplyConflicts}
+          onCancel={() => setShowConflictModal(false)}
+          saving={saving}
         />
       )}
     </div>
