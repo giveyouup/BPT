@@ -2,7 +2,7 @@ import { useState, useCallback, useMemo, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { parseXlsx, detectMonthYear, detectMonthYearFromBuffer, isRawXlsx, exportCleanXlsx, netOutVoidPairs } from '../utils/xlsxParser'
 import { api } from '../api'
-import type { PcrPdfSection, SchedulePdfResult, SchedulePdfRow } from '../api'
+import type { PcrPdfSection, PcrPdfUnitInfo, PcrPdfPrintedTotals, SchedulePdfResult, SchedulePdfRow } from '../api'
 import { exportStipendMappings } from '../utils/exportXlsx'
 import { parseICS } from '../utils/icsParser'
 import { parseStipendMappings } from '../utils/stipendMappingParser'
@@ -190,6 +190,7 @@ function PcrUploadTab() {
   const [month, setMonth] = useState(new Date().getMonth() + 1)
   const [year, setYear] = useState(new Date().getFullYear())
   const [unitValue, setUnitValue] = useState('32.00')
+  const [unitCorrection, setUnitCorrection] = useState('0')
   const [paddingMins, setPaddingMins] = useState(String(settings.defaultPaddingMinutes))
   const [noTimeHours, setNoTimeHours] = useState(String(settings.defaultNoTimeHours))
   const [saving, setSaving] = useState(false)
@@ -203,6 +204,16 @@ function PcrUploadTab() {
   const [selectedSectionIdx, setSelectedSectionIdx] = useState(0)
   const [pageRangeInput, setPageRangeInput] = useState('')
   const [pdfBusy, setPdfBusy] = useState<'detecting' | 'extracting' | null>(null)
+  // $/unit + unit correction auto-detected from a bundled "Physician 12
+  // Month Summary" / "Corrections" page, if the PDF included one -- null
+  // means no such page was found (the common case), so the fields stay
+  // exactly as manual as they are today.
+  const [detectedUnitInfo, setDetectedUnitInfo] = useState<PcrPdfUnitInfo | null>(null)
+  // The source PDF's own printed "Total for <doctor>" subtotal row, when
+  // found -- used as a spot-check against our own computed sums in the
+  // preview. null for xlsx uploads and for any PDF where that row wasn't
+  // found/didn't parse (never blocks the upload, it's advisory only).
+  const [printedTotals, setPrintedTotals] = useState<PcrPdfPrintedTotals | null>(null)
 
   // Applies parsed line items the same way regardless of source (xlsx or PDF):
   // detect month/year, prefill $/unit from an existing report, and flag
@@ -220,7 +231,10 @@ function PcrUploadTab() {
       setYear(detected.year)
       const existingId = `${detected.year}-${String(detected.month).padStart(2, '0')}`
       const existingReport = reports.find((r) => r.id === existingId)
-      if (existingReport) setUnitValue((existingReport.unitDollarValue ?? 0).toFixed(2))
+      if (existingReport) {
+        setUnitValue((existingReport.unitDollarValue ?? 0).toFixed(2))
+        setUnitCorrection(String(existingReport.unitCorrection ?? 0))
+      }
     }
     setParsed(items)
     if (checkMultiMonth) {
@@ -243,6 +257,8 @@ function PcrUploadTab() {
     setMultiMonthMode('none')
     setPdfSections(null)
     setPdfBusy(null)
+    setDetectedUnitInfo(null)
+    setPrintedTotals(null)
   }
 
   const handleXlsxFile = useCallback(async (f: File) => {
@@ -291,6 +307,19 @@ function PcrUploadTab() {
       const items = netOutVoidPairs(result.lineItems)
       const detected = detectMonthYear(file.name) ?? monthYearFromCriteriaDate(result.criteria.date_from)
       applyParsedItems(items, detected, false)
+      setDetectedUnitInfo(result.unitInfo)
+      setPrintedTotals(result.printedTotals)
+      // Only auto-fill from the PDF's own summary page when there's no
+      // existing report for that month to preserve -- a manually-verified
+      // $/unit or correction is never silently overwritten by a fresh OCR
+      // read (the confirmation form still shows a diff warning below).
+      if (result.unitInfo && detected) {
+        const existingId = `${detected.year}-${String(detected.month).padStart(2, '0')}`
+        if (!reports.some((r) => r.id === existingId)) {
+          setUnitValue(result.unitInfo.unitDollarValue.toFixed(2))
+          setUnitCorrection(String(result.unitInfo.unitCorrection))
+        }
+      }
     } catch (e) {
       setParseError(e instanceof Error ? e.message : 'Failed to extract PDF pages')
     } finally {
@@ -324,8 +353,21 @@ function PcrUploadTab() {
   )
 
   const totalUnits = parsed ? parsed.reduce((s, li) => s + li.totalDistributableUnits, 0) : 0
+  const distributableUnitsSum = parsed ? parsed.reduce((s, li) => s + li.timeUnits, 0) : 0
   const uniqueTickets = parsed ? new Set(parsed.map((li) => li.ticketNum)).size : 0
   const serviceDates = parsed ? [...new Set(parsed.map((li) => li.serviceDate))].sort() : []
+
+  // Spot-checks against the source PDF's own printed "Total for <doctor>"
+  // row -- catches silent OCR errors (a misread digit, a dropped row) that
+  // wouldn't otherwise be visible until much later. Advisory only: doesn't
+  // block saving, since a genuine mismatch might also mean the PDF's own
+  // print rounds differently, not that our OCR is wrong.
+  const totalUnitsMatch = printedTotals
+    ? Math.abs(totalUnits - printedTotals.totalDistribUnits) < 0.01
+    : null
+  const distributableUnitsMatch = printedTotals
+    ? Math.abs(distributableUnitsSum - printedTotals.distributableUnits) < 0.01
+    : null
 
   const monthPrefix = `${year}-${String(month).padStart(2, '0')}`
   const crossMonthCount = parsed
@@ -349,7 +391,7 @@ function PcrUploadTab() {
       unitDollarValue: parseFloat(unitValue) || 32,
       paddingMinutes: parseInt(paddingMins) || 30,
       defaultNoTimeHours: parseFloat(noTimeHours) || 4,
-      unitCorrection: existing?.unitCorrection,
+      unitCorrection: parseFloat(unitCorrection) || undefined,
       lineItems: parsed,
       workingDayOverrides: existing?.workingDayOverrides ?? {},
       dayStipends: existing?.dayStipends ?? {},
@@ -389,6 +431,11 @@ function PcrUploadTab() {
           unitDollarValue: parseFloat(unitValue) || 32,
           paddingMinutes: parseInt(paddingMins) || 30,
           defaultNoTimeHours: parseFloat(noTimeHours) || 4,
+          // Deliberately not the form's `unitCorrection` field here -- a
+          // correction is specific to one month's own summary/corrections
+          // page, and this single form value would otherwise get applied
+          // to every month in a multi-month split. Each split month keeps
+          // whatever correction it already had.
           unitCorrection: existingReport?.unitCorrection,
           lineItems: items,
           workingDayOverrides: existingReport?.workingDayOverrides ?? {},
@@ -555,9 +602,60 @@ function PcrUploadTab() {
             </div>
             <div>
               <p className="text-xs text-gray-500">Total Units</p>
-              <p className="text-lg font-bold text-indigo-400">{totalUnits.toFixed(2)}</p>
+              <p className="text-lg font-bold text-indigo-400 flex items-center gap-1.5">
+                {totalUnits.toFixed(2)}
+                {totalUnitsMatch !== null && (
+                  totalUnitsMatch ? (
+                    <svg className="w-4 h-4 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <title>Matches the PDF's printed total</title>
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
+                    </svg>
+                  ) : (
+                    <svg className="w-4 h-4 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <title>Does not match the PDF's printed total</title>
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 9v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                  )
+                )}
+              </p>
             </div>
           </div>
+
+          {printedTotals && (
+            <div className={`flex items-start gap-2 rounded-lg px-3 py-2 mb-3 text-xs ${
+              totalUnitsMatch && distributableUnitsMatch
+                ? 'bg-emerald-900/20 border border-emerald-700/40 text-emerald-300'
+                : 'bg-red-900/20 border border-red-700/50 text-red-300'
+            }`}>
+              {totalUnitsMatch && distributableUnitsMatch ? (
+                <svg className="w-4 h-4 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                </svg>
+              ) : (
+                <svg className="w-4 h-4 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+              )}
+              <div>
+                {totalUnitsMatch && distributableUnitsMatch ? (
+                  <span>Matches the PDF's own printed "Total for" row — Total Units {printedTotals.totalDistribUnits.toFixed(2)}, Distributable Time Units {printedTotals.distributableUnits.toFixed(2)}.</span>
+                ) : (
+                  <>
+                    <span className="font-semibold">Mismatch against the PDF's own printed "Total for" row — double-check before saving:</span>
+                    <ul className="list-disc pl-4 mt-1 space-y-0.5">
+                      {!totalUnitsMatch && (
+                        <li>Total Units: computed {totalUnits.toFixed(2)}, PDF says {printedTotals.totalDistribUnits.toFixed(2)}</li>
+                      )}
+                      {!distributableUnitsMatch && (
+                        <li>Distributable Time Units: computed {distributableUnitsSum.toFixed(2)}, PDF says {printedTotals.distributableUnits.toFixed(2)}</li>
+                      )}
+                    </ul>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
+
           {serviceDates.length > 0 && (
             <p className="text-xs text-gray-500">
               Service dates: {serviceDates[0]} → {serviceDates[serviceDates.length - 1]}
@@ -681,11 +779,67 @@ function PcrUploadTab() {
         </div>
         )}
 
-        <div>
-          <label className="block text-xs font-semibold text-gray-400 mb-1.5">Dollar Value per Unit ($)</label>
-          <input type="number" step="0.01" value={unitValue}
-            onChange={(e) => setUnitValue(e.target.value)} placeholder="32.00" className={inputCls} />
+        <div className={multiMonthMode === 'split' ? '' : 'grid grid-cols-2 gap-4'}>
+          <div>
+            <label className="block text-xs font-semibold text-gray-400 mb-1.5">Dollar Value per Unit ($)</label>
+            <input type="number" step="0.01" value={unitValue}
+              onChange={(e) => setUnitValue(e.target.value)} placeholder="32.00" className={inputCls} />
+          </div>
+          {/* Unit correction is month-specific (tied to that month's own
+              summary/corrections page) -- meaningless as a single value
+              applied across every month in a split, so it's hidden there;
+              each split month keeps whatever correction it already had. */}
+          {multiMonthMode !== 'split' && (
+            <div>
+              <label className="block text-xs font-semibold text-gray-400 mb-1.5">Unit Correction</label>
+              <input type="number" step="0.01" value={unitCorrection}
+                onChange={(e) => setUnitCorrection(e.target.value)} placeholder="0" className={inputCls} />
+            </div>
+          )}
         </div>
+
+        {detectedUnitInfo && (
+          detectedUnitInfo.reconciled ? (
+            <p className="text-xs text-emerald-500">
+              ✓ $/unit and unit correction auto-filled from this PDF's Physician 12 Month Summary page.
+            </p>
+          ) : (
+            <div className="flex items-start gap-2 bg-amber-900/20 border border-amber-700/50 rounded-lg px-3 py-2 text-xs text-amber-300">
+              <svg className="w-4 h-4 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <span>
+                Couldn't fully validate $/unit against this PDF's summary page (the computed rate didn't
+                reconcile to the cent) — double-check the value above against the PDF before saving.
+              </span>
+            </div>
+          )
+        )}
+
+        {detectedUnitInfo && (
+          Math.abs((parseFloat(unitValue) || 0) - detectedUnitInfo.unitDollarValue) > 0.001 ||
+          Math.abs((parseFloat(unitCorrection) || 0) - detectedUnitInfo.unitCorrection) > 0.001
+        ) && (
+          <div className="flex items-start gap-2 bg-amber-900/20 border border-amber-700/50 rounded-lg px-3 py-2 text-xs text-amber-300">
+            <svg className="w-4 h-4 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <span className="flex-1">
+              This PDF's summary page reports $/unit = ${detectedUnitInfo.unitDollarValue.toFixed(2)} and unit
+              correction = {detectedUnitInfo.unitCorrection}, which differs from what's filled in above
+              {existing ? ' (kept from the existing report for this month)' : ''}.{' '}
+              <button
+                onClick={() => {
+                  setUnitValue(detectedUnitInfo.unitDollarValue.toFixed(2))
+                  setUnitCorrection(String(detectedUnitInfo.unitCorrection))
+                }}
+                className="text-amber-200 underline underline-offset-2 hover:text-amber-100"
+              >
+                Use the PDF's values
+              </button>
+            </span>
+          </div>
+        )}
 
         <div className="grid grid-cols-2 gap-4">
           <div>

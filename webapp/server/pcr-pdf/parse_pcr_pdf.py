@@ -51,8 +51,33 @@ DETECT_ZOOM = 2.0         # lower zoom for the cheap per-page pre-scan
 
 KNOWN_MODIFIERS = [
     "AA", "ET", "RT", "LT", "26", "59", "AAQS", "AAQSPT", "AA78",
-    "AG59", "AG59LT", "AG59RT", "59LT", "59RT",
+    "AG59", "AG59LT", "AG59RT", "59LT", "59RT", "AAET", "AAQS33",
 ]
+
+# ─── "Physician 12 Month Summary" / "<MON> Corrections" bonus pages ───────────
+# Bundled alongside the Case Distribution Report in some CASE exports. Both
+# are portrait Letter pages (612x792pt), a different layout/orientation than
+# the landscape line-items table above.
+
+BONUS_PAGE_PT_SIZE = (612.0, 792.0)
+MONTH_ABBR3 = ["jan", "feb", "mar", "apr", "may", "jun",
+               "jul", "aug", "sep", "oct", "nov", "dec"]
+
+SUMMARY_ROW_RE = re.compile(
+    r"^([A-Za-z]{3})-(\d{2})\s+([\d,]+\.\d{2})\s+\$?([\d,]+\.\d{2})\s+\$?([\d,]+\.\d{2})$"
+)
+MONTH_SUMMARY_TITLE_RE = re.compile(r"\d{1,2}\s*month\s*summary", re.IGNORECASE)
+CORRECTIONS_TITLE_RE = re.compile(r"\bcorrections?\b", re.IGNORECASE)
+ACCT_DATE_RE = re.compile(r"\b(\d{1,2})\s*/\s*(\d{4})\b")
+
+# Fixed anchor for the "PCR CORRECTION" row's value cell on the Corrections
+# page, calibrated against real samples the same way COLUMN_ANCHORS_PT is for
+# the line-items table -- this report family is template-generated, so the
+# position is consistent across documents. The cell is boxed in a red border
+# that badly confuses tesseract's binarization; red pixels are scrubbed to
+# white (see `read_correction_value`) before OCR rather than trying to crop
+# it out pixel-perfectly.
+CORRECTION_VALUE_RECT_PT = (500.0, 200.0, 612.0, 214.0)
 
 
 def column_bounds_pt():
@@ -113,6 +138,69 @@ def group_rows(words, tol=ROW_TOL_PT):
     return rows
 
 
+# Calibrated directly against 21 real pages across 5 different source PDFs:
+# the gap from HEADER_CUTOFF_PT to the first body row is *always* 6.0-7.5pt,
+# and the gap between two consecutive rows is *always* ~12.25pt -- except
+# the legitimate ~19.7-21.3pt gap immediately before the repeating copyright
+# footer row, which is excluded explicitly below (by content, not fudged
+# via threshold) rather than risking a too-tight margin against it.
+HEADER_TO_FIRST_ROW_GAP_PT = 7.5
+ROW_TO_ROW_GAP_PT = 12.25
+
+
+def _looks_like_footer(row_words):
+    text = " ".join(w["text"] for w in row_words)
+    return "PHIMED" in text.upper() or text.strip().startswith("©")
+
+
+def recover_missed_rows(page_img, rows, zoom):
+    """tesseract's whole-page line-segmentation occasionally drops an entire
+    row even though its pixels are perfectly legible in isolation --
+    confirmed directly on a real sample where a row sitting in an
+    anomalously large vertical gap (right after the header, in this case)
+    was invisible to the full-page OCR pass but read correctly on the first
+    try once that exact ~13pt band was cropped and re-OCR'd alone. Detects
+    any gap noticeably wider than the calibrated norms above (either from
+    the header cutoff to the first row, or between two consecutive rows)
+    and re-scans just that band. A false-positive re-scan is harmless here:
+    if nothing is actually there, tesseract finds no words and the gap is
+    left as-is; if it finds noise, `extract()`'s existing row classification
+    already discards anything that doesn't look like a real data/header row."""
+    if not rows:
+        return rows
+    sorted_rows = sorted(rows, key=lambda r: r["top"])
+    boundaries = [(HEADER_CUTOFF_PT, HEADER_TO_FIRST_ROW_GAP_PT * 1.7, sorted_rows[0])]
+    boundaries += [
+        (a["top"], ROW_TO_ROW_GAP_PT * 1.6, b)
+        for a, b in zip(sorted_rows, sorted_rows[1:])
+    ]
+
+    recovered = []
+    for start, threshold, next_row in boundaries:
+        end = next_row["top"]
+        if end - start < threshold or _looks_like_footer(next_row["words"]):
+            continue
+        band_top, band_bottom = start + 1.0, end - 1.0
+        if band_bottom - band_top < 4.0:
+            continue
+        crop = page_img.crop((0, int(band_top * zoom), page_img.width, int(band_bottom * zoom)))
+        crop = crop.resize((crop.width * 2, crop.height * 2), Image.LANCZOS)
+        found = ocr_words(crop, zoom=zoom * 2)
+        if not found:
+            continue
+        for w in found:
+            w["top"] += band_top
+        recovered.append({
+            "top": sum(w["top"] for w in found) / len(found),
+            "n": len(found),
+            "words": sorted(found, key=lambda w: w["left"]),
+        })
+
+    if not recovered:
+        return rows
+    return sorted(rows + recovered, key=lambda r: r["top"])
+
+
 def bin_row_to_columns(row_words):
     cells = ["" for _ in COLUMNS]
     confs = [None for _ in COLUMNS]
@@ -161,14 +249,26 @@ def levenshtein(a, b):
     return dp[m][n]
 
 
-def fix_modifier(text):
+def fix_modifier(text, conf=100.0):
     """Correct common OCR digit/letter confusions (e.g. 'SORT' -> '59RT',
     '5S9OLT' -> '59LT') against the closed vocabulary of CPT modifier codes
     used in this report, via minimum edit distance (ties broken toward the
-    candidate closest in length to what was actually read)."""
+    candidate closest in length to what was actually read).
+
+    Only attempted when `conf` is low (<80). Confirmed against a real
+    sample where this over-corrected: two genuinely-valid-but-not-yet-seen
+    modifiers ("AAQS33", "AAET") were read at ~92 confidence -- the same
+    range as unambiguously correct reads -- and got silently rewritten
+    into a different, wrong known code purely because they were within
+    edit distance 3 of one. Actual garbled reads in the same dataset
+    ("SORT", "AGS9LT", "5S9OLT") all came in under 80 confidence, so
+    gating on confidence reliably tells "needs fixing" apart from "just
+    not in KNOWN_MODIFIERS yet" without requiring a complete vocabulary."""
     if not text:
         return text
     if text in KNOWN_MODIFIERS:
+        return text
+    if conf >= 80:
         return text
 
     best = min(KNOWN_MODIFIERS, key=lambda k: (levenshtein(text, k), abs(len(text) - len(k))))
@@ -214,6 +314,24 @@ def safe_float(s):
         return float(s)
     except ValueError:
         return None
+
+
+DECIMAL_COLON_RE = re.compile(r"^(\d+):(\d{2})$")
+
+
+def fix_decimal_colon(text):
+    """The Unit Value / Value / Age Value columns are plain decimals and
+    should never contain a colon -- but tesseract occasionally misreads a
+    decimal point as one (confirmed on a real sample: "7.25" -> "7:25" in
+    the Value column, silently defaulting to 0.0 downstream since it no
+    longer parses as a float, which also corrupted the otherwise-correct
+    Total Distrib Units via reconcile_distrib_units's cross-check). Only
+    applied as a fallback when the raw text doesn't already parse cleanly,
+    so a genuine, already-valid number is never touched."""
+    if not text or safe_float(text) is not None:
+        return text
+    m = DECIMAL_COLON_RE.match(text.strip())
+    return f"{m.group(1)}.{m.group(2)}" if m else text
 
 
 def reconcile_distrib_units(value, distrib_raw, distrib_conf, total_raw, total_conf):
@@ -282,6 +400,13 @@ class DoctorGroup:
     def __init__(self, name):
         self.name = name
         self.rows = []  # list of dict with all 13 fields
+        # Populated from this doctor's own "Total for <name>" subtotal row,
+        # printed by the source system on the last page of their section --
+        # not used to build line items (we recompute totals ourselves from
+        # the parsed rows), but captured so the upload UI can cross-check
+        # our OCR against the PDF's own printed numbers. None if that row
+        # wasn't found/didn't parse cleanly.
+        self.printed_totals = None
 
 
 def parse_page_spec(spec, n_pages):
@@ -332,6 +457,7 @@ def extract(pdf_path, first_page=None, last_page=None, pages=None):
 
         body_words = [w for w in words if w["top"] >= HEADER_CUTOFF_PT]
         rows = group_rows(body_words)
+        rows = recover_missed_rows(img, rows, ZOOM)
 
         for row in rows:
             cells, confs = bin_row_to_columns(row["words"])
@@ -345,9 +471,19 @@ def extract(pdf_path, first_page=None, last_page=None, pages=None):
                 doctors.append(current)
                 continue
 
-            if re.match(r"^Total\s+for\b", descriptor_norm, re.IGNORECASE):
-                # Subtotal row -- values are used only as a cross-check; we
-                # recompute totals ourselves from the parsed data rows.
+            if re.match(r"^Total\s*for\b", descriptor_norm, re.IGNORECASE):
+                # Subtotal row -- not used to build line items (we recompute
+                # totals ourselves from the parsed data rows), but captured
+                # for the upload UI's cross-check against the PDF's own
+                # printed numbers.
+                if current is not None:
+                    d_units = safe_float(fix_decimal_colon(cells[11]))
+                    t_units = safe_float(fix_decimal_colon(cells[12]))
+                    if d_units is not None and t_units is not None:
+                        current.printed_totals = {
+                            "distributableUnits": d_units,
+                            "totalDistribUnits": t_units,
+                        }
                 continue
 
             if re.match(r"^\d{4,7}$", cells[0]):
@@ -356,7 +492,10 @@ def extract(pdf_path, first_page=None, last_page=None, pages=None):
                     doctors.append(current)
                 if not cells[3]:
                     cells[3] = recover_cpt_asa(img, row["top"])
-                cells[4] = fix_modifier(cells[4])
+                cells[4] = fix_modifier(cells[4], confs[4] if confs[4] is not None else 100.0)
+                cells[5] = fix_decimal_colon(cells[5])
+                cells[6] = fix_decimal_colon(cells[6])
+                cells[7] = fix_decimal_colon(cells[7])
                 start_time, end_time, total_time = reconcile_times(cells[8], cells[9], cells[10])
                 value = safe_float(cells[6]) or 0.0
                 distrib_units, total_distrib_units = reconcile_distrib_units(
@@ -424,6 +563,20 @@ def primary_doctor_name(doctors):
     return ""
 
 
+def aggregate_printed_totals(doctors):
+    """Sum each doctor group's own printed subtotal row across the whole
+    extracted range, for the upload UI to cross-check against its own
+    computed sums. None if any group with rows is missing one -- a partial
+    aggregate would be misleading rather than merely incomplete."""
+    groups_with_rows = [d for d in doctors if d.rows]
+    if not groups_with_rows or any(d.printed_totals is None for d in groups_with_rows):
+        return None
+    return {
+        "distributableUnits": round(sum(d.printed_totals["distributableUnits"] for d in groups_with_rows), 2),
+        "totalDistribUnits": round(sum(d.printed_totals["totalDistribUnits"] for d in groups_with_rows), 2),
+    }
+
+
 # ─── Section detection (find report pages within a bundled PDF) ──────────────
 
 def detect_sections(pdf_path):
@@ -470,6 +623,174 @@ def detect_sections(pdf_path):
         sections.append(current)
 
     return n_pages, sections
+
+
+# ─── Bonus pages: 12-Month Summary ($/unit) + Corrections (unit adjustment) ───
+
+def physician_tokens(name):
+    """Pull a doctor-number and surname out of a "187 - OSMANI, BIJAN" /
+    "187 OSMANI" / "187-OSMANI" style label, for a light identity check
+    against the bonus pages' own (differently-formatted) physician label."""
+    digits = re.search(r"\d+", name)
+    letters = re.findall(r"[A-Za-z]+", name)
+    surname = letters[0] if letters else None
+    return (digits.group(0) if digits else None), (surname.lower() if surname else None)
+
+
+def physician_matches(band_text_lower, cdr_doctor_name):
+    num, surname = physician_tokens(cdr_doctor_name)
+    if not surname:
+        return True  # nothing to check against -- don't block on it
+    if surname not in band_text_lower:
+        return False
+    return (num in band_text_lower) if num else True
+
+
+def find_bonus_pages(doc, cdr_doctor_name):
+    """Cheap top-band scan (same technique as detect_sections) for a
+    "Physician 12 Month Summary" page and any "<MON> ... Corrections" pages
+    bundled elsewhere in the same PDF. Returns (summary_page_index or None,
+    [{"page": i, "month": mm, "year": yyyy}, ...] for corrections pages).
+    Only pages whose header plausibly names the same physician as the
+    Case Distribution Report are considered."""
+    n_pages = len(doc)
+    summary_page = None
+    correction_pages = []
+
+    for pi in range(n_pages):
+        img = render_page(doc, pi, zoom=DETECT_ZOOM, clip_pt=DETECT_BAND_PT)
+        words = ocr_words(img, zoom=DETECT_ZOOM)
+        text = " ".join(w["text"] for w in words)
+        text_lower = text.lower()
+
+        if summary_page is None and MONTH_SUMMARY_TITLE_RE.search(text_lower):
+            if physician_matches(text_lower, cdr_doctor_name):
+                summary_page = pi
+            continue
+
+        if CORRECTIONS_TITLE_RE.search(text_lower):
+            m = ACCT_DATE_RE.search(text)
+            if not m:
+                # The Acct Date text is small enough that DETECT_ZOOM
+                # sometimes can't read it -- retry this one page at full
+                # zoom before giving up on it.
+                hi_img = render_page(doc, pi, clip_pt=DETECT_BAND_PT)
+                hi_words = ocr_words(hi_img)
+                hi_text = " ".join(w["text"] for w in hi_words)
+                m = ACCT_DATE_RE.search(hi_text)
+                if not m:
+                    continue  # can't tell which month this correction is for
+            if not physician_matches(text_lower, cdr_doctor_name):
+                continue
+            correction_pages.append({
+                "page": pi,
+                "month": int(m.group(1)),
+                "year": int(m.group(2)),
+            })
+
+    return summary_page, correction_pages
+
+
+def extract_summary_row(doc, page_index, target_month, target_year):
+    """OCR the 12-Month Summary page and return the row matching
+    target_month/target_year, or None if that month isn't in its
+    (rolling 12-month) table."""
+    img = render_page(doc, page_index)
+    words = ocr_words(img)
+    rows = group_rows(words)
+    target_abbr = MONTH_ABBR3[target_month - 1]
+    target_yy = target_year % 100
+
+    for row in rows:
+        text_norm = re.sub(r"\s+", " ", " ".join(w["text"] for w in row["words"])).strip()
+        m = SUMMARY_ROW_RE.match(text_norm)
+        if not m:
+            continue
+        abbr, yy, units_s, rate_s, dist_s = m.groups()
+        if abbr.lower() != target_abbr or int(yy) != target_yy:
+            continue
+        return {
+            "unitsDistributed": to_float(units_s.replace(",", "")),
+            "ratePerUnit": to_float(rate_s.replace(",", "")),
+            "dollarsDistributed": to_float(dist_s.replace(",", "")),
+        }
+    return None
+
+
+def read_correction_value(doc, page_index):
+    """Read the 'PCR CORRECTION' row's value cell via the fixed anchor
+    calibrated in CORRECTION_VALUE_RECT_PT. The cell is boxed in a red
+    border that badly confuses tesseract's default binarization (misreads
+    e.g. "0.5" as "08"); red pixels are scrubbed to white first, which
+    fixed that reliably in testing against real samples. Returns a float,
+    or None if the page isn't the expected size/layout or nothing
+    number-shaped was read."""
+    page = doc[page_index]
+    if (round(page.rect.width), round(page.rect.height)) != (
+        round(BONUS_PAGE_PT_SIZE[0]), round(BONUS_PAGE_PT_SIZE[1])
+    ):
+        return None
+
+    zoom = 12
+    mat = fitz.Matrix(zoom, zoom)
+    clip = fitz.Rect(*CORRECTION_VALUE_RECT_PT)
+    pix = page.get_pixmap(matrix=mat, clip=clip)
+    mode = "RGB" if pix.n < 4 else "RGBA"
+    img = Image.frombytes(mode, (pix.width, pix.height), pix.samples).convert("RGB")
+
+    px = img.load()
+    for y in range(img.height):
+        for x in range(img.width):
+            r, g, b = px[x, y][:3]
+            if r - g > 40 and r - b > 40:  # scrub the red border to white
+                px[x, y] = (255, 255, 255)
+
+    gray = img.convert("L")
+    bw = gray.point(lambda v: 0 if v < 180 else 255, mode="L")
+    text = pytesseract.image_to_string(
+        bw, config="--psm 7 -c tessedit_char_whitelist=0123456789.-"
+    ).strip()
+
+    if not re.match(r"^-?\d+(\.\d+)?$", text):
+        return None
+    return float(text)
+
+
+def extract_unit_info(doc, doctors, cdr_doctor_name, target_month, target_year):
+    """Best-effort: cross-reference the bundled 12-Month Summary / Corrections
+    pages (if present) against the just-parsed line items to auto-fill $/unit
+    and the unit correction, with a reconciliation check. Returns None if no
+    summary page was found (the common case -- a bare line-items-only PDF),
+    so callers can fall back to today's fully-manual entry unchanged."""
+    summary_page, correction_pages = find_bonus_pages(doc, cdr_doctor_name)
+    if summary_page is None:
+        return None
+
+    summary_row = extract_summary_row(doc, summary_page, target_month, target_year)
+    if summary_row is None:
+        return None
+
+    correction = 0.0
+    for c in correction_pages:
+        if c["month"] == target_month and c["year"] == target_year:
+            value = read_correction_value(doc, c["page"])
+            if value is not None:
+                correction = value
+            break
+
+    ocr_units = sum(r["total_distrib_units"] for d in doctors for r in d.rows)
+    denom = ocr_units + correction
+    computed_rate = round(summary_row["dollarsDistributed"] / denom, 4) if denom else None
+    reconciled = (
+        computed_rate is not None
+        and abs(computed_rate - summary_row["ratePerUnit"]) <= 0.01
+    )
+
+    return {
+        "unitDollarValue": summary_row["ratePerUnit"],
+        "unitCorrection": correction,
+        "reconciled": reconciled,
+    }
 
 
 # ─── xlsx writer (standalone CLI use only) ────────────────────────────────────
@@ -646,10 +967,19 @@ def main():
             doctors, criteria = extract(args.pdf, pages=args.pages)
             line_items = to_line_items(doctors)
             if args.json:
+                doctor_name = primary_doctor_name(doctors)
+                unit_info = None
+                date_match = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{4})$", criteria.get("date_from") or "")
+                if date_match and doctor_name:
+                    target_month, target_year = int(date_match.group(1)), int(date_match.group(3))
+                    bonus_doc = fitz.open(args.pdf)
+                    unit_info = extract_unit_info(bonus_doc, doctors, doctor_name, target_month, target_year)
                 json.dump({
-                    "doctorName": primary_doctor_name(doctors),
+                    "doctorName": doctor_name,
                     "criteria": criteria,
                     "lineItems": line_items,
+                    "unitInfo": unit_info,
+                    "printedTotals": aggregate_printed_totals(doctors),
                 }, sys.stdout)
             else:
                 print(f"{len(line_items)} line item(s) from {len(doctors)} doctor group(s)")

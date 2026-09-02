@@ -11,10 +11,23 @@ export interface PcrPdfDetectResult {
   sections: PcrPdfSection[]
 }
 
+export interface PcrPdfUnitInfo {
+  unitDollarValue: number
+  unitCorrection: number
+  reconciled: boolean
+}
+
+export interface PcrPdfPrintedTotals {
+  distributableUnits: number
+  totalDistribUnits: number
+}
+
 export interface PcrPdfExtractResult {
   doctorName: string
   criteria: Record<string, string>
   lineItems: LineItem[]
+  unitInfo: PcrPdfUnitInfo | null
+  printedTotals: PcrPdfPrintedTotals | null
 }
 
 export interface SchedulePdfRow {
