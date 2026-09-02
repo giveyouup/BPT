@@ -48,10 +48,23 @@ export interface PcrLineItem {
   totalDistributableUnits: number
 }
 
+export interface PcrUnitInfo {
+  unitDollarValue: number
+  unitCorrection: number
+  reconciled: boolean
+}
+
+export interface PcrPrintedTotals {
+  distributableUnits: number
+  totalDistribUnits: number
+}
+
 export interface PcrExtractResult {
   doctorName: string
   criteria: Record<string, string>
   lineItems: PcrLineItem[]
+  unitInfo: PcrUnitInfo | null
+  printedTotals: PcrPrintedTotals | null
 }
 
 async function withTempPdf<T>(buffer: Buffer, fn: (tmpPath: string) => Promise<T>): Promise<T> {
