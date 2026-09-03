@@ -11,6 +11,7 @@ import ScheduleCalendar from './pages/ScheduleCalendar'
 import Audits from './pages/Audits'
 import Settings from './pages/Settings'
 import CptRangesPage from './pages/CptRangesPage'
+import PcrCategoryMappingPage from './pages/PcrCategoryMappingPage'
 import Compensation from './pages/Compensation'
 import Help from './pages/Help'
 
@@ -66,6 +67,7 @@ function AppContent() {
         <Route path="/audits" element={<Audits />} />
         <Route path="/settings" element={<Settings />} />
         <Route path="/settings/cpt-ranges" element={<CptRangesPage />} />
+        <Route path="/settings/pcr-category-mapping" element={<PcrCategoryMappingPage />} />
         <Route path="/compensation" element={<Compensation />} />
         <Route path="/help" element={<Help />} />
         <Route path="*" element={<Navigate to="/" replace />} />

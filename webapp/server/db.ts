@@ -2,8 +2,9 @@ import Database from 'better-sqlite3'
 import path from 'path'
 import fs from 'fs'
 import { randomUUID } from 'crypto'
-import type { MonthlyReport, Schedule, Settings, StipendMapping, CptRange, Physician, MonthlyExpenses, AnnualExpenses } from '../src/types'
+import type { MonthlyReport, Schedule, Settings, StipendMapping, CptRange, Physician, MonthlyExpenses, AnnualExpenses, PcrIncomeStatement, PcrCategoryMapping } from '../src/types'
 import { DEFAULT_CPT_RANGES } from '../src/utils/cptLookup'
+import { DEFAULT_PCR_CATEGORY_MAPPINGS } from '../src/utils/pcrCategoryDefaults'
 
 const DATA_DIR = process.env.DATA_DIR ?? '/opt/stacks/BPT'
 const DB_PATH = path.join(DATA_DIR, 'bpt.db')
@@ -54,6 +55,18 @@ db.exec(`
     id TEXT PRIMARY KEY,
     physician_id TEXT,
     data TEXT NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS pcr_income_statements (
+    id TEXT NOT NULL,
+    physician_id TEXT NOT NULL,
+    data TEXT NOT NULL,
+    PRIMARY KEY (id, physician_id)
+  );
+  CREATE TABLE IF NOT EXISTS pcr_category_mappings (
+    id TEXT PRIMARY KEY,
+    label TEXT NOT NULL,
+    section TEXT NOT NULL,
+    target_key TEXT NOT NULL
   );
 `)
 
@@ -141,6 +154,16 @@ function seedCptRanges() {
   }
 }
 seedCptRanges()
+
+function seedPcrCategoryMappings() {
+  const { count } = db.prepare('SELECT COUNT(*) as count FROM pcr_category_mappings').get() as { count: number }
+  if (count > 0) return
+  const insert = db.prepare('INSERT INTO pcr_category_mappings (id, label, section, target_key) VALUES (?, ?, ?, ?)')
+  for (const m of DEFAULT_PCR_CATEGORY_MAPPINGS) {
+    insert.run(randomUUID(), m.label, m.section, m.targetKey)
+  }
+}
+seedPcrCategoryMappings()
 
 const DEFAULT_SETTINGS: Settings = {
   defaultPaddingMinutes: 30,
@@ -338,6 +361,58 @@ export function deleteAnnualExpenses(id: string, physicianId: string): void {
   db.prepare('DELETE FROM annual_expenses WHERE id = ? AND physician_id = ?').run(id, physicianId)
 }
 
+// ─── PCR Income Statements ────────────────────────────────────────────────────
+
+export function getPcrIncomeStatements(physicianId?: string): PcrIncomeStatement[] {
+  type Row = { physician_id: string; data: string }
+  if (physicianId) {
+    return (db.prepare('SELECT physician_id, data FROM pcr_income_statements WHERE physician_id = ? ORDER BY id').all(physicianId) as Row[])
+      .map((r) => ({ ...JSON.parse(r.data), physicianId: r.physician_id }))
+  }
+  return (db.prepare('SELECT physician_id, data FROM pcr_income_statements ORDER BY id').all() as Row[])
+    .map((r) => ({ ...JSON.parse(r.data), physicianId: r.physician_id }))
+}
+
+export function upsertPcrIncomeStatement(record: PcrIncomeStatement): void {
+  const physicianId = record.physicianId ?? defaultPhysicianId
+  db.prepare('INSERT OR REPLACE INTO pcr_income_statements (id, physician_id, data) VALUES (?, ?, ?)').run(record.id, physicianId, JSON.stringify(record))
+}
+
+export function deletePcrIncomeStatement(id: string, physicianId: string): void {
+  db.prepare('DELETE FROM pcr_income_statements WHERE id = ? AND physician_id = ?').run(id, physicianId)
+}
+
+// ─── PCR Category Mappings ────────────────────────────────────────────────────
+// Not physician-scoped -- a personal label->category preference, same
+// convention as cpt_ranges.
+
+export function getPcrCategoryMappings(): PcrCategoryMapping[] {
+  type Row = { id: string; label: string; section: string; target_key: string }
+  return (db.prepare('SELECT id, label, section, target_key FROM pcr_category_mappings ORDER BY section, label').all() as Row[])
+    .map((r) => ({ id: r.id, label: r.label, section: r.section as 'stipend' | 'expense', targetKey: r.target_key }))
+}
+
+export function upsertPcrCategoryMapping(mapping: PcrCategoryMapping): void {
+  db.prepare('INSERT OR REPLACE INTO pcr_category_mappings (id, label, section, target_key) VALUES (?, ?, ?, ?)')
+    .run(mapping.id, mapping.label, mapping.section, mapping.targetKey)
+}
+
+export function deletePcrCategoryMapping(id: string): void {
+  db.prepare('DELETE FROM pcr_category_mappings WHERE id = ?').run(id)
+}
+
+// Resets just one section's mappings to defaults -- scoped, not a full-table
+// wipe, so resetting stipend defaults never touches a user's own hand-
+// configured expense mappings (or vice versa).
+export function resetPcrCategoryMappings(section: 'stipend' | 'expense'): PcrCategoryMapping[] {
+  db.prepare('DELETE FROM pcr_category_mappings WHERE section = ?').run(section)
+  const insert = db.prepare('INSERT INTO pcr_category_mappings (id, label, section, target_key) VALUES (?, ?, ?, ?)')
+  for (const m of DEFAULT_PCR_CATEGORY_MAPPINGS.filter((m) => m.section === section)) {
+    insert.run(randomUUID(), m.label, m.section, m.targetKey)
+  }
+  return getPcrCategoryMappings()
+}
+
 // ─── Export / Import ──────────────────────────────────────────────────────────
 
 export interface DatabaseExport {
@@ -352,6 +427,8 @@ export interface DatabaseExport {
   cptRanges: CptRange[]
   monthlyExpenses: MonthlyExpenses[]
   annualExpenses: AnnualExpenses[]
+  pcrIncomeStatements: PcrIncomeStatement[]
+  pcrCategoryMappings: PcrCategoryMapping[]
 }
 
 export function exportDatabase(): DatabaseExport {
@@ -372,6 +449,8 @@ export function exportDatabase(): DatabaseExport {
     cptRanges: getCptRanges(),
     monthlyExpenses: getMonthlyExpenses(),
     annualExpenses: getAnnualExpenses(),
+    pcrIncomeStatements: getPcrIncomeStatements(),
+    pcrCategoryMappings: getPcrCategoryMappings(),
   }
 }
 
@@ -390,6 +469,8 @@ export function importDatabase(data: DatabaseExport): void {
     db.prepare('DELETE FROM cpt_ranges').run()
     db.prepare('DELETE FROM monthly_expenses').run()
     db.prepare('DELETE FROM annual_expenses').run()
+    db.prepare('DELETE FROM pcr_income_statements').run()
+    db.prepare('DELETE FROM pcr_category_mappings').run()
 
     for (const physician of data.physicians ?? []) upsertPhysician(physician)
     for (const report of data.reports ?? []) upsertReport(report)
@@ -418,6 +499,8 @@ export function importDatabase(data: DatabaseExport): void {
     for (const range of data.cptRanges ?? []) upsertCptRange(range)
     for (const record of data.monthlyExpenses ?? []) upsertMonthlyExpenses(record)
     for (const record of data.annualExpenses ?? []) upsertAnnualExpenses(record)
+    for (const record of data.pcrIncomeStatements ?? []) upsertPcrIncomeStatement(record)
+    for (const mapping of data.pcrCategoryMappings ?? []) upsertPcrCategoryMapping(mapping)
   })
   run()
 }

@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState, useMemo } from 'react'
-import type { MonthlyReport, Schedule, Settings, StipendMapping, CptRange, Physician, MonthlyExpenses, AnnualExpenses } from '../types'
+import type { MonthlyReport, Schedule, Settings, StipendMapping, CptRange, Physician, MonthlyExpenses, AnnualExpenses, PcrIncomeStatement, PcrCategoryMapping } from '../types'
 import { api } from '../api'
 import { parseShiftSummary } from '../utils/shiftUtils'
 import { lastDayOfMonth } from '../utils/dateUtils'
@@ -60,6 +60,13 @@ interface DataContextValue {
   annualExpenses: AnnualExpenses[]
   saveAnnualExpenses: (r: AnnualExpenses) => Promise<void>
   deleteAnnualExpenses: (id: string) => Promise<void>
+  pcrIncomeStatements: PcrIncomeStatement[]
+  savePcrIncomeStatement: (r: PcrIncomeStatement) => Promise<void>
+  deletePcrIncomeStatement: (id: string) => Promise<void>
+  pcrCategoryMappings: PcrCategoryMapping[]
+  savePcrCategoryMapping: (m: PcrCategoryMapping) => Promise<void>
+  deletePcrCategoryMapping: (id: string) => Promise<void>
+  resetPcrCategoryMappings: (section: 'stipend' | 'expense') => Promise<void>
 }
 
 const DataContext = createContext<DataContextValue | null>(null)
@@ -86,6 +93,8 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
   const [cptRanges, setCptRanges] = useState<CptRange[]>([])
   const [monthlyExpenses, setMonthlyExpenses] = useState<MonthlyExpenses[]>([])
   const [annualExpenses, setAnnualExpenses] = useState<AnnualExpenses[]>([])
+  const [pcrIncomeStatements, setPcrIncomeStatements] = useState<PcrIncomeStatement[]>([])
+  const [pcrCategoryMappings, setPcrCategoryMappings] = useState<PcrCategoryMapping[]>([])
 
   // One-time initialization: shared data + physicians
   useEffect(() => {
@@ -94,11 +103,13 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
       api.settings.get(),
       api.stipendMappings.list(),
       api.cptRanges.list(),
-    ]).then(([physList, setts, mappings, cptRangesData]) => {
+      api.pcrCategoryMappings.list(),
+    ]).then(([physList, setts, mappings, cptRangesData, pcrCategoryMappingsData]) => {
       setPhysicians(physList)
       setSettings({ ...DEFAULT_SETTINGS, ...setts, shiftHours: setts.shiftHours ?? DEFAULT_SETTINGS.shiftHours })
       setRawStipendMappings(mappings)
       setCptRanges(cptRangesData)
+      setPcrCategoryMappings(pcrCategoryMappingsData)
 
       const stored = localStorage.getItem('activePhysicianId')
       const validId = physList.find((p) => p.id === stored)?.id ?? physList[0]?.id ?? ''
@@ -122,12 +133,14 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
       api.manualShifts.list(activePhysicianId),
       api.expenses.list(activePhysicianId),
       api.annualExpenses.list(activePhysicianId),
-    ]).then(([rpts, scheds, manual, expenses, annualExp]) => {
+      api.pcrIncomeStatements.list(activePhysicianId),
+    ]).then(([rpts, scheds, manual, expenses, annualExp, pcrStatements]) => {
       setRawReports(rpts)
       setRawSchedules(scheds)
       setManualShifts(manual)
       setMonthlyExpenses(expenses)
       setAnnualExpenses(annualExp)
+      setPcrIncomeStatements(pcrStatements)
       setLoading(false)
     }).catch((err) => {
       console.error('Failed to load physician data:', err)
@@ -325,6 +338,40 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
     setAnnualExpenses((prev) => prev.filter((r) => r.id !== id))
   }
 
+  const savePcrIncomeStatement = async (record: PcrIncomeStatement) => {
+    const r = { ...record, physicianId: record.physicianId ?? activePhysicianId }
+    await api.pcrIncomeStatements.upsert(r)
+    setPcrIncomeStatements((prev) => {
+      const idx = prev.findIndex((x) => x.id === r.id)
+      if (idx >= 0) { const next = [...prev]; next[idx] = r; return next }
+      return [...prev, r].sort((a, b) => a.id.localeCompare(b.id))
+    })
+  }
+
+  const deletePcrIncomeStatement = async (id: string) => {
+    await api.pcrIncomeStatements.delete(id, activePhysicianId)
+    setPcrIncomeStatements((prev) => prev.filter((r) => r.id !== id))
+  }
+
+  const savePcrCategoryMapping = async (mapping: PcrCategoryMapping) => {
+    await api.pcrCategoryMappings.upsert(mapping)
+    setPcrCategoryMappings((prev) => {
+      const idx = prev.findIndex((m) => m.id === mapping.id)
+      if (idx >= 0) { const next = [...prev]; next[idx] = mapping; return next }
+      return [...prev, mapping]
+    })
+  }
+
+  const deletePcrCategoryMapping = async (id: string) => {
+    await api.pcrCategoryMappings.delete(id)
+    setPcrCategoryMappings((prev) => prev.filter((m) => m.id !== id))
+  }
+
+  const resetPcrCategoryMappings = async (section: 'stipend' | 'expense') => {
+    const fresh = await api.pcrCategoryMappings.reset(section)
+    setPcrCategoryMappings((prev) => [...prev.filter((m) => m.section !== section), ...fresh])
+  }
+
   return (
     <DataContext.Provider value={{
       physicians, activePhysicianId, setActivePhysicianId, savePhysician, deletePhysician,
@@ -336,6 +383,8 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
       saveCptRange, deleteCptRange, resetCptRanges,
       monthlyExpenses, saveMonthlyExpenses, deleteMonthlyExpenses,
       annualExpenses, saveAnnualExpenses, deleteAnnualExpenses,
+      pcrIncomeStatements, savePcrIncomeStatement, deletePcrIncomeStatement,
+      pcrCategoryMappings, savePcrCategoryMapping, deletePcrCategoryMapping, resetPcrCategoryMappings,
     }}>
       {children}
     </DataContext.Provider>

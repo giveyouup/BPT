@@ -1,25 +1,38 @@
 import { useState, useMemo, useRef, useEffect, Fragment } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useData } from '../context/DataContext'
-import { computeCalendarYearStats } from '../utils/calculations'
+import { computeCalendarYearStats, computeStipendGroupTotals, describeStipendGroupKey } from '../utils/calculations'
+import { resolvePcrCategoryMapping } from '../utils/pcrCategoryMatching'
 import { isOffDayShift, shiftBadgeClass, computeFederalHolidays } from '../utils/shiftUtils'
 import { formatDateFull, formatCurrency, getMonthName } from '../utils/dateUtils'
 
 const DOW_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+
+interface StipendAuditRow {
+  year: number
+  month: number        // PCR-printed month
+  sourceYear: number
+  sourceMonth: number   // month whose owed-amounts this compares against (one month prior)
+  group: string
+  label: string
+  paid: number
+  owed: number
+  diff: number
+}
 
 function getDow(dateStr: string): string {
   const [y, m, d] = dateStr.split('-').map(Number)
   return DOW_NAMES[new Date(y, m - 1, d).getDay()]
 }
 
-function SectionBadge({ count, variant }: { count: number; variant: 'warn' | 'neutral' }) {
+function SectionBadge({ count, variant, unit = 'day', unitPlural }: { count: number; variant: 'warn' | 'neutral'; unit?: string; unitPlural?: string }) {
   if (count === 0) return null
   const cls = variant === 'warn'
     ? 'bg-amber-900/40 text-amber-400 border-amber-700/40'
     : 'bg-gray-800 text-gray-400 border-gray-700'
   return (
     <span className={`px-2 py-0.5 text-xs font-semibold border rounded-full ${cls}`}>
-      {count} day{count !== 1 ? 's' : ''}
+      {count} {count !== 1 ? (unitPlural ?? `${unit}s`) : unit}
     </span>
   )
 }
@@ -36,7 +49,7 @@ function EmptyCheck({ message }: { message: string }) {
 }
 
 export default function Audits() {
-  const { reports, schedules, settings, stipendMappings, saveReport } = useData()
+  const { reports, schedules, settings, stipendMappings, saveReport, pcrIncomeStatements, pcrCategoryMappings } = useData()
   const navigate = useNavigate()
 
   const now = new Date()
@@ -84,6 +97,45 @@ export default function Audits() {
   )
 
   const allDays = useMemo(() => yearStats.flatMap(m => m.workingDays), [yearStats])
+
+  // Section 0: PCR stipend audit — paid (per PCR income statement, one month
+  // lagged) vs. owed (per Stipend Calculator's accrual math)
+  const stipendAudit = useMemo(() => {
+    const rows: StipendAuditRow[] = []
+    const unmappedLabels = new Set<string>()
+    const statements = pcrIncomeStatements
+      .filter(s => s.year === selectedYear)
+      .sort((a, b) => a.month - b.month)
+
+    for (const stmt of statements) {
+      const sourceMonth = stmt.month === 1 ? 12 : stmt.month - 1
+      const sourceYear = stmt.month === 1 ? stmt.year - 1 : stmt.year
+      const owed = computeStipendGroupTotals(sourceYear, sourceMonth, reports, schedules, settings, stipendMappings, settings.promotedStipendCodes ?? [])
+
+      const paid: Record<string, number> = {}
+      for (const line of stmt.lines) {
+        if (line.section !== 'stipend') continue
+        const mapping = resolvePcrCategoryMapping(line.label, 'stipend', pcrCategoryMappings)
+        if (!mapping) { unmappedLabels.add(line.label); continue }
+        paid[mapping.targetKey] = (paid[mapping.targetKey] ?? 0) + line.amount
+      }
+
+      const groupKeys = new Set([...Object.keys(paid), ...Object.keys(owed)])
+      for (const group of groupKeys) {
+        const paidAmt = paid[group] ?? 0
+        const owedAmt = owed[group] ?? 0
+        if (Math.abs(paidAmt) < 0.005 && Math.abs(owedAmt) < 0.005) continue
+        rows.push({
+          year: stmt.year, month: stmt.month, sourceYear, sourceMonth,
+          group, label: describeStipendGroupKey(group),
+          paid: paidAmt, owed: owedAmt, diff: paidAmt - owedAmt,
+        })
+      }
+    }
+
+    const mismatches = rows.filter(r => Math.abs(r.diff) > 0.01).sort((a, b) => a.month - b.month || a.label.localeCompare(b.label))
+    return { rows, mismatches, unmappedLabels: [...unmappedLabels].sort() }
+  }, [pcrIncomeStatements, pcrCategoryMappings, selectedYear, reports, schedules, settings, stipendMappings])
 
   // Section 1: production that landed on a non-working day and couldn't be attributed
   const orphanedProduction = useMemo(
@@ -264,6 +316,112 @@ export default function Audits() {
 
       {hasData && (
         <div className="space-y-12">
+
+          {/* ── Section 0: PCR Stipend Audit ─────────────────────────────────── */}
+          <section>
+            <div className="flex items-center gap-3 mb-1">
+              <h3 className="text-sm font-semibold text-gray-300 uppercase tracking-wider">
+                PCR Stipend Audit
+              </h3>
+              <SectionBadge count={stipendAudit.mismatches.length} variant="warn" unit="mismatch" unitPlural="mismatches" />
+              {stipendAudit.unmappedLabels.length > 0 && (
+                <span className="px-2 py-0.5 text-xs font-semibold border rounded-full bg-gray-800 text-gray-400 border-gray-700">
+                  {stipendAudit.unmappedLabels.length} unmapped
+                </span>
+              )}
+            </div>
+            <p className="text-xs text-gray-600 mb-4">
+              Compares stipends actually paid out — per the PCR income statement, one month
+              lagged (a PCR's stipend column for month M reflects what was earned in month M−1) —
+              against what the Stipend Calculator computes as owed from the schedule.
+            </p>
+
+            {stipendAudit.unmappedLabels.length > 0 && (
+              <div className="flex items-start gap-2 mb-4 px-3 py-2.5 bg-gray-800/60 border border-gray-700/60 rounded-lg">
+                <svg className="w-3.5 h-3.5 text-gray-500 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <div className="text-xs text-gray-400">
+                  <span className="text-gray-300 font-medium">
+                    {stipendAudit.unmappedLabels.length} unmapped PCR label{stipendAudit.unmappedLabels.length !== 1 ? 's' : ''}
+                  </span>
+                  {' '}excluded from this audit — configure a mapping in{' '}
+                  <button
+                    onClick={() => navigate('/settings/pcr-category-mapping')}
+                    className="text-indigo-400 hover:text-indigo-300 underline underline-offset-2"
+                  >
+                    PCR Category Mapping
+                  </button>.
+                  <div className="flex flex-wrap gap-1.5 mt-1.5">
+                    {stipendAudit.unmappedLabels.map(l => (
+                      <span key={l} className="px-1.5 py-0.5 rounded bg-gray-900 border border-gray-700 text-gray-500 font-mono text-[10px]">
+                        {l}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {stipendAudit.mismatches.length === 0 ? (
+              <EmptyCheck message={
+                stipendAudit.rows.length === 0
+                  ? `No PCR income-statement data found for ${selectedYear}`
+                  : `All paid stipends match owed amounts for ${selectedYear}`
+              } />
+            ) : (
+              <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
+                <div className="relative">
+                  <div className="pointer-events-none absolute inset-y-0 right-0 w-8 bg-gradient-to-l from-gray-900 to-transparent sm:hidden z-10" />
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-gray-800">
+                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider whitespace-nowrap">PCR Month</th>
+                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider whitespace-nowrap hidden sm:table-cell">Earned</th>
+                          <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider">Category</th>
+                          <th className="px-4 py-3 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider">Paid (PCR)</th>
+                          <th className="px-4 py-3 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider">Owed (Calc)</th>
+                          <th className="px-4 py-3 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider">Diff</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {stipendAudit.mismatches.map(r => (
+                          <tr key={`${r.year}-${r.month}-${r.group}`} className="border-b border-gray-800 last:border-0 hover:bg-gray-800/40">
+                            <td className="px-4 py-3 text-gray-200 whitespace-nowrap">{getMonthName(r.month)} {r.year}</td>
+                            <td className="px-4 py-3 text-gray-500 whitespace-nowrap hidden sm:table-cell">{getMonthName(r.sourceMonth)} {r.sourceYear}</td>
+                            <td className="px-4 py-3 text-gray-300">{r.label}</td>
+                            <td className="px-4 py-3 text-right text-gray-200">{formatCurrency(r.paid)}</td>
+                            <td className="px-4 py-3 text-right text-gray-200">{formatCurrency(r.owed)}</td>
+                            <td className={`px-4 py-3 text-right font-semibold ${r.diff >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                              {r.diff >= 0 ? '+' : ''}{formatCurrency(r.diff)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                      <tfoot>
+                        <tr className="bg-gray-800/60 border-t border-gray-700">
+                          <td colSpan={3} className="px-4 py-2.5 text-xs font-semibold text-gray-500">
+                            {stipendAudit.mismatches.length} mismatch{stipendAudit.mismatches.length !== 1 ? 'es' : ''}
+                          </td>
+                          <td />
+                          <td />
+                          <td className={`px-4 py-2.5 text-right text-xs font-bold ${
+                            stipendAudit.mismatches.reduce((s, r) => s + r.diff, 0) >= 0 ? 'text-emerald-400' : 'text-red-400'
+                          }`}>
+                            {(() => {
+                              const t = stipendAudit.mismatches.reduce((s, r) => s + r.diff, 0)
+                              return `${t >= 0 ? '+' : ''}${formatCurrency(t)}`
+                            })()}
+                          </td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            )}
+          </section>
 
           {/* ── Section 1: Production on non-working days ───────────────────── */}
           <section>

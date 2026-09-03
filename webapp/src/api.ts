@@ -1,4 +1,4 @@
-import type { MonthlyReport, Schedule, Settings, StipendMapping, CptRange, Physician, MonthlyExpenses, AnnualExpenses, LineItem } from './types'
+import type { MonthlyReport, Schedule, Settings, StipendMapping, CptRange, Physician, MonthlyExpenses, AnnualExpenses, LineItem, PcrIncomeStatement, PcrCategoryMapping } from './types'
 
 export interface PcrPdfSection {
   startPage: number
@@ -22,12 +22,25 @@ export interface PcrPdfPrintedTotals {
   totalDistribUnits: number
 }
 
+export interface PcrPdfStatementLine {
+  label: string
+  section: 'stipend' | 'expense' | 'otherIncome' | 'other'
+  amount: number
+}
+
+export interface PcrPdfIncomeStatementMonth {
+  year: number
+  month: number
+  lines: PcrPdfStatementLine[]
+}
+
 export interface PcrPdfExtractResult {
   doctorName: string
   criteria: Record<string, string>
   lineItems: LineItem[]
   unitInfo: PcrPdfUnitInfo | null
   printedTotals: PcrPdfPrintedTotals | null
+  incomeStatement: PcrPdfIncomeStatementMonth[]
 }
 
 export interface SchedulePdfRow {
@@ -119,6 +132,18 @@ export const api = {
       fetch(`/api/annual-expenses/${record.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(record) }).then(r => r.json()),
     delete: (id: string, physicianId: string) =>
       fetch(`/api/annual-expenses/${id}?physicianId=${encodeURIComponent(physicianId)}`, { method: 'DELETE' }).then(r => r.json()),
+  },
+  pcrIncomeStatements: {
+    list: (physicianId?: string) =>
+      req<PcrIncomeStatement[]>('GET', `/pcr-income-statements${physicianId ? `?physicianId=${encodeURIComponent(physicianId)}` : ''}`),
+    upsert: (record: PcrIncomeStatement) => req<void>('PUT', `/pcr-income-statements/${record.id}`, record),
+    delete: (id: string, physicianId: string) => req<void>('DELETE', `/pcr-income-statements/${id}?physicianId=${encodeURIComponent(physicianId)}`),
+  },
+  pcrCategoryMappings: {
+    list: () => req<PcrCategoryMapping[]>('GET', '/pcr-category-mappings'),
+    upsert: (m: PcrCategoryMapping) => req<void>('PUT', `/pcr-category-mappings/${m.id}`, m),
+    delete: (id: string) => req<void>('DELETE', `/pcr-category-mappings/${id}`),
+    reset: (section: 'stipend' | 'expense') => req<PcrCategoryMapping[]>('POST', `/pcr-category-mappings/reset?section=${section}`),
   },
   db: {
     maintenance: () => req<MaintenanceResult>('POST', '/db/maintenance'),
