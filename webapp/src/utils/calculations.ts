@@ -73,6 +73,191 @@ export function getStipendForDay(
   return total
 }
 
+// ─── Stipend group classification (shared with StipendCalculator.tsx) ─────────
+// Base classification only — ignores Settings.promotedStipendCodes, which is a
+// StipendCalculator display preference for breaking a code into its own column,
+// not a distinct payout category. PcrCategoryMapping.targetKey values always
+// target one of these base keys.
+
+export function classifyStipendBase(canonical: string): string {
+  if (isCallShift(canonical)) return 'mainOrCall'
+  if (/^G\d+$/.test(canonical)) return 'otherG'
+  if (canonical === 'APS') return 'APS'
+  if (canonical === 'BR') return 'BR'
+  if (canonical === 'NIR') return 'NIR'
+  if (canonical === 'ROC') return 'ROC'
+  if (canonical === 'GI') return 'GI'
+  if (/^FS\d*$/i.test(canonical)) return 'FS'
+  if (/^A\d+$/i.test(canonical)) return 'alhambra'
+  return 'other'
+}
+
+// Human-readable labels for the fixed base group keys. Promoted keys (see below)
+// are described dynamically via describeStipendGroupKey() instead.
+export const STIPEND_BASE_GROUP_LABELS: Record<string, string> = {
+  mainOrCall: 'G1/G2 Call', otherG: 'Other G', APS: 'APS', BR: 'BR', NIR: 'NIR',
+  ROC: 'ROC', GI: 'GI/Endo', FS: 'FS', alhambra: 'Alhambra', other: 'Other', additional: 'Additional',
+}
+
+// "otherG" and "other" are catch-all buckets. Individual (code, weekday/weekend)
+// variants landing in either one can be "promoted" (via Settings.promotedStipendCodes)
+// to their own standalone group — shared by StipendCalculator.tsx (its own display
+// columns), the PCR Category Mapping page (its target-key options), and Audits.tsx
+// (owed-amount computation) so all three agree on what a promoted key means.
+export const STIPEND_PROMOTABLE_BASE_KEYS = new Set(['otherG', 'other'])
+const STIPEND_PROMO_SEP = '::'
+
+// Promotion is keyed by (code, weekday/weekend) pair so weekend/holiday shifts
+// can be broken out independently of weekday shifts for the same code.
+export function stipendPromotionKey(canonical: string, isWeekend: boolean): string {
+  return `${canonical}${STIPEND_PROMO_SEP}${isWeekend ? 'weekend' : 'weekday'}`
+}
+
+export function parseStipendPromotionKey(key: string): { code: string; isWeekend: boolean } | null {
+  const idx = key.lastIndexOf(STIPEND_PROMO_SEP)
+  if (idx === -1) return null
+  return { code: key.slice(0, idx), isWeekend: key.slice(idx + STIPEND_PROMO_SEP.length) === 'weekend' }
+}
+
+/** classifyStipendBase() plus promotion: returns the promoted key instead of the
+ * base bucket when the (code, weekday/weekend) pair has been promoted. */
+export function getStipendGroupKey(canonical: string, isWeekend: boolean, promoted: Set<string> | string[]): string {
+  const base = classifyStipendBase(canonical)
+  if (STIPEND_PROMOTABLE_BASE_KEYS.has(base)) {
+    const key = stipendPromotionKey(canonical, isWeekend)
+    const promotedSet = promoted instanceof Set ? promoted : new Set(promoted)
+    if (promotedSet.has(key)) return key
+  }
+  return base
+}
+
+/** Human-readable label for any group key, base or promoted. */
+export function describeStipendGroupKey(key: string): string {
+  const parsed = parseStipendPromotionKey(key)
+  if (parsed) return `${parsed.code} (${parsed.isWeekend ? 'WE/Hol' : 'WD'})`
+  return STIPEND_BASE_GROUP_LABELS[key] ?? key
+}
+
+export function getShiftStipendAmount(raw: string, isWeekend: boolean, mapping: StipendMapping): number {
+  const shiftType = resolveShiftAlias(raw.toUpperCase())
+  if (isCallShift(shiftType)) {
+    const key = `${shiftType}_${isWeekend ? 'weekend' : 'weekday'}`.toLowerCase()
+    return mapping.rates.find((r) => r.shiftType.toLowerCase() === key)?.amount ?? 0
+  }
+  if (isAlwaysWeekendStipend(shiftType)) {
+    const key = `${shiftType}_weekend`.toLowerCase()
+    return mapping.rates.find((r) => r.shiftType.toLowerCase() === key)?.amount ?? 0
+  }
+  const variantKey = `${shiftType}_${isWeekend ? 'weekend' : 'weekday'}`.toLowerCase()
+  const variantRate = mapping.rates.find((r) => r.shiftType.toLowerCase() === variantKey)
+  if (variantRate) return variantRate.amount
+  return mapping.rates.find((r) => r.shiftType.toLowerCase() === shiftType.toLowerCase())?.amount ?? 0
+}
+
+function getScheduleEntriesForMonth(year: number, month: number, allSchedules: Schedule[]): [string, string[]][] {
+  const dateMap = new Map<string, string[]>()
+  for (const sched of [...allSchedules].sort((a, b) => a.uploadDate.localeCompare(b.uploadDate))) {
+    for (const entry of sched.entries) dateMap.set(entry.date, entry.shiftTypes)
+  }
+  const prefix = `${year}-${String(month).padStart(2, '0')}-`
+  return [...dateMap.entries()].filter(([date, shiftTypes]) => date.startsWith(prefix) && shiftTypes.some((s) => !isOffDayShift(s)))
+}
+
+function resolveStipendMappingForMonth(
+  year: number, month: number, allReports: MonthlyReport[], settings: Settings, allMappings: StipendMapping[]
+): StipendMapping | null {
+  const reportForMonth = allReports.find((r) => r.year === year && r.month === month)
+  const monthKey = `${year}-${String(month).padStart(2, '0')}`
+  const overrideId = settings.stipendMappingOverrides?.[monthKey] ?? reportForMonth?.stipendMappingOverride ?? null
+  const autoMapping = allMappings.length ? getApplicableMapping(year, month, allMappings) : null
+  return overrideId ? (allMappings.find((m) => m.id === overrideId) ?? autoMapping) : autoMapping
+}
+
+/**
+ * Per-shift, rate-sheet-driven stipend totals per group for one calendar
+ * month — no manual/day-stipend ("Additional Stipend") amounts folded in.
+ * Used where the rate-sheet-only portion matters on its own, e.g. computing
+ * how much of a PCR's paid ROC total is the variable lump sum on top of the
+ * per-shift rate (see utils/pcrStipendCarveouts.ts).
+ */
+export function computeShiftStipendTotals(
+  year: number,
+  month: number,
+  allReports: MonthlyReport[],
+  allSchedules: Schedule[],
+  settings: Settings,
+  allMappings: StipendMapping[],
+  promotedCodes: string[] = []
+): Record<string, number> {
+  const promoted = new Set(promotedCodes)
+  const entries = getScheduleEntriesForMonth(year, month, allSchedules)
+  const mapping = resolveStipendMappingForMonth(year, month, allReports, settings, allMappings)
+  const holidayList = settings.holidays[year] ?? computeFederalHolidays(year)
+  const amounts: Record<string, number> = {}
+
+  for (const [date, shiftTypes] of entries) {
+    const isWeekend = isWeekendOrHoliday(date, holidayList)
+    for (const raw of shiftTypes) {
+      if (isOffDayShift(raw)) continue
+      const canonical = resolveShiftAlias(raw.toUpperCase())
+      const group = getStipendGroupKey(canonical, isWeekend, promoted)
+      const amount = mapping ? getShiftStipendAmount(raw, isWeekend, mapping) : 0
+      amounts[group] = (amounts[group] ?? 0) + amount
+    }
+  }
+
+  return amounts
+}
+
+/**
+ * Stipend dollar amounts "owed" per group (base or promoted) for one calendar
+ * month — computeShiftStipendTotals() plus manual/day-stipend ("Additional
+ * Stipend") amounts folded in, mirroring StipendCalculator's per-day accrual
+ * logic without the detail-tracking it needs for its own UI.
+ * Pass the same `settings.promotedStipendCodes` StipendCalculator uses so a
+ * promoted column (e.g. "G3 weekend broken out on its own") is reflected here
+ * too — otherwise its owed amount would land in "Other G" instead of matching
+ * a PcrCategoryMapping that targets the promoted key directly.
+ * Used by Audits.tsx to compare against what the PCR shows as actually paid.
+ */
+export function computeStipendGroupTotals(
+  year: number,
+  month: number,
+  allReports: MonthlyReport[],
+  allSchedules: Schedule[],
+  settings: Settings,
+  allMappings: StipendMapping[],
+  promotedCodes: string[] = []
+): Record<string, number> {
+  const promoted = new Set(promotedCodes)
+  const amounts = { ...computeShiftStipendTotals(year, month, allReports, allSchedules, settings, allMappings, promotedCodes) }
+
+  const additionalByDate = new Map<string, number>()
+  for (const report of allReports) {
+    for (const [date, amount] of Object.entries(report.dayStipends ?? {})) {
+      additionalByDate.set(date, (additionalByDate.get(date) ?? 0) + amount)
+    }
+  }
+
+  const holidayList = settings.holidays[year] ?? computeFederalHolidays(year)
+  const entries = getScheduleEntriesForMonth(year, month, allSchedules)
+
+  for (const [date, shiftTypes] of entries) {
+    const addl = additionalByDate.get(date) ?? 0
+    if (addl <= 0) continue
+    const isWeekend = isWeekendOrHoliday(date, holidayList)
+    const dayGroups = new Set<string>()
+    for (const raw of shiftTypes) {
+      if (isOffDayShift(raw)) continue
+      dayGroups.add(getStipendGroupKey(resolveShiftAlias(raw.toUpperCase()), isWeekend, promoted))
+    }
+    const addlGroup = dayGroups.size === 1 ? [...dayGroups][0] : 'additional'
+    amounts[addlGroup] = (amounts[addlGroup] ?? 0) + addl
+  }
+
+  return amounts
+}
+
 // ─── Time helpers ─────────────────────────────────────────────────────────────
 
 /**

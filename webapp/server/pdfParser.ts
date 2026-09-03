@@ -59,12 +59,25 @@ export interface PcrPrintedTotals {
   totalDistribUnits: number
 }
 
+export interface PcrStatementLine {
+  label: string
+  section: 'stipend' | 'expense' | 'otherIncome' | 'other'
+  amount: number
+}
+
+export interface PcrIncomeStatementMonth {
+  year: number
+  month: number
+  lines: PcrStatementLine[]
+}
+
 export interface PcrExtractResult {
   doctorName: string
   criteria: Record<string, string>
   lineItems: PcrLineItem[]
   unitInfo: PcrUnitInfo | null
   printedTotals: PcrPrintedTotals | null
+  incomeStatement: PcrIncomeStatementMonth[]
 }
 
 async function withTempPdf<T>(buffer: Buffer, fn: (tmpPath: string) => Promise<T>): Promise<T> {

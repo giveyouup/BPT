@@ -153,25 +153,33 @@ def _looks_like_footer(row_words):
     return "PHIMED" in text.upper() or text.strip().startswith("©")
 
 
-def recover_missed_rows(page_img, rows, zoom):
+def recover_missed_rows(page_img, rows, zoom, start_boundary=HEADER_CUTOFF_PT,
+                         header_gap_pt=HEADER_TO_FIRST_ROW_GAP_PT, row_gap_pt=ROW_TO_ROW_GAP_PT):
     """tesseract's whole-page line-segmentation occasionally drops an entire
     row even though its pixels are perfectly legible in isolation --
-    confirmed directly on a real sample where a row sitting in an
-    anomalously large vertical gap (right after the header, in this case)
-    was invisible to the full-page OCR pass but read correctly on the first
-    try once that exact ~13pt band was cropped and re-OCR'd alone. Detects
-    any gap noticeably wider than the calibrated norms above (either from
-    the header cutoff to the first row, or between two consecutive rows)
-    and re-scans just that band. A false-positive re-scan is harmless here:
-    if nothing is actually there, tesseract finds no words and the gap is
-    left as-is; if it finds noise, `extract()`'s existing row classification
-    already discards anything that doesn't look like a real data/header row."""
+    confirmed directly on two real samples now (a Case Distribution Report
+    row, and separately a whole "EXPENSES" section-header row on an income
+    statement page) where the row was invisible to the full-page OCR pass
+    but read correctly on the first try once that exact band was cropped
+    and re-OCR'd alone. Detects any gap noticeably wider than the expected
+    per-page-type row spacing (either from `start_boundary` to the first
+    row, or between two consecutive rows) and re-scans just that band. A
+    false-positive re-scan is harmless here: if nothing is actually there,
+    tesseract finds no words and the gap is left as-is; if it finds noise,
+    the caller's own row classification already discards anything that
+    doesn't look like a real data/header row.
+
+    Defaults are calibrated for the Case Distribution Report table (21
+    real pages, 5 PDFs: header-to-first-row gap 6.0-7.5pt, row-to-row
+    ~12.25pt); pass `start_boundary`/`header_gap_pt`/`row_gap_pt` for a
+    differently-spaced page (the income statement's rows run ~13.7pt
+    apart, including from its own header row to the first body row)."""
     if not rows:
         return rows
     sorted_rows = sorted(rows, key=lambda r: r["top"])
-    boundaries = [(HEADER_CUTOFF_PT, HEADER_TO_FIRST_ROW_GAP_PT * 1.7, sorted_rows[0])]
+    boundaries = [(start_boundary, header_gap_pt * 1.7, sorted_rows[0])]
     boundaries += [
-        (a["top"], ROW_TO_ROW_GAP_PT * 1.6, b)
+        (a["top"], row_gap_pt * 1.6, b)
         for a, b in zip(sorted_rows, sorted_rows[1:])
     ]
 
@@ -793,6 +801,207 @@ def extract_unit_info(doc, doctors, cdr_doctor_name, target_month, target_year):
     }
 
 
+# ─── Bonus pages: Income Statement ("PCR - <doctor>", revenues + expenses) ────
+# Genuinely different from the other bonus pages above: column count (and
+# even page width) varies with how many months the statement covers -- 2
+# columns on a standard-width page for January, up to 13 columns on a
+# ~1026pt-wide page for December -- so column positions are derived from
+# each page's own header row every time, never a fixed anchor list.
+
+INCOME_STATEMENT_TITLE_RE = re.compile(r"pcr\s*-\s*\d", re.IGNORECASE)
+MONTH_HEADER_RE = re.compile(
+    r"^(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)$", re.IGNORECASE
+)
+YEAR_RE = re.compile(r"^\d{4}$")
+
+# The only three top-level dividers this feature needs to recognize by
+# name. A section opens on the bare header and closes on its own exact
+# "Total X" counterpart -- deliberately *not* indentation-based: measured
+# indentation is too fragile in practice (confirmed on a real sample
+# where a single badly-OCR'd row's bounding box landed ~11pt shallower
+# than it should have, which would have force-closed the wrong section).
+# Matching is done with whitespace stripped, since OCR occasionally
+# merges "Total X" into one word (seen elsewhere in this file too).
+SECTION_OPENER_KEYS = {
+    "stipends": "stipend",
+    "expenses": "expense",
+    "otherprofessionalincome": "otherIncome",
+}
+SECTION_CLOSER_KEYS = {
+    "totalstipends": True,
+    "totalexpenses": True,
+    "totalotherprofessionalincome": True,
+}
+
+
+def find_income_statement_pages(doc, cdr_doctor_name):
+    """Cheap top-band scan for the "PCR - <doctor>" income-statement pages
+    bundled elsewhere in the PDF. These span 2-3 *consecutive* pages (a
+    revenues page, then an expenses/summary continuation) -- returns that
+    contiguous run of page indices, or [] if none found."""
+    n_pages = len(doc)
+    pages = []
+    for pi in range(n_pages):
+        img = render_page(doc, pi, zoom=DETECT_ZOOM, clip_pt=DETECT_BAND_PT)
+        words = ocr_words(img, zoom=DETECT_ZOOM)
+        text_lower = " ".join(w["text"] for w in words).lower()
+        if INCOME_STATEMENT_TITLE_RE.search(text_lower) and physician_matches(text_lower, cdr_doctor_name):
+            pages.append(pi)
+    if not pages:
+        return []
+    run = [pages[0]]
+    for pi in pages[1:]:
+        if pi == run[-1] + 1:
+            run.append(pi)
+        else:
+            break
+    return run
+
+
+def parse_money(text):
+    """Parse a dollar figure that may have a '$' prefix, thousands commas,
+    and accounting-parens negatives (confirmed: OCR reads "(20,199.14)" as
+    one clean token). Also repairs the decimal-point-misread-as-colon bug
+    already fixed for the line-items table, since it's the same OCR engine
+    against the same kind of numeric text."""
+    if not text:
+        return None
+    t = text.strip().lstrip("$").strip()
+    if not t:
+        return None
+    neg = t.startswith("(") and t.endswith(")")
+    if neg:
+        t = t[1:-1]
+    t = t.replace(",", "")
+    t = fix_decimal_colon(t)
+    v = safe_float(t)
+    if v is None:
+        return None
+    return -v if neg else v
+
+
+def extract_income_statement(doc, page_indices):
+    """Parse the multi-page cash-basis income statement. Returns a list of
+    {"year", "month", "lines": [{"label", "section", "amount"}, ...]}, one
+    entry per real month column found -- the trailing TOTAL column is a
+    rollup, not a distinct month, and is discarded. STIPENDS/EXPENSES/
+    OTHER PROFESSIONAL INCOME open a section; their own "Total X" labels
+    close it again (see SECTION_OPENER_KEYS/SECTION_CLOSER_KEYS)."""
+    columns = None  # [{"month","year","anchor"}, ...] real months only, carried across pages
+    total_anchor = None
+    column_lines = None  # parallel to columns
+    current_section = "other"
+
+    for pi in page_indices:
+        img = render_page(doc, pi)
+        words = ocr_words(img)
+        rows = group_rows(words, tol=5.0)
+        if not rows:
+            continue
+
+        header_row = None
+        for r in rows:
+            texts_upper = [w["text"].upper() for w in r["words"]]
+            if "TOTAL" in texts_upper and any(MONTH_HEADER_RE.match(t) for t in texts_upper):
+                header_row = r
+                break
+
+        if header_row is not None:
+            # Confirmed on a real sample: tesseract's whole-page OCR can
+            # drop an entire row here too (an "EXPENSES" section header,
+            # in that case) -- unlike the Case Distribution Report table,
+            # this page's own header row sits a normal row-height above
+            # the first body row (~13.7pt), not a tight fixed cutoff.
+            rows = recover_missed_rows(img, rows, ZOOM,
+                                        start_boundary=header_row["top"],
+                                        header_gap_pt=13.7, row_gap_pt=13.7)
+
+        if columns is None:
+            if header_row is None:
+                continue  # can't establish columns from this page; try the next
+            columns, total_anchor = [], None
+            hw = header_row["words"]
+            i = 0
+            while i < len(hw):
+                text = hw[i]["text"].upper()
+                if text == "TOTAL":
+                    total_anchor = hw[i]["left"] + hw[i]["width"] / 2
+                    i += 1
+                elif MONTH_HEADER_RE.match(text) and i + 1 < len(hw) and YEAR_RE.match(hw[i + 1]["text"]):
+                    month = MONTH_ABBR3.index(text.lower()) + 1
+                    year = int(hw[i + 1]["text"])
+                    anchor = (hw[i]["left"] + hw[i + 1]["left"] + hw[i + 1]["width"]) / 2
+                    columns.append({"month": month, "year": year, "anchor": anchor})
+                    i += 2
+                else:
+                    i += 1
+            if not columns:
+                columns = None
+                continue
+            column_lines = [[] for _ in columns]
+
+        anchors = [c["anchor"] for c in columns]
+        last_anchor = total_anchor if total_anchor is not None else anchors[-1] + (anchors[-1] - anchors[-2] if len(anchors) > 1 else 100.0)
+        all_anchors = anchors + [last_anchor]
+        label_boundary = anchors[0] - (all_anchors[1] - anchors[0]) / 2
+        bounds = [label_boundary] + [(a + b) / 2 for a, b in zip(all_anchors, all_anchors[1:])] + [last_anchor + 1000.0]
+
+        header_top = header_row["top"] if header_row else -1
+        for row in rows:
+            if row is header_row or row["top"] <= header_top:
+                continue
+            label_parts, cells = [], [[] for _ in columns]
+            for w in row["words"]:
+                cx = w["left"] + w["width"] / 2
+                if cx < bounds[0]:
+                    label_parts.append(w)
+                    continue
+                for ci in range(len(columns)):
+                    if bounds[ci] <= cx < bounds[ci + 1]:
+                        cells[ci].append(w["text"])
+                        break
+                    if ci == len(columns) - 1 and bounds[ci + 1] <= cx < bounds[ci + 2]:
+                        pass  # falls in the discarded TOTAL column
+            if not label_parts:
+                continue
+            label_parts.sort(key=lambda w: w["left"])
+            label = " ".join(w["text"] for w in label_parts).strip()
+            label = re.sub(r'^["\']+', "", label)  # occasional stray leading quote glyph
+            if not label:
+                continue
+
+            # Normalize away spacing (OCR occasionally merges "Total X"
+            # into one word, as already seen elsewhere in this file) for
+            # matching against the known section open/close labels only;
+            # the original `label` (with spacing) is still what gets
+            # stored.
+            label_key = re.sub(r"\s+", "", label).lower()
+            if label_key in SECTION_OPENER_KEYS:
+                current_section = SECTION_OPENER_KEYS[label_key]
+                continue
+            if label_key in SECTION_CLOSER_KEYS:
+                current_section = "other"
+                continue
+            label_lower = label.lower()
+            if label_lower.startswith("total "):
+                continue
+
+            for ci, cell_words in enumerate(cells):
+                amount = parse_money(" ".join(cell_words)) if cell_words else None
+                column_lines[ci].append({
+                    "label": label,
+                    "section": current_section,
+                    "amount": amount if amount is not None else 0.0,
+                })
+
+    if not columns:
+        return []
+    return [
+        {"year": c["year"], "month": c["month"], "lines": lines}
+        for c, lines in zip(columns, column_lines)
+    ]
+
+
 # ─── xlsx writer (standalone CLI use only) ────────────────────────────────────
 
 THIN = Side(style="thin")
@@ -969,17 +1178,22 @@ def main():
             if args.json:
                 doctor_name = primary_doctor_name(doctors)
                 unit_info = None
+                income_statement = []
                 date_match = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{4})$", criteria.get("date_from") or "")
                 if date_match and doctor_name:
                     target_month, target_year = int(date_match.group(1)), int(date_match.group(3))
                     bonus_doc = fitz.open(args.pdf)
                     unit_info = extract_unit_info(bonus_doc, doctors, doctor_name, target_month, target_year)
+                    stmt_pages = find_income_statement_pages(bonus_doc, doctor_name)
+                    if stmt_pages:
+                        income_statement = extract_income_statement(bonus_doc, stmt_pages)
                 json.dump({
                     "doctorName": doctor_name,
                     "criteria": criteria,
                     "lineItems": line_items,
                     "unitInfo": unit_info,
                     "printedTotals": aggregate_printed_totals(doctors),
+                    "incomeStatement": income_statement,
                 }, sys.stdout)
             else:
                 print(f"{len(line_items)} line item(s) from {len(doctors)} doctor group(s)")

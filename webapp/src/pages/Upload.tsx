@@ -13,6 +13,7 @@ import type { ParseScheduleResult } from '../utils/schedulePaste'
 import { formatMonthYear, formatDateFull, lastDayOfMonth, MONTH_ABBREVS, getMonthName } from '../utils/dateUtils'
 import { useData } from '../context/DataContext'
 import type { LineItem, ShiftEntry, Schedule, StipendMapping, StipendRate } from '../types'
+import { applyPcrStipendCarveouts } from '../utils/pcrStipendCarveouts'
 
 function genId() { return `sched-${Date.now()}-${Math.random().toString(36).slice(2)}` }
 
@@ -122,7 +123,7 @@ function MonthPicker({ value, onChange, placeholder = 'Select' }: {
 
 function PcrUploadTab() {
   const navigate = useNavigate()
-  const { reports, settings, saveReport, physicians, activePhysicianId } = useData()
+  const { reports, schedules, settings, saveReport, physicians, activePhysicianId, savePcrIncomeStatement, pcrCategoryMappings, stipendMappings } = useData()
   const activePhysician = physicians.find(p => p.id === activePhysicianId)
 
   const [dragging, setDragging] = useState(false)
@@ -156,6 +157,11 @@ function PcrUploadTab() {
   // preview. null for xlsx uploads and for any PDF where that row wasn't
   // found/didn't parse (never blocks the upload, it's advisory only).
   const [printedTotals, setPrintedTotals] = useState<PcrPdfPrintedTotals | null>(null)
+  // Count of months auto-saved from the PDF's own income-statement pages
+  // (revenues/stipends/expenses breakdown), if any were found -- feeds the
+  // stipend-audit and expense-sync features. null when none were found
+  // (the common case for a bare line-items-only PDF, or for xlsx uploads).
+  const [incomeStatementMonthsSaved, setIncomeStatementMonthsSaved] = useState<number | null>(null)
 
   // Applies parsed line items the same way regardless of source (xlsx or PDF):
   // detect month/year, prefill $/unit from an existing report, and flag
@@ -201,6 +207,7 @@ function PcrUploadTab() {
     setPdfBusy(null)
     setDetectedUnitInfo(null)
     setPrintedTotals(null)
+    setIncomeStatementMonthsSaved(null)
   }
 
   const handleXlsxFile = useCallback(async (f: File) => {
@@ -261,6 +268,31 @@ function PcrUploadTab() {
           setUnitValue(result.unitInfo.unitDollarValue.toFixed(2))
           setUnitCorrection(String(result.unitInfo.unitCorrection))
         }
+      }
+      // Auto-save any income-statement (revenues/stipends/expenses) months
+      // found in the same PDF -- feeds the PCR stipend audit and expense
+      // sync features. Each PDF re-states every prior month too, so this
+      // naturally backfills/cross-checks earlier months as later ones are
+      // uploaded, same as the line items above.
+      if (result.incomeStatement.length > 0) {
+        for (const month of result.incomeStatement) {
+          const statement = {
+            id: `${month.year}-${String(month.month).padStart(2, '0')}`,
+            year: month.year,
+            month: month.month,
+            filename: file.name,
+            uploadDate: new Date().toISOString(),
+            lines: month.lines,
+          }
+          await savePcrIncomeStatement(statement)
+          // Fort Sutter / ROC / Alhambra are paid as a lump monthly amount on the
+          // PCR rather than computed per-shift -- carry that amount into the
+          // "Additional Stipend" entry for the source month (one month prior,
+          // per the PCR's payout lag) so it doesn't need to be typed in by hand.
+          const carveoutReport = applyPcrStipendCarveouts(statement, pcrCategoryMappings, reports, schedules, activePhysicianId, settings, stipendMappings)
+          if (carveoutReport) await saveReport(carveoutReport)
+        }
+        setIncomeStatementMonthsSaved(result.incomeStatement.length)
       }
     } catch (e) {
       setParseError(e instanceof Error ? e.message : 'Failed to extract PDF pages')
@@ -596,6 +628,13 @@ function PcrUploadTab() {
                 )}
               </div>
             </div>
+          )}
+
+          {incomeStatementMonthsSaved !== null && (
+            <p className="text-xs text-emerald-500">
+              ✓ Also found and saved {incomeStatementMonthsSaved} month{incomeStatementMonthsSaved !== 1 ? 's' : ''} of
+              income-statement data (revenues, stipends, expenses) for the stipend audit and expense tracking.
+            </p>
           )}
 
           {serviceDates.length > 0 && (

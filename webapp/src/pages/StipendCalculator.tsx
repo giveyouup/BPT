@@ -1,10 +1,13 @@
 import { useState, useMemo, Fragment } from 'react'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, ResponsiveContainer } from 'recharts'
 import { useData } from '../context/DataContext'
-import { getApplicableMapping } from '../utils/calculations'
+import {
+  getApplicableMapping, classifyStipendBase, getShiftStipendAmount,
+  STIPEND_PROMOTABLE_BASE_KEYS, parseStipendPromotionKey, getStipendGroupKey, stipendPromotionKey,
+} from '../utils/calculations'
 import { formatCurrency, formatCurrencyFull, formatDateFull, getMonthName } from '../utils/dateUtils'
-import { isCallShift, isOffDayShift, isWeekendOrHoliday, resolveShiftAlias, computeFederalHolidays, isAlwaysWeekendStipend } from '../utils/shiftUtils'
-import type { StipendMapping } from '../types'
+import { isOffDayShift, isWeekendOrHoliday, resolveShiftAlias, computeFederalHolidays } from '../utils/shiftUtils'
+import { resolvePcrCategoryMapping } from '../utils/pcrCategoryMatching'
 
 const CHART_STYLE = {
   contentStyle: { fontSize: 12, borderRadius: 8, border: '1px solid #1f2937', backgroundColor: '#111827', color: '#f3f4f6' },
@@ -23,58 +26,13 @@ const AXIS_PROPS = {
 // to their own column — see buildGroups() below, which inserts a column per promotion.
 
 const BASE_GROUP_KEYS = ['mainOrCall', 'otherG', 'APS', 'BR', 'NIR', 'ROC', 'GI', 'FS', 'alhambra', 'other', 'additional'] as const
-const PROMOTABLE_BASE_KEYS = new Set(['otherG', 'other'])
-const PROMO_SEP = '::'
+const PROMOTABLE_BASE_KEYS = STIPEND_PROMOTABLE_BASE_KEYS
 
-function classifyBase(canonical: string): string {
-  if (isCallShift(canonical)) return 'mainOrCall'
-  if (/^G\d+$/.test(canonical)) return 'otherG'
-  if (canonical === 'APS') return 'APS'
-  if (canonical === 'BR') return 'BR'
-  if (canonical === 'NIR') return 'NIR'
-  if (canonical === 'ROC') return 'ROC'
-  if (canonical === 'GI') return 'GI'
-  if (/^FS\d*$/i.test(canonical)) return 'FS'
-  if (/^A\d+$/i.test(canonical)) return 'alhambra'
-  return 'other'
-}
-
-// Promotion is keyed by (code, weekday/weekend) pair so weekend/holiday shifts
-// can be broken out independently of weekday shifts for the same code.
-function promotionKey(canonical: string, isWeekend: boolean): string {
-  return `${canonical}${PROMO_SEP}${isWeekend ? 'weekend' : 'weekday'}`
-}
-
-function parsePromotionKey(key: string): { code: string; isWeekend: boolean } | null {
-  const idx = key.lastIndexOf(PROMO_SEP)
-  if (idx === -1) return null
-  return { code: key.slice(0, idx), isWeekend: key.slice(idx + PROMO_SEP.length) === 'weekend' }
-}
-
-function getStipendGroup(canonical: string, isWeekend: boolean, promoted: Set<string>): string {
-  const base = classifyBase(canonical)
-  if (PROMOTABLE_BASE_KEYS.has(base)) {
-    const key = promotionKey(canonical, isWeekend)
-    if (promoted.has(key)) return key
-  }
-  return base
-}
-
-function getShiftStipend(raw: string, isWeekend: boolean, mapping: StipendMapping): number {
-  const shiftType = resolveShiftAlias(raw.toUpperCase())
-  if (isCallShift(shiftType)) {
-    const key = `${shiftType}_${isWeekend ? 'weekend' : 'weekday'}`.toLowerCase()
-    return mapping.rates.find((r) => r.shiftType.toLowerCase() === key)?.amount ?? 0
-  }
-  if (isAlwaysWeekendStipend(shiftType)) {
-    const key = `${shiftType}_weekend`.toLowerCase()
-    return mapping.rates.find((r) => r.shiftType.toLowerCase() === key)?.amount ?? 0
-  }
-  const variantKey = `${shiftType}_${isWeekend ? 'weekend' : 'weekday'}`.toLowerCase()
-  const variantRate = mapping.rates.find((r) => r.shiftType.toLowerCase() === variantKey)
-  if (variantRate) return variantRate.amount
-  return mapping.rates.find((r) => r.shiftType.toLowerCase() === shiftType.toLowerCase())?.amount ?? 0
-}
+const classifyBase = classifyStipendBase
+const promotionKey = stipendPromotionKey
+const parsePromotionKey = parseStipendPromotionKey
+const getStipendGroup = getStipendGroupKey
+const getShiftStipend = getShiftStipendAmount
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -159,10 +117,38 @@ function getDayOfWeek(date: string): string {
   return new Date(date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short' })
 }
 
+// ─── PCR match indicator (PCR view only) ─────────────────────────────────────
+// A cell "matches" when a PCR income statement for that month has a mapped
+// stipend line for this group and its paid amount is within a cent of the
+// owed amount already shown in the cell -- same comparison Audits.tsx's PCR
+// Stipend Audit makes, just surfaced inline instead of in a separate table.
+
+type PcrMatchStatus = 'match' | 'mismatch'
+
+function PcrMatchBadge({ status, paid, owed }: { status: PcrMatchStatus; paid: number; owed: number }) {
+  if (status === 'match') {
+    return (
+      <svg className="w-3 h-3 text-emerald-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <title>{`Matches PCR paid amount (${formatCurrency(paid)})`}</title>
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
+      </svg>
+    )
+  }
+  return (
+    <svg className="w-3 h-3 text-amber-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <title>{`PCR paid ${formatCurrency(paid)}, differs from owed ${formatCurrency(owed)}`}</title>
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 9v3.75m0 3.75h.007M10.29 3.86L1.82 18a1.5 1.5 0 001.29 2.25h17.78a1.5 1.5 0 001.29-2.25L13.71 3.86a1.5 1.5 0 00-2.42 0z" />
+    </svg>
+  )
+}
+
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export default function StipendCalculator() {
-  const { reports, schedules: allSchedules, settings, stipendMappings: allMappings, saveReport, saveSettings } = useData()
+  const {
+    reports, schedules: allSchedules, settings, stipendMappings: allMappings, saveReport, saveSettings,
+    pcrIncomeStatements, pcrCategoryMappings,
+  } = useData()
 
   const scheduleYears = allSchedules.flatMap((s) => s.entries.map((e) => parseInt(e.date.slice(0, 4))))
   const reportYears = reports.map((r) => r.year)
@@ -309,6 +295,35 @@ export default function StipendCalculator() {
     }
   }
 
+  // PCR-paid amounts per (display month -> group -> amount), from mapped stipend
+  // lines on that month's own PCR income statement -- the display month's PCR
+  // is the one reporting the source (prior) month's stipends as paid. Used to
+  // show a per-cell match/mismatch indicator, PCR view only.
+  const pcrPaidByMonth = new Map<number, Record<string, number>>()
+  if (viewMode === 'pcr') {
+    for (const stmt of pcrIncomeStatements) {
+      if (stmt.year !== selectedYear) continue
+      const paid: Record<string, number> = {}
+      for (const line of stmt.lines) {
+        if (line.section !== 'stipend') continue
+        const mapping = resolvePcrCategoryMapping(line.label, 'stipend', pcrCategoryMappings)
+        if (!mapping) continue
+        paid[mapping.targetKey] = (paid[mapping.targetKey] ?? 0) + line.amount
+      }
+      pcrPaidByMonth.set(stmt.month, paid)
+    }
+  }
+
+  function getPcrStatus(month: number, group: string, owed: number): PcrMatchStatus | null {
+    const paidMap = pcrPaidByMonth.get(month)
+    if (!paidMap || !(group in paidMap)) return null
+    return Math.abs(paidMap[group] - owed) <= 0.01 ? 'match' : 'mismatch'
+  }
+
+  function getPcrPaid(month: number, group: string): number {
+    return pcrPaidByMonth.get(month)?.[group] ?? 0
+  }
+
   const totals = groups.reduce((acc, g) => {
     acc[g.key] = rows.reduce((s, r) => s + (r.amounts[g.key] ?? 0), 0)
     return acc
@@ -316,7 +331,13 @@ export default function StipendCalculator() {
 
   const rowTotal = (r: MonthRow) => Object.values(r.amounts).reduce((s, v) => s + v, 0)
   const grandTotal = rows.reduce((s, r) => s + rowTotal(r), 0)
-  const visibleGroups = groups.filter((g) => rows.some((r) => (r.amounts[g.key] ?? 0) > 0))
+  // A group with zero owed everywhere still needs a column if a PCR paid amount
+  // exists for it in some month with nothing owed to offset it against — e.g.
+  // no NIR shifts worked but the PCR still paid out $1,500 for NIR that month.
+  const visibleGroups = groups.filter((g) =>
+    rows.some((r) => (r.amounts[g.key] ?? 0) > 0) ||
+    (viewMode === 'pcr' && rows.some((r) => getPcrStatus(r.month, g.key, r.amounts[g.key] ?? 0) === 'mismatch'))
+  )
 
   const mappingNames = [...new Set(rows.map((r) => r.mappingName).filter(Boolean))]
   const footerMappingLabel = mappingNames.length === 1 ? mappingNames[0] : mappingNames.length > 1 ? 'varies' : null
@@ -528,7 +549,10 @@ export default function StipendCalculator() {
             const total = rowTotal(row)
             const isRowExpanded = activeCell?.month === row.month
             const expandedGroup = isRowExpanded ? activeCell!.group : null
-            const nonZeroGroups = visibleGroups.filter((g) => (row.amounts[g.key] ?? 0) > 0)
+            const nonZeroGroups = visibleGroups.filter((g) =>
+              (row.amounts[g.key] ?? 0) > 0 ||
+              (viewMode === 'pcr' && getPcrStatus(row.month, g.key, row.amounts[g.key] ?? 0) === 'mismatch')
+            )
 
             return (
               <div key={`${row.year}-${row.month}`} className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
@@ -550,6 +574,8 @@ export default function StipendCalculator() {
                   {nonZeroGroups.map((g) => {
                     const isActive = expandedGroup === g.key
                     const detailRows = row.details.filter((d) => d.group === g.key).sort((a, b) => a.date.localeCompare(b.date))
+                    const cellValue = row.amounts[g.key] ?? 0
+                    const pcrStatus = viewMode === 'pcr' ? getPcrStatus(row.month, g.key, cellValue) : null
                     return (
                       <div key={g.key}>
                         <button
@@ -557,8 +583,9 @@ export default function StipendCalculator() {
                           className={`w-full flex items-center justify-between rounded-lg px-2 py-1.5 transition-colors ${isActive ? g.activeBg : 'hover:bg-gray-800/50'}`}
                         >
                           <span className="text-xs text-gray-500">{g.label}</span>
-                          <span className={`text-sm font-medium ${g.cellClass} ${isActive ? 'underline underline-offset-2' : ''}`}>
-                            {formatCurrencyFull(row.amounts[g.key] ?? 0)}
+                          <span className={`inline-flex items-center gap-1 text-sm font-medium ${g.cellClass} ${isActive ? 'underline underline-offset-2' : ''}`}>
+                            {formatCurrencyFull(cellValue)}
+                            {pcrStatus && <PcrMatchBadge status={pcrStatus} paid={getPcrPaid(row.month, g.key)} owed={cellValue} />}
                           </span>
                         </button>
                         {/* Inline detail panel */}
@@ -675,6 +702,7 @@ export default function StipendCalculator() {
                           const isActive = expandedGroup === g.key
                           const value = row.amounts[g.key] ?? 0
                           const hasValue = value > 0
+                          const pcrStatus = viewMode === 'pcr' ? getPcrStatus(row.month, g.key, value) : null
                           return (
                             <td
                               key={g.key}
@@ -683,8 +711,9 @@ export default function StipendCalculator() {
                                 hasValue ? 'cursor-pointer' : ''
                               } ${isActive ? g.activeBg : ''} ${hasValue ? g.cellClass : 'text-gray-700'}`}
                             >
-                              <span className={hasValue && isActive ? 'underline underline-offset-2' : ''}>
+                              <span className={`inline-flex items-center gap-1 ${hasValue && isActive ? 'underline underline-offset-2' : ''}`}>
                                 {hasValue ? formatCurrencyFull(value) : '—'}
+                                {pcrStatus && <PcrMatchBadge status={pcrStatus} paid={getPcrPaid(row.month, g.key)} owed={value} />}
                               </span>
                             </td>
                           )

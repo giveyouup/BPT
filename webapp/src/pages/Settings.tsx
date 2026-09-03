@@ -78,6 +78,7 @@ export default function Settings() {
     saveStipendMapping,
     deleteStipendMapping,
     cptRanges,
+    pcrCategoryMappings,
     physicians,
     savePhysician,
   } = useData()
@@ -85,6 +86,8 @@ export default function Settings() {
   const [settings, setSettings] = useState(apiSettings)
   const [saved, setSaved] = useState(false)
   const [defaultsOpen, setDefaultsOpen] = useState(false)
+  const [holidaysOpen, setHolidaysOpen] = useState(false)
+  const [stipendRatesOpen, setStipendRatesOpen] = useState(false)
 
   // ── Your name (single-user: there's always exactly one physician record) ──
   const activePhysician = physicians[0]
@@ -653,86 +656,117 @@ export default function Settings() {
         )}
       </section>
 
-      {/* Federal Holidays */}
-      <section className="bg-gray-900 rounded-xl border border-gray-800 p-6 mb-6">
-        <div className="flex items-center justify-between mb-4">
-          <div>
-            <h3 className="text-sm font-semibold text-gray-300">Federal Holidays</h3>
-            <p className="text-xs text-gray-600 mt-0.5">
-              Used to classify G1/G2 call shifts as weekday vs. weekend/holiday.
-            </p>
-          </div>
-          <select
-            value={holidayYear}
-            onChange={(e) => setHolidayYear(Number(e.target.value))}
-            className={selectCls}
+      {/* Federal Holidays (collapsible) */}
+      <section className="bg-gray-900 rounded-xl border border-gray-800 mb-6">
+        <button
+          type="button"
+          onClick={() => setHolidaysOpen((o) => !o)}
+          className="w-full flex items-center justify-between px-6 py-4 text-left"
+        >
+          <span className="text-sm font-semibold text-gray-300">Federal Holidays</span>
+          <svg
+            className={`w-4 h-4 text-gray-500 transition-transform ${holidaysOpen ? 'rotate-180' : ''}`}
+            fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
           >
-            {years.map((y) => (
-              <option key={y} value={y}>{y}</option>
-            ))}
-          </select>
-        </div>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+          </svg>
+        </button>
 
-        <div className="space-y-1 mb-4">
-          {federalHolidays.map(({ date, label }) => (
-            <label key={date} className="flex items-center gap-3 py-1.5 px-2 rounded hover:bg-gray-800 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={isHolidayActive(date)}
-                onChange={() => toggleHoliday(date)}
-                className="accent-indigo-500"
-              />
-              <span className="text-sm text-gray-300 flex-1">{label}</span>
-              <span className="text-xs text-gray-600">{formatDateFull(date)}</span>
-            </label>
-          ))}
-        </div>
+        {holidaysOpen && (
+          <div className="px-6 pb-6 border-t border-gray-800 pt-5">
+            <div className="flex items-center justify-between mb-4">
+              <p className="text-xs text-gray-600">
+                Used to classify G1/G2 call shifts as weekday vs. weekend/holiday.
+              </p>
+              <select
+                value={holidayYear}
+                onChange={(e) => setHolidayYear(Number(e.target.value))}
+                className={selectCls}
+              >
+                {years.map((y) => (
+                  <option key={y} value={y}>{y}</option>
+                ))}
+              </select>
+            </div>
 
-        {customDates.length > 0 && (
-          <div className="border-t border-gray-800 pt-3 mb-3">
-            <p className="text-xs font-semibold text-gray-600 uppercase tracking-wider mb-2">Custom Dates</p>
-            <div className="space-y-1">
-              {customDates.map((date) => (
-                <div key={date} className="flex items-center gap-3 py-1.5 px-2">
-                  <span className="text-sm text-gray-300 flex-1">{formatDateFull(date)}</span>
-                  <button
-                    onClick={() => removeCustomDate(date)}
-                    className="text-gray-600 hover:text-red-400 transition-colors"
-                  >
-                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                    </svg>
-                  </button>
-                </div>
+            <div className="space-y-1 mb-4">
+              {federalHolidays.map(({ date, label }) => (
+                <label key={date} className="flex items-center gap-3 py-1.5 px-2 rounded hover:bg-gray-800 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={isHolidayActive(date)}
+                    onChange={() => toggleHoliday(date)}
+                    className="accent-indigo-500"
+                  />
+                  <span className="text-sm text-gray-300 flex-1">{label}</span>
+                  <span className="text-xs text-gray-600">{formatDateFull(date)}</span>
+                </label>
               ))}
+            </div>
+
+            {customDates.length > 0 && (
+              <div className="border-t border-gray-800 pt-3 mb-3">
+                <p className="text-xs font-semibold text-gray-600 uppercase tracking-wider mb-2">Custom Dates</p>
+                <div className="space-y-1">
+                  {customDates.map((date) => (
+                    <div key={date} className="flex items-center gap-3 py-1.5 px-2">
+                      <span className="text-sm text-gray-300 flex-1">{formatDateFull(date)}</span>
+                      <button
+                        onClick={() => removeCustomDate(date)}
+                        className="text-gray-600 hover:text-red-400 transition-colors"
+                      >
+                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="flex items-center gap-2 border-t border-gray-800 pt-3">
+              <input
+                type="text"
+                placeholder="YYYY-MM-DD"
+                value={customDateInput}
+                onChange={(e) => setCustomDateInput(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') addCustomDate() }}
+                className="bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-xs text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 w-36"
+              />
+              <button
+                onClick={addCustomDate}
+                className="text-xs text-indigo-400 font-medium hover:text-indigo-300"
+              >
+                Add custom date
+              </button>
             </div>
           </div>
         )}
-
-        <div className="flex items-center gap-2 border-t border-gray-800 pt-3">
-          <input
-            type="text"
-            placeholder="YYYY-MM-DD"
-            value={customDateInput}
-            onChange={(e) => setCustomDateInput(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter') addCustomDate() }}
-            className="bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-xs text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 w-36"
-          />
-          <button
-            onClick={addCustomDate}
-            className="text-xs text-indigo-400 font-medium hover:text-indigo-300"
-          >
-            Add custom date
-          </button>
-        </div>
       </section>
 
-      {/* Stipend Rate Schedules */}
-      <section className="bg-gray-900 rounded-xl border border-gray-800 p-6 mb-6">
+      {/* Stipend Rate Schedules (collapsible) */}
+      <section className="bg-gray-900 rounded-xl border border-gray-800 mb-6">
+        <button
+          type="button"
+          onClick={() => setStipendRatesOpen((o) => !o)}
+          className="w-full flex items-center justify-between px-6 py-4 text-left"
+        >
+          <span className="text-sm font-semibold text-gray-300">Stipend Rate Schedules</span>
+          <svg
+            className={`w-4 h-4 text-gray-500 transition-transform ${stipendRatesOpen ? 'rotate-180' : ''}`}
+            fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
+          >
+            <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+          </svg>
+        </button>
+
+        {stipendRatesOpen && (
+        <div className="px-6 pb-6 border-t border-gray-800 pt-5">
         <div className="flex items-center justify-between mb-4">
           <div>
             <div className="flex items-center gap-1.5">
-              <h3 className="text-sm font-semibold text-gray-300">Stipend Rate Schedules</h3>
+              <span className="text-xs text-gray-600">Each schedule applies from its effective month until the next one begins.</span>
               <div className="relative group">
                 <button
                   type="button"
@@ -763,9 +797,6 @@ export default function Settings() {
                 </div>
               </div>
             </div>
-            <p className="text-xs text-gray-600 mt-0.5">
-              Each schedule applies from its effective month until the next one begins.
-            </p>
           </div>
           <div className="flex items-center gap-2">
             <label className="cursor-pointer text-xs text-indigo-400 hover:text-indigo-300 font-medium border border-indigo-800 rounded-md px-3 py-1.5 hover:bg-indigo-900/30 transition-colors">
@@ -1024,6 +1055,8 @@ export default function Settings() {
             )
           })}
         </div>
+        </div>
+        )}
       </section>
 
       {/* Code Reference */}
@@ -1036,6 +1069,18 @@ export default function Settings() {
           <div className="text-left">
             <p className="text-sm font-medium text-gray-200">CPT Code Ranges</p>
             <p className="text-xs text-gray-600 mt-0.5">{cptRanges.length} ranges configured</p>
+          </div>
+          <svg className="w-4 h-4 text-gray-600 group-hover:text-gray-400 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+          </svg>
+        </button>
+        <button
+          onClick={() => navigate('/settings/pcr-category-mapping')}
+          className="flex items-center justify-between w-full px-4 py-3 mt-3 bg-gray-900 border border-gray-800 rounded-xl hover:border-gray-700 transition-colors group"
+        >
+          <div className="text-left">
+            <p className="text-sm font-medium text-gray-200">PCR Category Mapping</p>
+            <p className="text-xs text-gray-600 mt-0.5">{pcrCategoryMappings.length} label{pcrCategoryMappings.length !== 1 ? 's' : ''} mapped</p>
           </div>
           <svg className="w-4 h-4 text-gray-600 group-hover:text-gray-400 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />

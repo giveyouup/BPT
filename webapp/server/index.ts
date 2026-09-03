@@ -13,6 +13,8 @@ import {
   getCptRanges, upsertCptRange, deleteCptRange as deleteCptRangeDb, resetCptRanges,
   getMonthlyExpenses, upsertMonthlyExpenses, deleteMonthlyExpenses,
   getAnnualExpenses, upsertAnnualExpenses, deleteAnnualExpenses,
+  getPcrIncomeStatements, upsertPcrIncomeStatement, deletePcrIncomeStatement,
+  getPcrCategoryMappings, upsertPcrCategoryMapping, deletePcrCategoryMapping, resetPcrCategoryMappings,
   exportDatabase, importDatabase, runMaintenance,
 } from './db'
 
@@ -228,6 +230,39 @@ app.delete('/api/annual-expenses/:id', (req, res) => {
   if (!physicianId) return res.status(400).json({ error: 'physicianId required' })
   deleteAnnualExpenses(req.params.id, physicianId)
   res.json({ ok: true })
+})
+
+// ─── PCR Income Statements ─────────────────────────────────────────────────────
+
+app.get('/api/pcr-income-statements', (req, res) => {
+  res.json(getPcrIncomeStatements(req.query.physicianId as string | undefined))
+})
+app.put('/api/pcr-income-statements/:id', (req, res) => {
+  upsertPcrIncomeStatement(req.body)
+  res.json({ ok: true })
+})
+app.delete('/api/pcr-income-statements/:id', (req, res) => {
+  const physicianId = req.query.physicianId as string | undefined
+  if (!physicianId) return res.status(400).json({ error: 'physicianId required' })
+  deletePcrIncomeStatement(req.params.id, physicianId)
+  res.json({ ok: true })
+})
+
+// ─── PCR Category Mappings ──────────────────────────────────────────────────────
+
+app.get('/api/pcr-category-mappings', (_req, res) => res.json(getPcrCategoryMappings()))
+app.put('/api/pcr-category-mappings/:id', (req, res) => {
+  upsertPcrCategoryMapping(req.body)
+  res.json({ ok: true })
+})
+app.delete('/api/pcr-category-mappings/:id', (req, res) => {
+  deletePcrCategoryMapping(req.params.id)
+  res.json({ ok: true })
+})
+app.post('/api/pcr-category-mappings/reset', (req, res) => {
+  const section = req.query.section as 'stipend' | 'expense' | undefined
+  if (section !== 'stipend' && section !== 'expense') return res.status(400).json({ error: 'section must be "stipend" or "expense"' })
+  res.json(resetPcrCategoryMappings(section))
 })
 
 // ─── DB Maintenance ───────────────────────────────────────────────────────────

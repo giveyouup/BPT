@@ -105,6 +105,11 @@ export interface MonthlyReport {
   workingDayOverrides: Record<string, number> // date -> hours
   dayStipends: Record<string, number>        // date -> additional per-day stipend
   dayNotes?: Record<string, string>          // date -> free-text note
+  // date -> group ('FS'|'ROC'|'alhambra') this dayStipends[date] value was
+  // auto-populated for by PCR ingestion (see utils/pcrStipendCarveouts.ts) --
+  // lets a later re-run find and clear its own prior write before placing a
+  // fresh one, instead of leaving a stale duplicate behind.
+  autoStipendCarveouts?: Record<string, string>
   stipends: Stipend[]        // additional (manual) stipends (legacy)
   autoSplit?: boolean        // true when created by splitting a multi-month upload
   stipendMappingOverride?: string  // mapping id — overrides date-based auto-selection
@@ -144,6 +149,7 @@ export interface Settings {
   stipendMappingOverrides?: Record<string, string> // "YYYY-MM" -> mapping id (for months without a report)
   cashCutoffs?: Record<number, string>             // year -> ISO date "YYYY-MM-DD" (end of unit-pay cash period)
   promotedStipendCodes?: string[]                  // shift codes broken out of "Other G"/"Other" into their own column
+  hiddenPcrLabels?: { stipend: string[]; expense: string[] } // unmapped PCR labels dismissed from the mapping page's suggestion chips
 }
 
 export interface CptRange {
@@ -178,4 +184,43 @@ export interface AnnualExpenses {
   benefitsEntries?: ExpenseEntry[]    // free-form benefits entries
   retirementEntries?: ExpenseEntry[]  // free-form retirement entries
   otherIncomeEntries?: ExpenseEntry[] // free-form other income entries
+}
+
+// Raw revenues/expenses line items extracted from a PCR bundle's income-
+// statement pages (separate from the Case Distribution Report's own line
+// items). `section` is derived at extraction time from which of the
+// statement's own top-level headers (STIPENDS / EXPENSES / OTHER
+// PROFESSIONAL INCOME) the line fell under; "other" covers everything else
+// (Professional Fees, Operating Reserves, etc) -- stored for completeness
+// but not consumed by the stipend-audit or expense-sync features.
+export interface PcrStatementLine {
+  label: string       // verbatim PCR-printed label, e.g. "SMCS Acute Pain"
+  section: 'stipend' | 'expense' | 'otherIncome' | 'other'
+  amount: number
+}
+
+export interface PcrIncomeStatement {
+  id: string   // "YYYY-MM"
+  year: number
+  month: number
+  physicianId?: string
+  filename: string
+  uploadDate: string
+  lines: PcrStatementLine[]
+}
+
+// User-configured mapping from a PCR-printed label to one of the app's own
+// internal categories -- required because PCR labels are free text that
+// varies between report periods, while StipendCalculator's categories
+// (mainOrCall/otherG/APS/BR/NIR/ROC/GI/FS/alhambra/other/additional) and
+// AnnualExpenses' leaf keys are both fixed, unrelated vocabularies.
+export interface PcrCategoryMapping {
+  id: string
+  label: string   // matched as a case-insensitive substring against the PCR's own
+                    // printed line label (not an exact match) -- e.g. "Acute Pain"
+                    // matches the real printed label "SMCS Acute Pain"
+  section: 'stipend' | 'expense'
+  targetKey: string  // stipend: a StipendCalculator group key; expense: an
+                      // AnnualExpenses leaf key, or a free-form category
+                      // name routed into its entries[]
 }
