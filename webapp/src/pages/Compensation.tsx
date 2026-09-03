@@ -1,7 +1,9 @@
-import { useState, useMemo, useEffect, useRef } from 'react'
+import { useState, useMemo, useEffect, useRef, Fragment } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from 'recharts'
 import { useData } from '../context/DataContext'
 import { computeCalendarYearStats, computeCashYearStats, computeCalendarMonthStats, getStipendForDay, getApplicableMapping } from '../utils/calculations'
+import { resolvePcrCategoryMapping } from '../utils/pcrCategoryMatching'
 import { formatCurrency, formatMonthYear, formatDateShort, randomId } from '../utils/dateUtils'
 import { resolveShiftAlias } from '../utils/shiftUtils'
 import type { ExpenseEntry, AnnualExpenses } from '../types'
@@ -40,8 +42,21 @@ const RETIREMENT_KEYS  = new Set(RETIREMENT_LEAVES.map(l => l.key))
 const HEALTHCARE_KEYS  = new Set(['healthDental', 'healthMedical', 'healthVision', 'healthBenicomp'])
 const ACTIVE_KEYS      = new Set([...BUSINESS_KEYS, ...BENEFITS_KEYS, ...RETIREMENT_KEYS, 'carryforwardIn', 'yearEndBalance'])
 const ALL_LEAVES       = [...BUSINESS_LEAVES, ...BENEFITS_LEAVES, ...RETIREMENT_LEAVES]
+const LEAF_LABELS      = Object.fromEntries(ALL_LEAVES.map(l => [l.key, l.label])) as Record<string, string>
 
 type Section = 'business' | 'benefits' | 'retirement' | 'otherIncome'
+
+interface PcrSyncChange {
+  key: string
+  label: string
+  current: number
+  proposed: number
+}
+
+interface PcrSyncPreview {
+  changes: PcrSyncChange[]
+  unmappedLabels: string[]
+}
 
 function initDraft(rec: AnnualExpenses | undefined, annualGross: number): Record<string, string> {
   const draft: Record<string, string> = {}
@@ -136,7 +151,11 @@ function EntryList({ entries, onDelete }: { entries: ExpenseEntry[]; onDelete: (
 // ─── Main component ────────────────────────────────────────────────────────────
 
 export default function Compensation() {
-  const { reports, schedules, settings, stipendMappings, annualExpenses, saveAnnualExpenses, deleteAnnualExpenses, saveSettings } = useData()
+  const {
+    reports, schedules, settings, stipendMappings, annualExpenses, saveAnnualExpenses, deleteAnnualExpenses, saveSettings,
+    pcrIncomeStatements, pcrCategoryMappings,
+  } = useData()
+  const navigate = useNavigate()
 
   const now = new Date()
   const currentYear = now.getFullYear()
@@ -153,6 +172,8 @@ export default function Compensation() {
   const [editingCutoff, setEditingCutoff] = useState(false)
   const [cutoffInput, setCutoffInput] = useState('')
   const [draft, setDraft] = useState<Record<string, string>>({})
+  const [pcrSyncPreview, setPcrSyncPreview] = useState<PcrSyncPreview | null>(null)
+  const [pcrSyncing, setPcrSyncing] = useState(false)
   const draftKey = useRef<string>('')
   const [pieDrill, setPieDrill] = useState<'benefits' | 'retirement' | null>(null)
   const [grossBreakdownOpen, setGrossBreakdownOpen] = useState(true)
@@ -398,6 +419,86 @@ export default function Compensation() {
     }
     if (!hasAnything(updated)) await deleteAnnualExpenses(updated.id)
     else await saveAnnualExpenses(updated)
+  }
+
+  // ── Sync from PCR ────────────────────────────────────────────────────────────
+  // Sums each PCR expense line (via PcrCategoryMapping) across every income
+  // statement for the selected year -- no payout lag here, unlike stipends;
+  // a PCR's expense column reflects that same month's own costs. A known leaf
+  // key updates `recurring[key]` directly; anything else is treated as a
+  // free-form category and upserted into `entries[]` by matching category name
+  // (so re-syncing updates the same entry instead of piling up duplicates).
+
+  function buildPcrSyncPreview(): PcrSyncPreview {
+    const proposed: Record<string, number> = {}
+    const unmapped = new Set<string>()
+
+    for (const stmt of pcrIncomeStatements) {
+      if (stmt.year !== selectedYear) continue
+      for (const line of stmt.lines) {
+        // "Operating Reserves" items (operating fee, development reserve, the
+        // flat operating expense) sit before the PCR's own EXPENSES header
+        // opens, so extraction tags them 'other' rather than 'expense' -- but
+        // they're still real Compensation-page categories, so a mapping can
+        // still target them. Everything else under 'other' is a revenue/
+        // balance rollup (PCR Surplus, rolled-forward balance, etc.) that was
+        // never meant to be categorized, so an unmapped 'other' line is never
+        // flagged the way an unmapped 'expense' line is.
+        if (line.section !== 'expense' && line.section !== 'other') continue
+        const mapping = resolvePcrCategoryMapping(line.label, 'expense', pcrCategoryMappings)
+        if (!mapping) { if (line.section === 'expense') unmapped.add(line.label); continue }
+        proposed[mapping.targetKey] = (proposed[mapping.targetKey] ?? 0) + line.amount
+      }
+    }
+
+    const record = currentRecord
+    const changes: PcrSyncChange[] = []
+    for (const [key, proposedAmt] of Object.entries(proposed)) {
+      const rounded = Math.round(proposedAmt * 100) / 100
+      const current = ACTIVE_KEYS.has(key)
+        ? (record?.recurring?.[key] ?? 0)
+        : (record?.entries ?? []).filter(e => e.category === key).reduce((s, e) => s + e.amount, 0)
+      if (Math.abs(rounded - current) < 0.01) continue
+      changes.push({ key, label: LEAF_LABELS[key] ?? key, current, proposed: rounded })
+    }
+    changes.sort((a, b) => a.label.localeCompare(b.label))
+
+    return { changes, unmappedLabels: [...unmapped].sort() }
+  }
+
+  async function applyPcrSync() {
+    if (!pcrSyncPreview) return
+    setPcrSyncing(true)
+    try {
+      const record = getOrCreate()
+      const recurringUpdates: Record<string, number> = {}
+      const entries = [...(record.entries ?? [])]
+
+      for (const change of pcrSyncPreview.changes) {
+        if (ACTIVE_KEYS.has(change.key)) {
+          recurringUpdates[change.key] = change.proposed
+        } else {
+          const idx = entries.findIndex(e => e.category === change.key)
+          if (idx >= 0) entries[idx] = { ...entries[idx], amount: change.proposed }
+          else if (change.proposed !== 0) entries.push({ id: randomId(), category: change.key, amount: change.proposed })
+        }
+      }
+
+      const updated: AnnualExpenses = {
+        ...record,
+        recurring: { ...(record.recurring ?? {}), ...recurringUpdates },
+        entries: entries.filter(e => e.amount !== 0),
+      }
+      await saveAnnualExpenses(updated)
+      setDraft(d => {
+        const next = { ...d }
+        for (const [key, amt] of Object.entries(recurringUpdates)) next[key] = String(amt)
+        return next
+      })
+      setPcrSyncPreview(null)
+    } finally {
+      setPcrSyncing(false)
+    }
   }
 
   // ── Derived totals ────────────────────────────────────────────────────────────
@@ -949,9 +1050,90 @@ export default function Compensation() {
 
       {/* Expense form */}
       <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
-        <div className="px-5 py-3 border-b border-gray-800">
+        <div className="px-5 py-3 border-b border-gray-800 flex items-center justify-between gap-3">
           <h3 className="text-sm font-semibold text-gray-300">{selectedYear} Expenses</h3>
+          <button
+            onClick={() => setPcrSyncPreview(buildPcrSyncPreview())}
+            className="text-xs text-indigo-400 hover:text-indigo-300 font-medium border border-indigo-800 rounded-md px-3 py-1.5 hover:bg-indigo-900/30 transition-colors"
+          >
+            Sync from PCR
+          </button>
         </div>
+
+        {pcrSyncPreview && (
+          <div className="px-5 py-4 border-b border-gray-800 bg-gray-800/40 space-y-3">
+            <div className="flex items-center justify-between">
+              <p className="text-sm font-semibold text-amber-300">PCR Expense Sync — {selectedYear}</p>
+              <button onClick={() => setPcrSyncPreview(null)} className="text-gray-600 hover:text-gray-400 transition-colors">
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            {pcrSyncPreview.changes.length === 0 ? (
+              <div className="flex items-center gap-2 text-xs text-emerald-400">
+                <svg className="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                </svg>
+                {pcrIncomeStatements.some(s => s.year === selectedYear)
+                  ? 'Already up to date with the PCR.'
+                  : `No PCR income-statement data found for ${selectedYear}.`}
+              </div>
+            ) : (
+              <>
+                <div className="grid grid-cols-3 gap-2 text-xs">
+                  <div />
+                  <div className="text-center font-semibold text-gray-500 uppercase tracking-wider">Current</div>
+                  <div className="text-center font-semibold text-gray-500 uppercase tracking-wider">From PCR</div>
+                  {pcrSyncPreview.changes.map(c => (
+                    <Fragment key={c.key}>
+                      <div className="text-gray-400 flex items-center">{c.label}</div>
+                      <div className="text-center text-gray-500 tabular-nums">{formatCurrency(c.current)}</div>
+                      <div className="text-center font-medium text-amber-300 tabular-nums">{formatCurrency(c.proposed)}</div>
+                    </Fragment>
+                  ))}
+                </div>
+                <div className="flex items-center gap-2 pt-1">
+                  <button
+                    onClick={applyPcrSync}
+                    disabled={pcrSyncing}
+                    className="px-3 py-1.5 bg-indigo-600 text-white text-xs rounded-md hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed font-medium transition-colors"
+                  >
+                    {pcrSyncing ? 'Applying…' : `Apply ${pcrSyncPreview.changes.length} change${pcrSyncPreview.changes.length !== 1 ? 's' : ''}`}
+                  </button>
+                  <button onClick={() => setPcrSyncPreview(null)} className="px-3 py-1.5 text-xs text-gray-500 hover:text-gray-300 transition-colors">
+                    Cancel
+                  </button>
+                </div>
+              </>
+            )}
+
+            {pcrSyncPreview.unmappedLabels.length > 0 && (
+              <div className="pt-2 border-t border-gray-800">
+                <p className="text-xs text-gray-400">
+                  <span className="text-gray-300 font-medium">
+                    {pcrSyncPreview.unmappedLabels.length} unmapped PCR label{pcrSyncPreview.unmappedLabels.length !== 1 ? 's' : ''}
+                  </span>
+                  {' '}excluded — configure a mapping in{' '}
+                  <button
+                    onClick={() => navigate('/settings/pcr-category-mapping')}
+                    className="text-indigo-400 hover:text-indigo-300 underline underline-offset-2"
+                  >
+                    PCR Category Mapping
+                  </button>.
+                </p>
+                <div className="flex flex-wrap gap-1.5 mt-1.5">
+                  {pcrSyncPreview.unmappedLabels.map(l => (
+                    <span key={l} className="px-1.5 py-0.5 rounded bg-gray-900 border border-gray-700 text-gray-500 font-mono text-[10px]">
+                      {l}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         <div>
 

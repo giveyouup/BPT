@@ -1,8 +1,8 @@
-import { useState, useCallback, useMemo, useEffect } from 'react'
+import { useState, useCallback, useMemo, useEffect, Fragment } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { parseXlsx, detectMonthYear, detectMonthYearFromBuffer, isRawXlsx, exportCleanXlsx, netOutVoidPairs } from '../utils/xlsxParser'
 import { api } from '../api'
-import type { PcrPdfSection, PcrPdfUnitInfo, PcrPdfPrintedTotals, SchedulePdfResult, SchedulePdfRow } from '../api'
+import type { PcrPdfSection, PcrPdfUnitInfo, PcrPdfPrintedTotals, PcrPdfIncomeStatementMonth, SchedulePdfResult, SchedulePdfRow } from '../api'
 import { exportStipendMappings } from '../utils/exportXlsx'
 import { parseICS } from '../utils/icsParser'
 import { parseStipendMappings } from '../utils/stipendMappingParser'
@@ -10,10 +10,12 @@ import type { ParsedStipendSheet } from '../utils/stipendMappingParser'
 import { parseShiftSummary, shiftBadgeClass } from '../utils/shiftUtils'
 import { getWeekendPairs, buildDayList, parseScheduleText } from '../utils/schedulePaste'
 import type { ParseScheduleResult } from '../utils/schedulePaste'
-import { formatMonthYear, formatDateFull, lastDayOfMonth, MONTH_ABBREVS, getMonthName } from '../utils/dateUtils'
+import { formatMonthYear, formatDateFull, formatCurrency, lastDayOfMonth, MONTH_ABBREVS, getMonthName } from '../utils/dateUtils'
 import { useData } from '../context/DataContext'
 import type { LineItem, ShiftEntry, Schedule, StipendMapping, StipendRate, Physician } from '../types'
 import { applyPcrStipendCarveouts } from '../utils/pcrStipendCarveouts'
+import { diffPcrStatementMonth } from '../utils/pcrStatementDiff'
+import type { PcrMonthDiff } from '../utils/pcrStatementDiff'
 
 function genId() { return `sched-${Date.now()}-${Math.random().toString(36).slice(2)}` }
 
@@ -179,7 +181,10 @@ function PhysicianBadge({ name }: { name: string }) {
 
 function PcrUploadTab() {
   const navigate = useNavigate()
-  const { reports, schedules, settings, saveReport, physicians, activePhysicianId, savePcrIncomeStatement, pcrCategoryMappings, stipendMappings } = useData()
+  const {
+    reports, schedules, settings, saveReport, physicians, activePhysicianId,
+    savePcrIncomeStatement, pcrCategoryMappings, stipendMappings, pcrIncomeStatements,
+  } = useData()
   const activePhysician = physicians.find(p => p.id === activePhysicianId)
 
   const [dragging, setDragging] = useState(false)
@@ -220,6 +225,16 @@ function PcrUploadTab() {
   // stipend-audit and expense-sync features. null when none were found
   // (the common case for a bare line-items-only PDF, or for xlsx uploads).
   const [incomeStatementMonthsSaved, setIncomeStatementMonthsSaved] = useState<number | null>(null)
+  // Months whose income-statement numbers were already on file and differ
+  // from this upload's own extraction beyond a cent-level tolerance -- held
+  // back from auto-save pending explicit review (unlike a brand-new month,
+  // which saves immediately since there's nothing to conflict with).
+  const [pendingIncomeStatementReview, setPendingIncomeStatementReview] = useState<{
+    filename: string
+    months: PcrPdfIncomeStatementMonth[]
+    diffs: PcrMonthDiff[]
+  } | null>(null)
+  const [applyingIncomeStatementReview, setApplyingIncomeStatementReview] = useState(false)
 
   // Applies parsed line items the same way regardless of source (xlsx or PDF):
   // detect month/year, prefill $/unit from an existing report, and flag
@@ -266,6 +281,7 @@ function PcrUploadTab() {
     setDetectedUnitInfo(null)
     setPrintedTotals(null)
     setIncomeStatementMonthsSaved(null)
+    setPendingIncomeStatementReview(null)
   }
 
   const handleXlsxFile = useCallback(async (f: File) => {
@@ -305,6 +321,41 @@ function PcrUploadTab() {
     }
   }, [activePhysician])
 
+  // Saves one income-statement month and carries any Fort Sutter/ROC/Alhambra
+  // carve-out into the Dashboard's "Additional Stipend" entry -- shared by the
+  // auto-apply path (new/unchanged months) and the reviewed-changes path.
+  async function saveIncomeStatementMonth(month: PcrPdfIncomeStatementMonth, filename: string) {
+    const statement = {
+      id: `${month.year}-${String(month.month).padStart(2, '0')}`,
+      year: month.year,
+      month: month.month,
+      filename,
+      uploadDate: new Date().toISOString(),
+      lines: month.lines,
+    }
+    await savePcrIncomeStatement(statement)
+    const carveoutReport = applyPcrStipendCarveouts(statement, pcrCategoryMappings, reports, schedules, activePhysicianId, settings, stipendMappings)
+    if (carveoutReport) await saveReport(carveoutReport)
+  }
+
+  async function applyPendingIncomeStatementReview() {
+    if (!pendingIncomeStatementReview) return
+    setApplyingIncomeStatementReview(true)
+    try {
+      for (const month of pendingIncomeStatementReview.months) {
+        await saveIncomeStatementMonth(month, pendingIncomeStatementReview.filename)
+      }
+      setIncomeStatementMonthsSaved((n) => (n ?? 0) + pendingIncomeStatementReview.months.length)
+      setPendingIncomeStatementReview(null)
+    } finally {
+      setApplyingIncomeStatementReview(false)
+    }
+  }
+
+  function skipPendingIncomeStatementReview() {
+    setPendingIncomeStatementReview(null)
+  }
+
   const handleParsePdfPages = async () => {
     if (!file) return
     setPdfBusy('extracting')
@@ -327,30 +378,33 @@ function PcrUploadTab() {
           setUnitCorrection(String(result.unitInfo.unitCorrection))
         }
       }
-      // Auto-save any income-statement (revenues/stipends/expenses) months
-      // found in the same PDF -- feeds the PCR stipend audit and expense
-      // sync features. Each PDF re-states every prior month too, so this
-      // naturally backfills/cross-checks earlier months as later ones are
-      // uploaded, same as the line items above.
+      // Save any income-statement (revenues/stipends/expenses) months found in
+      // the same PDF -- feeds the PCR stipend audit and expense sync features.
+      // Each PDF re-states every prior month too, so this naturally backfills
+      // earlier months as later ones are uploaded, same as the line items
+      // above -- except when a month already on file would actually change:
+      // that's held back for explicit review rather than silently overwritten.
       if (result.incomeStatement.length > 0) {
+        const toAutoApply: typeof result.incomeStatement = []
+        const toReview: typeof result.incomeStatement = []
+        const diffs: PcrMonthDiff[] = []
+
         for (const month of result.incomeStatement) {
-          const statement = {
-            id: `${month.year}-${String(month.month).padStart(2, '0')}`,
-            year: month.year,
-            month: month.month,
-            filename: file.name,
-            uploadDate: new Date().toISOString(),
-            lines: month.lines,
-          }
-          await savePcrIncomeStatement(statement)
-          // Fort Sutter / ROC / Alhambra are paid as a lump monthly amount on the
-          // PCR rather than computed per-shift -- carry that amount into the
-          // "Additional Stipend" entry for the source month (one month prior,
-          // per the PCR's payout lag) so it doesn't need to be typed in by hand.
-          const carveoutReport = applyPcrStipendCarveouts(statement, pcrCategoryMappings, reports, schedules, activePhysicianId, settings, stipendMappings)
-          if (carveoutReport) await saveReport(carveoutReport)
+          const id = `${month.year}-${String(month.month).padStart(2, '0')}`
+          const existing = pcrIncomeStatements.find((s) => s.id === id)
+          const diff = diffPcrStatementMonth(existing, month)
+          if (diff) { diffs.push(diff); toReview.push(month) }
+          else toAutoApply.push(month)
         }
-        setIncomeStatementMonthsSaved(result.incomeStatement.length)
+
+        for (const month of toAutoApply) {
+          await saveIncomeStatementMonth(month, file.name)
+        }
+        setIncomeStatementMonthsSaved(toAutoApply.length)
+
+        if (toReview.length > 0) {
+          setPendingIncomeStatementReview({ filename: file.name, months: toReview, diffs })
+        }
       }
     } catch (e) {
       setParseError(e instanceof Error ? e.message : 'Failed to extract PDF pages')
@@ -688,11 +742,64 @@ function PcrUploadTab() {
             </div>
           )}
 
-          {incomeStatementMonthsSaved !== null && (
+          {incomeStatementMonthsSaved !== null && incomeStatementMonthsSaved > 0 && (
             <p className="text-xs text-emerald-500">
               ✓ Also found and saved {incomeStatementMonthsSaved} month{incomeStatementMonthsSaved !== 1 ? 's' : ''} of
               income-statement data (revenues, stipends, expenses) for the stipend audit and expense tracking.
             </p>
+          )}
+
+          {pendingIncomeStatementReview && (
+            <div className="border border-amber-700/50 bg-amber-900/10 rounded-lg p-4 space-y-3">
+              <div className="flex items-start gap-2">
+                <svg className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <p className="text-sm font-semibold text-amber-300">
+                  {pendingIncomeStatementReview.diffs.length} month{pendingIncomeStatementReview.diffs.length !== 1 ? 's' : ''} of
+                  income-statement data changed since the last upload — review before applying
+                </p>
+              </div>
+
+              <div className="space-y-3 max-h-72 overflow-y-auto pr-1">
+                {pendingIncomeStatementReview.diffs.map((d) => (
+                  <div key={`${d.year}-${d.month}`}>
+                    <p className="text-xs font-semibold text-gray-400 mb-1">{getMonthName(d.month)} {d.year}</p>
+                    <div className="grid grid-cols-3 gap-x-2 gap-y-0.5 text-xs">
+                      <div />
+                      <div className="text-center text-gray-600 uppercase tracking-wider">Was</div>
+                      <div className="text-center text-gray-600 uppercase tracking-wider">Now</div>
+                      {d.lines.map((l) => (
+                        <Fragment key={l.label}>
+                          <div className="text-gray-500 truncate" title={l.label}>{l.label}</div>
+                          <div className="text-center text-gray-500 tabular-nums">{formatCurrency(l.oldAmount)}</div>
+                          <div className="text-center font-medium text-amber-300 tabular-nums">{formatCurrency(l.newAmount)}</div>
+                        </Fragment>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="flex items-center gap-2 pt-1">
+                <button
+                  onClick={applyPendingIncomeStatementReview}
+                  disabled={applyingIncomeStatementReview}
+                  className="px-3 py-1.5 bg-indigo-600 text-white text-xs rounded-md hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed font-medium transition-colors"
+                >
+                  {applyingIncomeStatementReview
+                    ? 'Applying…'
+                    : `Apply ${pendingIncomeStatementReview.months.length} change${pendingIncomeStatementReview.months.length !== 1 ? 's' : ''}`}
+                </button>
+                <button
+                  onClick={skipPendingIncomeStatementReview}
+                  disabled={applyingIncomeStatementReview}
+                  className="px-3 py-1.5 text-xs text-gray-500 hover:text-gray-300 disabled:opacity-40 transition-colors"
+                >
+                  Skip
+                </button>
+              </div>
+            </div>
           )}
 
           {serviceDates.length > 0 && (

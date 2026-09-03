@@ -28,7 +28,7 @@ const STIPEND_GROUP_OPTIONS: { value: string; hint: string }[] = [
 // as suggestions via <datalist>, but expense mappings also allow a free-form
 // category name routed into AnnualExpenses' entries[] instead of a fixed leaf.
 const EXPENSE_KEY_SUGGESTIONS = [
-  'payrollTaxes', 'profitSharing', 'healthDental', 'healthMedical', 'healthVision',
+  'payrollTaxes', 'profitSharing', 'cashBalance', 'healthDental', 'healthMedical', 'healthVision',
   'healthBenicomp', 'developmentReserve', 'operatingFee', 'operatingExpense',
   'liabilityInsurance', 'licensesDues', 'cme', 'phoneInternet',
 ]
@@ -426,6 +426,7 @@ export default function PcrCategoryMappingPage() {
         mappings={expenseMappings}
         save={savePcrCategoryMapping}
         remove={deletePcrCategoryMapping}
+        reset={() => resetPcrCategoryMappings('expense')}
         unmappedLabels={unmappedExpenseLabels}
         hiddenLabels={visibleHiddenExpenseLabels}
         onHideLabel={(label) => hideLabel('expense', label)}
