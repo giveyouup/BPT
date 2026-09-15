@@ -6,43 +6,16 @@ import { computeCalendarYearStats, computeCashYearStats, computeCalendarMonthSta
 import { resolvePcrCategoryMapping } from '../utils/pcrCategoryMatching'
 import { formatCurrency, formatMonthYear, formatDateShort, randomId } from '../utils/dateUtils'
 import { resolveShiftAlias } from '../utils/shiftUtils'
+import {
+  BUSINESS_LEAVES, BENEFITS_LEAVES, RETIREMENT_LEAVES, ALL_LEAVES, LEAF_LABELS,
+  BUSINESS_KEYS, BENEFITS_KEYS, RETIREMENT_KEYS,
+} from '../utils/expenseCategories'
 import type { ExpenseEntry, AnnualExpenses } from '../types'
 
 // ─── Category definitions ──────────────────────────────────────────────────────
 
-type Leaf = { key: string; label: string }
-type BenefitsLeaf = Leaf & { subGroup?: string }
-
-const BUSINESS_LEAVES: Leaf[] = [
-  { key: 'operatingFee',       label: 'Operating Fee (7%)'    },
-  { key: 'developmentReserve', label: 'Development Fee (10%)' },
-  { key: 'operatingExpense',   label: 'Operating Expense'     },
-  { key: 'payrollTaxes',       label: 'Payroll Taxes'         },
-  { key: 'liabilityInsurance', label: 'Liability Insurance'   },
-]
-
-const BENEFITS_LEAVES: BenefitsLeaf[] = [
-  { key: 'healthDental',   label: 'Dental',           subGroup: 'Health Insurance' },
-  { key: 'healthMedical',  label: 'Medical',          subGroup: 'Health Insurance' },
-  { key: 'healthVision',   label: 'Vision',           subGroup: 'Health Insurance' },
-  { key: 'healthBenicomp', label: 'Benicomp',         subGroup: 'Health Insurance' },
-  { key: 'licensesDues',  label: 'Licenses & Dues'  },
-  { key: 'cme',           label: 'CME'              },
-  { key: 'phoneInternet', label: 'Phone / Internet' },
-]
-
-const RETIREMENT_LEAVES: Leaf[] = [
-  { key: 'profitSharing', label: 'Profit Sharing' },
-  { key: 'cashBalance',   label: 'Cash Balance'   },
-]
-
-const BUSINESS_KEYS    = new Set(BUSINESS_LEAVES.map(l => l.key))
-const BENEFITS_KEYS    = new Set(BENEFITS_LEAVES.map(l => l.key))
-const RETIREMENT_KEYS  = new Set(RETIREMENT_LEAVES.map(l => l.key))
 const HEALTHCARE_KEYS  = new Set(['healthDental', 'healthMedical', 'healthVision', 'healthBenicomp'])
 const ACTIVE_KEYS      = new Set([...BUSINESS_KEYS, ...BENEFITS_KEYS, ...RETIREMENT_KEYS, 'carryforwardIn', 'yearEndBalance'])
-const ALL_LEAVES       = [...BUSINESS_LEAVES, ...BENEFITS_LEAVES, ...RETIREMENT_LEAVES]
-const LEAF_LABELS      = Object.fromEntries(ALL_LEAVES.map(l => [l.key, l.label])) as Record<string, string>
 
 type Section = 'business' | 'benefits' | 'retirement' | 'otherIncome'
 
@@ -51,6 +24,7 @@ interface PcrSyncChange {
   label: string
   current: number
   proposed: number
+  section: 'expense' | 'otherIncome'
 }
 
 interface PcrSyncPreview {
@@ -430,36 +404,57 @@ export default function Compensation() {
   // (so re-syncing updates the same entry instead of piling up duplicates).
 
   function buildPcrSyncPreview(): PcrSyncPreview {
-    const proposed: Record<string, number> = {}
+    const proposedExpense: Record<string, number> = {}
+    const proposedOtherIncome: Record<string, number> = {}
     const unmapped = new Set<string>()
 
     for (const stmt of pcrIncomeStatements) {
       if (stmt.year !== selectedYear) continue
       for (const line of stmt.lines) {
+        if (line.section === 'otherIncome') {
+          const mapping = resolvePcrCategoryMapping(line.label, 'otherIncome', pcrCategoryMappings)
+          if (!mapping) { unmapped.add(line.label); continue }
+          proposedOtherIncome[mapping.targetKey] = (proposedOtherIncome[mapping.targetKey] ?? 0) + line.amount
+          continue
+        }
         // "Operating Reserves" items (operating fee, development reserve, the
         // flat operating expense) sit before the PCR's own EXPENSES header
         // opens, so extraction tags them 'other' rather than 'expense' -- but
         // they're still real Compensation-page categories, so a mapping can
-        // still target them. Everything else under 'other' is a revenue/
-        // balance rollup (PCR Surplus, rolled-forward balance, etc.) that was
-        // never meant to be categorized, so an unmapped 'other' line is never
-        // flagged the way an unmapped 'expense' line is.
+        // still target them. Restricted to Business Expenses keys specifically
+        // (the only category real Operating Reserves items ever belong to):
+        // a broader "any mapped 'other' line" rule also swept in unrelated
+        // 'other' lines whose label happens to share a substring with a
+        // mapping meant for something else entirely (e.g. "Cash Balance Plan
+        // - PCR Reserve", a distinct reserve/catch-up adjustment, matching the
+        // "Cash Balance Plan" mapping and inflating that retirement total).
+        // Everything else under 'other' is a revenue/balance rollup (PCR
+        // Surplus, rolled-forward balance, etc.) that was never meant to be
+        // categorized, so an unmapped 'other' line is never flagged the way
+        // an unmapped 'expense' line is.
         if (line.section !== 'expense' && line.section !== 'other') continue
         const mapping = resolvePcrCategoryMapping(line.label, 'expense', pcrCategoryMappings)
         if (!mapping) { if (line.section === 'expense') unmapped.add(line.label); continue }
-        proposed[mapping.targetKey] = (proposed[mapping.targetKey] ?? 0) + line.amount
+        if (line.section === 'other' && !BUSINESS_KEYS.has(mapping.targetKey)) continue
+        proposedExpense[mapping.targetKey] = (proposedExpense[mapping.targetKey] ?? 0) + line.amount
       }
     }
 
     const record = currentRecord
     const changes: PcrSyncChange[] = []
-    for (const [key, proposedAmt] of Object.entries(proposed)) {
+    for (const [key, proposedAmt] of Object.entries(proposedExpense)) {
       const rounded = Math.round(proposedAmt * 100) / 100
       const current = ACTIVE_KEYS.has(key)
         ? (record?.recurring?.[key] ?? 0)
         : (record?.entries ?? []).filter(e => e.category === key).reduce((s, e) => s + e.amount, 0)
       if (Math.abs(rounded - current) < 0.01) continue
-      changes.push({ key, label: LEAF_LABELS[key] ?? key, current, proposed: rounded })
+      changes.push({ key, label: LEAF_LABELS[key] ?? key, current, proposed: rounded, section: 'expense' })
+    }
+    for (const [key, proposedAmt] of Object.entries(proposedOtherIncome)) {
+      const rounded = Math.round(proposedAmt * 100) / 100
+      const current = (record?.otherIncomeEntries ?? []).filter(e => e.category === key).reduce((s, e) => s + e.amount, 0)
+      if (Math.abs(rounded - current) < 0.01) continue
+      changes.push({ key, label: key, current, proposed: rounded, section: 'otherIncome' })
     }
     changes.sort((a, b) => a.label.localeCompare(b.label))
 
@@ -473,9 +468,14 @@ export default function Compensation() {
       const record = getOrCreate()
       const recurringUpdates: Record<string, number> = {}
       const entries = [...(record.entries ?? [])]
+      const otherIncomeEntries = [...(record.otherIncomeEntries ?? [])]
 
       for (const change of pcrSyncPreview.changes) {
-        if (ACTIVE_KEYS.has(change.key)) {
+        if (change.section === 'otherIncome') {
+          const idx = otherIncomeEntries.findIndex(e => e.category === change.key)
+          if (idx >= 0) otherIncomeEntries[idx] = { ...otherIncomeEntries[idx], amount: change.proposed }
+          else if (change.proposed !== 0) otherIncomeEntries.push({ id: randomId(), category: change.key, amount: change.proposed })
+        } else if (ACTIVE_KEYS.has(change.key)) {
           recurringUpdates[change.key] = change.proposed
         } else {
           const idx = entries.findIndex(e => e.category === change.key)
@@ -488,6 +488,7 @@ export default function Compensation() {
         ...record,
         recurring: { ...(record.recurring ?? {}), ...recurringUpdates },
         entries: entries.filter(e => e.amount !== 0),
+        otherIncomeEntries: otherIncomeEntries.filter(e => e.amount !== 0),
       }
       await saveAnnualExpenses(updated)
       setDraft(d => {
@@ -1087,8 +1088,13 @@ export default function Compensation() {
                   <div className="text-center font-semibold text-gray-500 uppercase tracking-wider">Current</div>
                   <div className="text-center font-semibold text-gray-500 uppercase tracking-wider">From PCR</div>
                   {pcrSyncPreview.changes.map(c => (
-                    <Fragment key={c.key}>
-                      <div className="text-gray-400 flex items-center">{c.label}</div>
+                    <Fragment key={`${c.section}:${c.key}`}>
+                      <div className="text-gray-400 flex items-center gap-1.5">
+                        {c.label}
+                        {c.section === 'otherIncome' && (
+                          <span className="text-[10px] text-gray-600 uppercase tracking-wider">Other Income</span>
+                        )}
+                      </div>
                       <div className="text-center text-gray-500 tabular-nums">{formatCurrency(c.current)}</div>
                       <div className="text-center font-medium text-amber-300 tabular-nums">{formatCurrency(c.proposed)}</div>
                     </Fragment>

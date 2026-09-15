@@ -966,7 +966,12 @@ def extract_income_statement(doc, page_indices):
                 continue
             label_parts.sort(key=lambda w: w["left"])
             label = " ".join(w["text"] for w in label_parts).strip()
-            label = re.sub(r'^["\']+', "", label)  # occasional stray leading quote glyph
+            # Occasional stray leading quote glyph -- straight quotes and the
+            # curly/smart-quote variants tesseract sometimes reads instead
+            # (confirmed real case: "EXPENSES" misread as "“EXPENSES",
+            # which silently broke section-opener matching below and left
+            # every subsequent row on that page mistagged as 'other').
+            label = re.sub(r'^[\'"‘’“”]+', "", label)
             if not label:
                 continue
 

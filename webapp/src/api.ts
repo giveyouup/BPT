@@ -143,7 +143,7 @@ export const api = {
     list: () => req<PcrCategoryMapping[]>('GET', '/pcr-category-mappings'),
     upsert: (m: PcrCategoryMapping) => req<void>('PUT', `/pcr-category-mappings/${m.id}`, m),
     delete: (id: string) => req<void>('DELETE', `/pcr-category-mappings/${id}`),
-    reset: (section: 'stipend' | 'expense') => req<PcrCategoryMapping[]>('POST', `/pcr-category-mappings/reset?section=${section}`),
+    reset: (section: 'stipend' | 'expense' | 'otherIncome') => req<PcrCategoryMapping[]>('POST', `/pcr-category-mappings/reset?section=${section}`),
   },
   db: {
     maintenance: () => req<MaintenanceResult>('POST', '/db/maintenance'),

@@ -171,6 +171,12 @@ const DEFAULT_SETTINGS: Settings = {
   clinicalDayStart: '06:30',
   shiftHours: { APS: 10, APS_weekend: 10, BR: 9, NIR: 10 },
   holidays: {},
+  // Pre-promoted so the "SMCS Weekend G3" / "Weekend Body IR" PCR category
+  // defaults (pcrCategoryDefaults.ts) have a standalone column to target out
+  // of the box -- still fully user-configurable via Stipend Calculator's
+  // Columns popover (unpromoting removes it from there and from the PCR
+  // Category Mapping dropdown, exactly as if never defaulted).
+  promotedStipendCodes: ['G3::weekend', 'BIR::weekday'],
 }
 
 // ─── Physicians ───────────────────────────────────────────────────────────────
@@ -404,7 +410,7 @@ export function deletePcrCategoryMapping(id: string): void {
 // Resets just one section's mappings to defaults -- scoped, not a full-table
 // wipe, so resetting stipend defaults never touches a user's own hand-
 // configured expense mappings (or vice versa).
-export function resetPcrCategoryMappings(section: 'stipend' | 'expense'): PcrCategoryMapping[] {
+export function resetPcrCategoryMappings(section: 'stipend' | 'expense' | 'otherIncome'): PcrCategoryMapping[] {
   db.prepare('DELETE FROM pcr_category_mappings WHERE section = ?').run(section)
   const insert = db.prepare('INSERT INTO pcr_category_mappings (id, label, section, target_key) VALUES (?, ?, ?, ?)')
   for (const m of DEFAULT_PCR_CATEGORY_MAPPINGS.filter((m) => m.section === section)) {

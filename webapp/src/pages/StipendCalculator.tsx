@@ -1,4 +1,4 @@
-import { useState, useMemo, Fragment } from 'react'
+import { useState, useMemo, useEffect, useRef, Fragment } from 'react'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, ResponsiveContainer } from 'recharts'
 import { useData } from '../context/DataContext'
 import {
@@ -125,20 +125,51 @@ function getDayOfWeek(date: string): string {
 
 type PcrMatchStatus = 'match' | 'mismatch'
 
+// Tap/click-to-toggle popover instead of a hover-only title -- a native SVG
+// <title> tooltip never shows on touch devices, so mobile had no way to see
+// the paid/owed detail behind a mismatch badge.
 function PcrMatchBadge({ status, paid, owed }: { status: PcrMatchStatus; paid: number; owed: number }) {
-  if (status === 'match') {
-    return (
-      <svg className="w-3 h-3 text-emerald-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <title>{`Matches PCR paid amount (${formatCurrency(paid)})`}</title>
-        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
-      </svg>
-    )
-  }
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLSpanElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    function handleOutside(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', handleOutside)
+    return () => document.removeEventListener('mousedown', handleOutside)
+  }, [open])
+
+  const isMatch = status === 'match'
+  const message = isMatch
+    ? `Matches PCR paid amount (${formatCurrency(paid)})`
+    : `PCR paid ${formatCurrency(paid)}, differs from owed ${formatCurrency(owed)}`
+
+  // A plain clickable <span>, not <button> -- this badge is used inside other
+  // clickable rows/cells (including a <button> in the mobile card view), and
+  // nesting a real button inside another button is invalid HTML.
   return (
-    <svg className="w-3 h-3 text-amber-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <title>{`PCR paid ${formatCurrency(paid)}, differs from owed ${formatCurrency(owed)}`}</title>
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 9v3.75m0 3.75h.007M10.29 3.86L1.82 18a1.5 1.5 0 001.29 2.25h17.78a1.5 1.5 0 001.29-2.25L13.71 3.86a1.5 1.5 0 00-2.42 0z" />
-    </svg>
+    <span ref={ref} className="relative inline-flex">
+      <span
+        onClick={(e) => { e.stopPropagation(); setOpen((v) => !v) }}
+        className="flex items-center cursor-pointer"
+      >
+        <svg className={`w-3 h-3 flex-shrink-0 ${isMatch ? 'text-emerald-500' : 'text-amber-500'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          {isMatch
+            ? <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
+            : <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 9v3.75m0 3.75h.007M10.29 3.86L1.82 18a1.5 1.5 0 001.29 2.25h17.78a1.5 1.5 0 001.29-2.25L13.71 3.86a1.5 1.5 0 00-2.42 0z" />}
+        </svg>
+      </span>
+      {open && (
+        <div
+          onClick={(e) => e.stopPropagation()}
+          className="absolute z-30 bottom-full left-1/2 -translate-x-1/2 mb-1.5 px-2.5 py-1.5 bg-gray-950 border border-gray-700 rounded-lg shadow-xl text-[11px] text-gray-200 whitespace-nowrap"
+        >
+          {message}
+        </div>
+      )}
+    </span>
   )
 }
 

@@ -260,8 +260,10 @@ app.delete('/api/pcr-category-mappings/:id', (req, res) => {
   res.json({ ok: true })
 })
 app.post('/api/pcr-category-mappings/reset', (req, res) => {
-  const section = req.query.section as 'stipend' | 'expense' | undefined
-  if (section !== 'stipend' && section !== 'expense') return res.status(400).json({ error: 'section must be "stipend" or "expense"' })
+  const section = req.query.section as 'stipend' | 'expense' | 'otherIncome' | undefined
+  if (section !== 'stipend' && section !== 'expense' && section !== 'otherIncome') {
+    return res.status(400).json({ error: 'section must be "stipend", "expense", or "otherIncome"' })
+  }
   res.json(resetPcrCategoryMappings(section))
 })
 
