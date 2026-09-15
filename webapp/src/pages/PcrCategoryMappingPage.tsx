@@ -3,34 +3,32 @@ import { useNavigate } from 'react-router-dom'
 import { useData } from '../context/DataContext'
 import type { PcrCategoryMapping } from '../types'
 import { randomId } from '../utils/dateUtils'
-import { describeStipendGroupKey } from '../utils/calculations'
+import { describeStipendGroupKey, STIPEND_BASE_GROUP_LABELS } from '../utils/calculations'
 import { resolvePcrCategoryMapping } from '../utils/pcrCategoryMatching'
 import { applyPcrStipendCarveoutsForAllStatements } from '../utils/pcrStipendCarveouts'
+import { BUSINESS_LEAVES, BENEFITS_LEAVES, RETIREMENT_LEAVES, ALL_LEAVES, LEAF_LABELS } from '../utils/expenseCategories'
+
+const ALL_EXPENSE_LEAF_KEYS = new Set([...BUSINESS_LEAVES, ...BENEFITS_LEAVES, ...RETIREMENT_LEAVES].map((l) => l.key))
 
 // StipendCalculator's own internal group keys (webapp/src/pages/StipendCalculator.tsx,
 // classifyBase()/getStipendGroup()) -- a fixed, closed vocabulary, so a <select>
 // is safe here (unlike the expense side, which also allows a free-form category).
-const STIPEND_GROUP_OPTIONS: { value: string; hint: string }[] = [
-  { value: 'mainOrCall', hint: 'G1/G2 call shifts' },
-  { value: 'otherG', hint: 'other G-shifts (G3–G17)' },
+// Displayed using the same human labels as everywhere else (StipendCalculator,
+// Audits, the Income Statement page) via STIPEND_BASE_GROUP_LABELS, not the
+// raw key -- a hint is only kept where it adds something the label doesn't
+// already say (e.g. expanding an acronym, or which codes land in a bucket).
+const STIPEND_GROUP_OPTIONS: { value: string; hint?: string }[] = [
+  { value: 'mainOrCall' },
+  { value: 'otherG', hint: 'G3–G17' },
   { value: 'APS', hint: 'Acute Pain Service' },
   { value: 'BR', hint: 'Board Runner' },
-  { value: 'NIR', hint: '' },
-  { value: 'ROC', hint: '' },
-  { value: 'GI', hint: 'GI / Endo' },
+  { value: 'NIR' },
+  { value: 'ROC' },
+  { value: 'GI' },
   { value: 'FS', hint: 'FS-prefixed codes' },
-  { value: 'alhambra', hint: '' },
-  { value: 'other', hint: '' },
+  { value: 'alhambra' },
+  { value: 'other' },
   { value: 'additional', hint: 'manual/day stipends' },
-]
-
-// AnnualExpenses' known leaf keys (webapp/src/pages/Compensation.tsx) -- offered
-// as suggestions via <datalist>, but expense mappings also allow a free-form
-// category name routed into AnnualExpenses' entries[] instead of a fixed leaf.
-const EXPENSE_KEY_SUGGESTIONS = [
-  'payrollTaxes', 'profitSharing', 'cashBalance', 'healthDental', 'healthMedical', 'healthVision',
-  'healthBenicomp', 'developmentReserve', 'operatingFee', 'operatingExpense',
-  'liabilityInsurance', 'licensesDues', 'cme', 'phoneInternet',
 ]
 
 const inputCls = 'bg-gray-900 border border-gray-600 rounded px-2 py-1 text-xs text-gray-100 focus:outline-none focus:ring-1 focus:ring-indigo-500'
@@ -38,11 +36,11 @@ const thCls = 'px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase
 
 function MappingSection({
   title, description, section, mappings, targetKeyInput, save, remove, reset,
-  unmappedLabels, hiddenLabels, onHideLabel, onUnhideLabel,
+  unmappedLabels, hiddenLabels, onHideLabel, onUnhideLabel, describeTargetKey, categoryOrder,
 }: {
   title: string
   description: string
-  section: 'stipend' | 'expense'
+  section: 'stipend' | 'expense' | 'otherIncome'
   mappings: PcrCategoryMapping[]
   targetKeyInput: (value: string, onChange: (v: string) => void, onEnter: () => void, autoFocus?: boolean) => React.ReactNode
   save: (m: PcrCategoryMapping) => Promise<void>
@@ -52,6 +50,15 @@ function MappingSection({
   hiddenLabels?: string[]
   onHideLabel?: (label: string) => void
   onUnhideLabel?: (label: string) => void
+  // Human-readable name for a stored targetKey, so the read-only "Maps To"
+  // column shows "Operating Fee (7%)" / "G1/G2 Call" instead of the raw
+  // internal key ("operatingFee" / "mainOrCall").
+  describeTargetKey: (key: string) => string
+  // Groups rows by category (in the same canonical order used elsewhere,
+  // e.g. the Income Statement page) instead of alphabetically by PCR label --
+  // otherwise two labels mapped to the same category (e.g. "CV NIR" and "CV
+  // Anesthesia", both -> NIR) can end up far apart in the list.
+  categoryOrder: Map<string, number>
 }) {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editForm, setEditForm] = useState({ label: '', targetKey: '' })
@@ -78,10 +85,15 @@ function MappingSection({
     } finally { setSaving(false) }
   }
 
-  const sorted = useMemo(
-    () => [...mappings].sort((a, b) => a.label.localeCompare(b.label)),
-    [mappings],
-  )
+  const sorted = useMemo(() => {
+    return [...mappings].sort((a, b) => {
+      const orderA = categoryOrder.get(a.targetKey) ?? Infinity
+      const orderB = categoryOrder.get(b.targetKey) ?? Infinity
+      if (orderA !== orderB) return orderA - orderB
+      if (a.targetKey !== b.targetKey) return a.targetKey.localeCompare(b.targetKey)
+      return a.label.localeCompare(b.label)
+    })
+  }, [mappings, categoryOrder])
 
   function startEdit(m: PcrCategoryMapping) {
     setEditingId(m.id)
@@ -164,7 +176,7 @@ function MappingSection({
                     ) : (
                       <>
                         <td className="px-4 py-2.5 text-gray-300 text-xs cursor-pointer hover:text-indigo-400" onClick={() => startEdit(m)}>{m.label}</td>
-                        <td className="px-4 py-2.5 text-gray-400 font-mono text-xs cursor-pointer hover:text-indigo-400" onClick={() => startEdit(m)}>{m.targetKey}</td>
+                        <td className="px-4 py-2.5 text-gray-400 text-xs cursor-pointer hover:text-indigo-400" onClick={() => startEdit(m)} title={m.targetKey}>{describeTargetKey(m.targetKey)}</td>
                         <td className="px-4 py-2.5">
                           <button onClick={() => remove(m.id)} className="text-gray-700 hover:text-red-400 transition-colors" title="Delete">
                             <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -260,12 +272,13 @@ export default function PcrCategoryMappingPage() {
   const navigate = useNavigate()
   const {
     pcrCategoryMappings, savePcrCategoryMapping, deletePcrCategoryMapping, resetPcrCategoryMappings, settings, saveSettings,
-    pcrIncomeStatements, reports, schedules, saveReport, activePhysicianId,
+    pcrIncomeStatements, reports, schedules, saveReport, activePhysicianId, annualExpenses,
     stipendMappings: stipendRateMappings,
   } = useData()
 
   const stipendMappings = pcrCategoryMappings.filter((m) => m.section === 'stipend')
   const expenseMappings = pcrCategoryMappings.filter((m) => m.section === 'expense')
+  const otherIncomeMappings = pcrCategoryMappings.filter((m) => m.section === 'otherIncome')
 
   const [backfilling, setBackfilling] = useState(false)
   const [backfillResult, setBackfillResult] = useState<string | null>(null)
@@ -286,7 +299,7 @@ export default function PcrCategoryMappingPage() {
     }
   }
 
-  function findUnmappedLabels(section: 'stipend' | 'expense'): string[] {
+  function findUnmappedLabels(section: 'stipend' | 'expense' | 'otherIncome'): string[] {
     const set = new Set<string>()
     for (const stmt of pcrIncomeStatements) {
       for (const line of stmt.lines) {
@@ -305,31 +318,38 @@ export default function PcrCategoryMappingPage() {
     () => findUnmappedLabels('expense'),
     [pcrIncomeStatements, pcrCategoryMappings],
   )
+  const allUnmappedOtherIncomeLabels = useMemo(
+    () => findUnmappedLabels('otherIncome'),
+    [pcrIncomeStatements, pcrCategoryMappings],
+  )
 
   // Unmapped labels the user has dismissed from the suggestion chips (e.g. section
   // headers or rows they've decided not to track) -- kept separately from actual
   // mappings so they stay hidden but can be brought back at any time.
   const hiddenStipendLabels = settings.hiddenPcrLabels?.stipend ?? []
   const hiddenExpenseLabels = settings.hiddenPcrLabels?.expense ?? []
+  const hiddenOtherIncomeLabels = settings.hiddenPcrLabels?.otherIncome ?? []
 
   const unmappedStipendLabels = allUnmappedStipendLabels.filter((l) => !hiddenStipendLabels.includes(l))
   const unmappedExpenseLabels = allUnmappedExpenseLabels.filter((l) => !hiddenExpenseLabels.includes(l))
+  const unmappedOtherIncomeLabels = allUnmappedOtherIncomeLabels.filter((l) => !hiddenOtherIncomeLabels.includes(l))
   // Only offer "restore" for labels still actually unmapped -- once mapped, a
   // stale hidden entry is dropped automatically rather than lingering forever.
   const visibleHiddenStipendLabels = hiddenStipendLabels.filter((l) => allUnmappedStipendLabels.includes(l))
   const visibleHiddenExpenseLabels = hiddenExpenseLabels.filter((l) => allUnmappedExpenseLabels.includes(l))
+  const visibleHiddenOtherIncomeLabels = hiddenOtherIncomeLabels.filter((l) => allUnmappedOtherIncomeLabels.includes(l))
 
-  function setHiddenLabels(section: 'stipend' | 'expense', labels: string[]) {
+  function setHiddenLabels(section: 'stipend' | 'expense' | 'otherIncome', labels: string[]) {
     const current = settings.hiddenPcrLabels ?? { stipend: [], expense: [] }
     saveSettings({ ...settings, hiddenPcrLabels: { ...current, [section]: labels } })
   }
-  function hideLabel(section: 'stipend' | 'expense', label: string) {
-    const current = section === 'stipend' ? hiddenStipendLabels : hiddenExpenseLabels
+  function hideLabel(section: 'stipend' | 'expense' | 'otherIncome', label: string) {
+    const current = section === 'stipend' ? hiddenStipendLabels : section === 'expense' ? hiddenExpenseLabels : hiddenOtherIncomeLabels
     if (current.includes(label)) return
     setHiddenLabels(section, [...current, label])
   }
-  function unhideLabel(section: 'stipend' | 'expense', label: string) {
-    const current = section === 'stipend' ? hiddenStipendLabels : hiddenExpenseLabels
+  function unhideLabel(section: 'stipend' | 'expense' | 'otherIncome', label: string) {
+    const current = section === 'stipend' ? hiddenStipendLabels : section === 'expense' ? hiddenExpenseLabels : hiddenOtherIncomeLabels
     setHiddenLabels(section, current.filter((l) => l !== label))
   }
 
@@ -342,6 +362,52 @@ export default function PcrCategoryMappingPage() {
       .sort((a, b) => a.label.localeCompare(b.label)),
     [settings.promotedStipendCodes],
   )
+
+  // Category display order for the mapping tables below -- matches the same
+  // canonical order used elsewhere (StipendCalculator's columns, the Income
+  // Statement page's Business/Benefits/Retirement groups), so mappings group
+  // by category instead of scattering alphabetically by PCR label.
+  const stipendCategoryOrder = useMemo(() => {
+    const m = new Map<string, number>()
+    STIPEND_GROUP_OPTIONS.forEach((o, i) => m.set(o.value, i))
+    promotedStipendOptions.forEach((o, i) => m.set(o.value, 1000 + i))
+    return m
+  }, [promotedStipendOptions])
+
+  const expenseCategoryOrder = useMemo(
+    () => new Map(ALL_LEAVES.map((l, i) => [l.key, i])),
+    [],
+  )
+
+  function describeExpenseTargetKey(key: string): string {
+    return LEAF_LABELS[key] ?? key
+  }
+
+  // Custom (free-form) categories the user has already added to Compensation's
+  // Business Expenses, Benefits, or Retirement Benefits sections -- offered
+  // alongside the fixed leaf categories so a PCR label can target one of these
+  // too, not just the built-in leaves.
+  const customExpenseCategories = useMemo(() => {
+    const set = new Set<string>()
+    for (const rec of annualExpenses) {
+      for (const e of rec.entries ?? []) set.add(e.category)
+      for (const e of rec.benefitsEntries ?? []) set.add(e.category)
+      for (const e of rec.retirementEntries ?? []) set.add(e.category)
+    }
+    return [...set].sort()
+  }, [annualExpenses])
+
+  // Other Income has no fixed leaves at all on Compensation (it's entirely
+  // free-form entries[]), so its only selectable categories are whatever the
+  // user has already added there -- same idea as Expense's custom categories,
+  // just its own separate array.
+  const customOtherIncomeCategories = useMemo(() => {
+    const set = new Set<string>()
+    for (const rec of annualExpenses) {
+      for (const e of rec.otherIncomeEntries ?? []) set.add(e.category)
+    }
+    return [...set].sort()
+  }, [annualExpenses])
 
   return (
     <div className="p-4 md:p-8 max-w-4xl">
@@ -390,6 +456,8 @@ export default function PcrCategoryMappingPage() {
         save={savePcrCategoryMapping}
         remove={deletePcrCategoryMapping}
         reset={() => resetPcrCategoryMappings('stipend')}
+        describeTargetKey={describeStipendGroupKey}
+        categoryOrder={stipendCategoryOrder}
         unmappedLabels={unmappedStipendLabels}
         hiddenLabels={visibleHiddenStipendLabels}
         onHideLabel={(label) => hideLabel('stipend', label)}
@@ -402,7 +470,7 @@ export default function PcrCategoryMappingPage() {
               className={inputCls + ' w-52'} autoFocus={autoFocus}>
               <option value="">Choose a category…</option>
               {STIPEND_GROUP_OPTIONS.map((o) => (
-                <option key={o.value} value={o.value}>{o.value}{o.hint ? ` — ${o.hint}` : ''}</option>
+                <option key={o.value} value={o.value}>{STIPEND_BASE_GROUP_LABELS[o.value] ?? o.value}{o.hint ? ` — ${o.hint}` : ''}</option>
               ))}
               {promotedStipendOptions.length > 0 && (
                 <optgroup label="Standalone Columns">
@@ -421,27 +489,75 @@ export default function PcrCategoryMappingPage() {
 
       <MappingSection
         title="Expense Labels"
-        description={'Maps a PCR expense line (e.g. "Payroll Taxes") to a Compensation-page category, or type a new name to route it into that page\'s free-form entries instead.'}
+        description={'Maps a PCR expense line (e.g. "Payroll Taxes") to a category from Compensation\'s Business Expenses, Benefits, or Retirement Benefits sections -- including any custom categories already added there.'}
         section="expense"
         mappings={expenseMappings}
         save={savePcrCategoryMapping}
         remove={deletePcrCategoryMapping}
         reset={() => resetPcrCategoryMappings('expense')}
+        describeTargetKey={describeExpenseTargetKey}
+        categoryOrder={expenseCategoryOrder}
         unmappedLabels={unmappedExpenseLabels}
         hiddenLabels={visibleHiddenExpenseLabels}
         onHideLabel={(label) => hideLabel('expense', label)}
         onUnhideLabel={(label) => unhideLabel('expense', label)}
-        targetKeyInput={(value, onChange, onEnter, autoFocus) => (
-          <>
-            <input type="text" list="pcr-expense-key-options" placeholder="Category" value={value}
-              onChange={(e) => onChange(e.target.value)}
+        targetKeyInput={(value, onChange, onEnter, autoFocus) => {
+          const isKnown = ALL_EXPENSE_LEAF_KEYS.has(value) || customExpenseCategories.includes(value)
+          return (
+            <select value={value} onChange={(e) => onChange(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') onEnter() }}
-              className={inputCls + ' w-52'} autoFocus={autoFocus} />
-            <datalist id="pcr-expense-key-options">
-              {EXPENSE_KEY_SUGGESTIONS.map((k) => <option key={k} value={k} />)}
-            </datalist>
-          </>
-        )}
+              className={inputCls + ' w-52'} autoFocus={autoFocus}>
+              <option value="">Choose a category…</option>
+              <optgroup label="Business Expenses">
+                {BUSINESS_LEAVES.map((l) => <option key={l.key} value={l.key}>{l.label}</option>)}
+              </optgroup>
+              <optgroup label="Benefits">
+                {BENEFITS_LEAVES.map((l) => <option key={l.key} value={l.key}>{l.label}</option>)}
+              </optgroup>
+              <optgroup label="Retirement Benefits">
+                {RETIREMENT_LEAVES.map((l) => <option key={l.key} value={l.key}>{l.label}</option>)}
+              </optgroup>
+              {customExpenseCategories.length > 0 && (
+                <optgroup label="Custom Categories">
+                  {customExpenseCategories.map((c) => <option key={c} value={c}>{c}</option>)}
+                </optgroup>
+              )}
+              {value && !isKnown && (
+                <option value={value}>{LEAF_LABELS[value] ?? value} (not yet on Compensation -- created automatically on first sync)</option>
+              )}
+            </select>
+          )
+        }}
+      />
+
+      <MappingSection
+        title="Other Income Labels"
+        description={'Maps a PCR other-income line (e.g. "CASE Board / Chairs / Comm / Schedule") to a category already added under Compensation\'s Other Income section. Other Income has no built-in categories -- add one on Compensation first, then map a PCR label to it here.'}
+        section="otherIncome"
+        mappings={otherIncomeMappings}
+        save={savePcrCategoryMapping}
+        remove={deletePcrCategoryMapping}
+        reset={() => resetPcrCategoryMappings('otherIncome')}
+        describeTargetKey={(key) => key}
+        categoryOrder={new Map()}
+        unmappedLabels={unmappedOtherIncomeLabels}
+        hiddenLabels={visibleHiddenOtherIncomeLabels}
+        onHideLabel={(label) => hideLabel('otherIncome', label)}
+        onUnhideLabel={(label) => unhideLabel('otherIncome', label)}
+        targetKeyInput={(value, onChange, onEnter, autoFocus) => {
+          const isKnown = customOtherIncomeCategories.includes(value)
+          return (
+            <select value={value} onChange={(e) => onChange(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') onEnter() }}
+              className={inputCls + ' w-52'} autoFocus={autoFocus}>
+              <option value="">Choose a category…</option>
+              {customOtherIncomeCategories.map((c) => <option key={c} value={c}>{c}</option>)}
+              {value && !isKnown && (
+                <option value={value}>{value} (not yet on Compensation -- created automatically on first sync)</option>
+              )}
+            </select>
+          )
+        }}
       />
     </div>
   )

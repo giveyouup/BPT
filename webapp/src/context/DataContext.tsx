@@ -66,7 +66,7 @@ interface DataContextValue {
   pcrCategoryMappings: PcrCategoryMapping[]
   savePcrCategoryMapping: (m: PcrCategoryMapping) => Promise<void>
   deletePcrCategoryMapping: (id: string) => Promise<void>
-  resetPcrCategoryMappings: (section: 'stipend' | 'expense') => Promise<void>
+  resetPcrCategoryMappings: (section: 'stipend' | 'expense' | 'otherIncome') => Promise<void>
 }
 
 const DataContext = createContext<DataContextValue | null>(null)
@@ -367,7 +367,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
     setPcrCategoryMappings((prev) => prev.filter((m) => m.id !== id))
   }
 
-  const resetPcrCategoryMappings = async (section: 'stipend' | 'expense') => {
+  const resetPcrCategoryMappings = async (section: 'stipend' | 'expense' | 'otherIncome') => {
     const fresh = await api.pcrCategoryMappings.reset(section)
     setPcrCategoryMappings((prev) => [...prev.filter((m) => m.section !== section), ...fresh])
   }

@@ -149,7 +149,15 @@ export interface Settings {
   stipendMappingOverrides?: Record<string, string> // "YYYY-MM" -> mapping id (for months without a report)
   cashCutoffs?: Record<number, string>             // year -> ISO date "YYYY-MM-DD" (end of unit-pay cash period)
   promotedStipendCodes?: string[]                  // shift codes broken out of "Other G"/"Other" into their own column
-  hiddenPcrLabels?: { stipend: string[]; expense: string[] } // unmapped PCR labels dismissed from the mapping page's suggestion chips
+  hiddenPcrLabels?: { stipend: string[]; expense: string[]; otherIncome?: string[] } // unmapped PCR labels dismissed from the mapping page's suggestion chips
+  // User-customized row order on the PCR Income Statement page, keyed by
+  // group id ("expense:business" | "expense:benefits" | "expense:healthInsurance"
+  // | "expense:retirement" | "expense:unmapped" | "stipend"). Each value is an
+  // ordered list of item ids -- a leaf category key for the fixed expense
+  // groups, or the raw PCR label text for the stipend and unmapped groups
+  // (which have no stable key of their own). Items not yet in the list fall
+  // back to the page's own default order and are appended after it.
+  pcrRowOrder?: Record<string, string[]>
 }
 
 export interface CptRange {
@@ -219,8 +227,11 @@ export interface PcrCategoryMapping {
   label: string   // matched as a case-insensitive substring against the PCR's own
                     // printed line label (not an exact match) -- e.g. "Acute Pain"
                     // matches the real printed label "SMCS Acute Pain"
-  section: 'stipend' | 'expense'
+  section: 'stipend' | 'expense' | 'otherIncome'
   targetKey: string  // stipend: a StipendCalculator group key; expense: an
                       // AnnualExpenses leaf key, or a free-form category
-                      // name routed into its entries[]
+                      // name routed into its entries[]; otherIncome: a
+                      // free-form category name routed into
+                      // AnnualExpenses.otherIncomeEntries[] (that section has
+                      // no fixed leaves at all, unlike expense)
 }

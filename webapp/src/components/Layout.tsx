@@ -4,7 +4,7 @@ import { useData } from '../context/DataContext'
 import { formatMonthYear } from '../utils/dateUtils'
 
 export default function Layout({ children }: { children: React.ReactNode }) {
-  const { reports, physicians, activePhysicianId, setActivePhysicianId } = useData()
+  const { reports, pcrIncomeStatements, physicians, activePhysicianId, setActivePhysicianId } = useData()
   const navigate = useNavigate()
   const [physicianMenuOpen, setPhysicianMenuOpen] = useState(false)
   const physicianMenuRef = useRef<HTMLDivElement>(null)
@@ -216,6 +216,17 @@ export default function Layout({ children }: { children: React.ReactNode }) {
                   </select>
                 )}
               </div>
+              {pcrIncomeStatements.some((s) => s.year === selectedYear) && (
+                <button
+                  onClick={() => { navigate(`/income-statement/${selectedYear}`); setSidebarOpen(false) }}
+                  className="w-full text-left flex items-center gap-2 px-3 py-1.5 mb-1 rounded-md text-xs text-gray-400 hover:bg-gray-800 hover:text-gray-200 transition-colors font-medium"
+                >
+                  <svg className="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                  </svg>
+                  Income Statement
+                </button>
+              )}
               <div className="overflow-y-auto">
                 {reports
                   .filter((r) => r.year === selectedYear)

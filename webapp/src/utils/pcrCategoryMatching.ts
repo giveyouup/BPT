@@ -10,7 +10,7 @@ import type { PcrCategoryMapping } from '../types'
  */
 export function resolvePcrCategoryMapping(
   label: string,
-  section: 'stipend' | 'expense',
+  section: 'stipend' | 'expense' | 'otherIncome',
   mappings: PcrCategoryMapping[]
 ): PcrCategoryMapping | null {
   const lower = label.toLowerCase()

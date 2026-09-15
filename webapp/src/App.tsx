@@ -13,6 +13,7 @@ import Settings from './pages/Settings'
 import CptRangesPage from './pages/CptRangesPage'
 import PcrCategoryMappingPage from './pages/PcrCategoryMappingPage'
 import Compensation from './pages/Compensation'
+import PcrIncomeStatementPage from './pages/PcrIncomeStatementPage'
 import Help from './pages/Help'
 
 function AppContent() {
@@ -69,6 +70,8 @@ function AppContent() {
         <Route path="/settings/cpt-ranges" element={<CptRangesPage />} />
         <Route path="/settings/pcr-category-mapping" element={<PcrCategoryMappingPage />} />
         <Route path="/compensation" element={<Compensation />} />
+        <Route path="/income-statement/:year" element={<PcrIncomeStatementPage />} />
+        <Route path="/income-statement" element={<PcrIncomeStatementPage />} />
         <Route path="/help" element={<Help />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
