@@ -3,7 +3,8 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { useData } from '../context/DataContext'
 import { formatCurrency, getMonthName } from '../utils/dateUtils'
 import { resolvePcrCategoryMapping } from '../utils/pcrCategoryMatching'
-import { BUSINESS_LEAVES, BENEFITS_LEAVES, RETIREMENT_LEAVES, BUSINESS_KEYS, BENEFITS_KEYS, RETIREMENT_KEYS } from '../utils/expenseCategories'
+import { describeStipendGroupKey } from '../utils/calculations'
+import { BUSINESS_LEAVES, BENEFITS_LEAVES, RETIREMENT_LEAVES, BUSINESS_KEYS, BENEFITS_KEYS, RETIREMENT_KEYS, LEAF_LABELS } from '../utils/expenseCategories'
 import type { PcrStatementLine, PcrCategoryMapping } from '../types'
 
 interface SectionMeta {
@@ -28,6 +29,12 @@ interface SectionRow {
   label: string
   amounts: Record<number, number>
   total: number
+  // The raw PCR-printed label(s) this row was built from, when `label` is a
+  // mapped category name rather than a printed label itself (i.e. whenever a
+  // PcrCategoryMapping applies) -- multiple entries mean multiple PCR labels
+  // were merged into this one category row. Shown as a hover tooltip so the
+  // original printed text is never fully lost behind the category name.
+  sourceLabels?: string[]
 }
 
 // A row paired with its stable identity for ordering/drag-and-drop purposes:
@@ -60,6 +67,15 @@ const REVENUE_GROUP_META = {
   otherIncome:      { title: 'Other Income',       badge: 'bg-teal-950 text-teal-400',    border: 'border-teal-700' },
 } as const
 
+// Category-block indent/border, thinned on mobile -- a full pl-4/border-l-4
+// per level (plus the Health Insurance sub-group's own extra indent) eats
+// enough width on a phone to leave almost nothing for the table itself.
+const CATEGORY_BLOCK_CLS = 'pl-2 pr-3 py-4 border-l-2 md:pl-4 md:pr-5 md:border-l-4'
+// Nested "Unmapped" block resets its parent's indent via negative margins
+// before reapplying its own -- both sides of that cancellation need the same
+// responsive values or they'd only cancel out at one breakpoint.
+const NESTED_UNMAPPED_CLS = 'mt-3 pl-2 pr-3 py-4 -ml-2 -mr-3 md:pl-4 md:pr-5 md:-ml-4 md:-mr-5 border-t border-gray-800 border-l-2 md:border-l-4'
+
 // Rows within a group default to matching Compensation's own leaf order (the
 // single shared source of truth in expenseCategories.ts), not the order
 // labels happen to first appear in the underlying PCR data. Rows with no
@@ -70,11 +86,41 @@ const BUSINESS_ORDER = new Map(BUSINESS_LEAVES.map((l, i) => [l.key, i]))
 const BENEFITS_ORDER = new Map(BENEFITS_LEAVES.map((l, i) => [l.key, i]))
 const RETIREMENT_ORDER = new Map(RETIREMENT_LEAVES.map((l, i) => [l.key, i]))
 
-function sortByLeafOrder(rows: { row: SectionRow; targetKey: string }[], order: Map<string, number>): OrderedRow[] {
+// Multiple PCR labels can map to the same category (e.g. "CV Anesthesia" and
+// "CV NIR" both -> NIR) -- merged into a single summed row per target key,
+// displayed under the mapped category's own name, rather than showing two
+// identically-labeled rows side by side. The row's id becomes the target key
+// itself (stable across relabeling, unlike a raw PCR label).
+function mergeRowsByTarget(
+  entries: { row: SectionRow; targetKey: string }[],
+  describeLabel: (key: string) => string,
+): OrderedRow[] {
+  const byKey = new Map<string, { amounts: Record<number, number>; sourceLabels: string[] }>()
+  for (const { row, targetKey } of entries) {
+    if (!byKey.has(targetKey)) byKey.set(targetKey, { amounts: {}, sourceLabels: [] })
+    const bucket = byKey.get(targetKey)!
+    for (const [month, amount] of Object.entries(row.amounts)) {
+      const m = Number(month)
+      bucket.amounts[m] = (bucket.amounts[m] ?? 0) + amount
+    }
+    if (!bucket.sourceLabels.includes(row.label)) bucket.sourceLabels.push(row.label)
+  }
+  return [...byKey.entries()].map(([targetKey, { amounts, sourceLabels }]) => ({
+    id: targetKey,
+    row: {
+      label: describeLabel(targetKey),
+      amounts,
+      total: Object.values(amounts).reduce((s, v) => s + v, 0),
+      sourceLabels,
+    },
+  }))
+}
+
+function sortByOrder(rows: OrderedRow[], order: Map<string, number>): OrderedRow[] {
   return rows
-    .map((r, i) => ({ id: r.targetKey, row: r.row, sortKey: order.get(r.targetKey) ?? (1000 + i) }))
+    .map((r, i) => ({ r, sortKey: order.get(r.id) ?? (1000 + i) }))
     .sort((a, b) => a.sortKey - b.sortKey)
-    .map(({ id, row }) => ({ id, row }))
+    .map((x) => x.r)
 }
 
 // Layers a saved custom order (a list of item ids) on top of a group's
@@ -107,25 +153,29 @@ function splitMappedUnmapped(
   rowOrder: Record<string, string[]>,
   mappedGroupId: string,
   unmappedGroupId: string,
+  describeLabel: (key: string) => string,
 ): { mapped: OrderedRow[]; unmapped: OrderedRow[]; hidden: OrderedRow[] } {
-  const mapped: OrderedRow[] = []
+  const mappedEntries: { row: SectionRow; targetKey: string }[] = []
   const unmapped: OrderedRow[] = []
   const hidden: OrderedRow[] = []
   for (const row of rows) {
     const mapping = resolvePcrCategoryMapping(row.label, mappingSection, mappings)
-    if (mapping) { mapped.push({ id: row.label, row }); continue }
+    if (mapping) { mappedEntries.push({ row, targetKey: mapping.targetKey }); continue }
     ;(hiddenLabels.includes(row.label) ? hidden : unmapped).push({ id: row.label, row })
   }
   return {
-    mapped: applyCustomOrder(mapped, rowOrder[mappedGroupId]),
+    mapped: applyCustomOrder(mergeRowsByTarget(mappedEntries, describeLabel), rowOrder[mappedGroupId]),
     hidden: applyCustomOrder(hidden, rowOrder[unmappedGroupId]),
     unmapped: applyCustomOrder(unmapped, rowOrder[unmappedGroupId]),
   }
 }
 
+// Hidden below md -- this relies on native HTML5 drag-and-drop, which doesn't
+// fire from touch input at all, so the handle would just be dead weight
+// taking up space in the already-tight mobile Label column.
 function DragHandle() {
   return (
-    <svg className="w-3 h-3 text-gray-700 flex-shrink-0 cursor-grab" fill="currentColor" viewBox="0 0 16 16">
+    <svg className="hidden md:block w-3 h-3 text-gray-700 flex-shrink-0 cursor-grab" fill="currentColor" viewBox="0 0 16 16">
       <circle cx="5" cy="3" r="1.3" /><circle cx="11" cy="3" r="1.3" />
       <circle cx="5" cy="8" r="1.3" /><circle cx="11" cy="8" r="1.3" />
       <circle cx="5" cy="13" r="1.3" /><circle cx="11" cy="13" r="1.3" />
@@ -174,7 +224,7 @@ function AmountTable({ rows, months, groupId, onReorder, onHideRow }: {
               Label
             </th>
             {months.map((m) => (
-              <th key={m} className="px-4 py-3 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider whitespace-nowrap">
+              <th key={m} className="hidden md:table-cell px-4 py-3 text-right text-xs font-semibold text-gray-600 uppercase tracking-wider whitespace-nowrap">
                 {getMonthName(m).slice(0, 3)}
               </th>
             ))}
@@ -198,7 +248,7 @@ function AmountTable({ rows, months, groupId, onReorder, onHideRow }: {
             >
               <td
                 className="px-4 py-2.5 text-gray-300 whitespace-nowrap sticky left-0 z-10 bg-gray-900 group-hover:bg-gray-800/60"
-                title={row.label}
+                title={row.sourceLabels ? `PCR label(s): ${row.sourceLabels.join(', ')}` : row.label}
               >
                 <span className="flex items-center gap-1.5">
                   {reorderable && <DragHandle />}
@@ -218,7 +268,7 @@ function AmountTable({ rows, months, groupId, onReorder, onHideRow }: {
               {months.map((m) => {
                 const v = row.amounts[m]
                 return (
-                  <td key={m} className="px-4 py-2.5 text-right text-gray-400 tabular-nums whitespace-nowrap">
+                  <td key={m} className="hidden md:table-cell px-4 py-2.5 text-right text-gray-400 tabular-nums whitespace-nowrap">
                     {v !== undefined ? formatCurrency(v) : <span className="text-gray-700">—</span>}
                   </td>
                 )
@@ -379,14 +429,15 @@ export default function PcrIncomeStatementPage() {
     for (const row of expenseSection?.rows ?? []) place(row, false)
     for (const row of otherSection?.rows ?? []) place(row, true)
 
+    const describeExpenseKey = (key: string) => LEAF_LABELS[key] ?? key
     const rowOrder = settings.pcrRowOrder ?? {}
     const groups: Record<ExpenseGroupKey, OrderedRow[]> & { healthInsurance: OrderedRow[]; hidden: OrderedRow[] } = {
-      business: applyCustomOrder(sortByLeafOrder(buckets.business, BUSINESS_ORDER), rowOrder['expense:business']),
-      benefits: applyCustomOrder(sortByLeafOrder(buckets.benefits, BENEFITS_ORDER), rowOrder['expense:benefits']),
-      retirement: applyCustomOrder(sortByLeafOrder(buckets.retirement, RETIREMENT_ORDER), rowOrder['expense:retirement']),
+      business: applyCustomOrder(sortByOrder(mergeRowsByTarget(buckets.business, describeExpenseKey), BUSINESS_ORDER), rowOrder['expense:business']),
+      benefits: applyCustomOrder(sortByOrder(mergeRowsByTarget(buckets.benefits, describeExpenseKey), BENEFITS_ORDER), rowOrder['expense:benefits']),
+      retirement: applyCustomOrder(sortByOrder(mergeRowsByTarget(buckets.retirement, describeExpenseKey), RETIREMENT_ORDER), rowOrder['expense:retirement']),
       unmapped: applyCustomOrder(buckets.unmapped, rowOrder['expense:unmapped']),
       hidden: applyCustomOrder(buckets.hidden, rowOrder['expense:unmapped']),
-      healthInsurance: applyCustomOrder(sortByLeafOrder(buckets.healthInsurance, BENEFITS_ORDER), rowOrder['expense:healthInsurance']),
+      healthInsurance: applyCustomOrder(sortByOrder(mergeRowsByTarget(buckets.healthInsurance, describeExpenseKey), BENEFITS_ORDER), rowOrder['expense:healthInsurance']),
     }
 
     return { expenseGroups: groups, absorbedOtherLabels: absorbed }
@@ -399,6 +450,7 @@ export default function PcrIncomeStatementPage() {
     () => splitMappedUnmapped(
       sections.find((s) => s.key === 'stipend')?.rows ?? [], 'stipend', pcrCategoryMappings,
       settings.hiddenPcrLabels?.stipend ?? [], settings.pcrRowOrder ?? {}, 'stipend', 'stipend:unmapped',
+      describeStipendGroupKey,
     ),
     [sections, pcrCategoryMappings, settings.pcrRowOrder, settings.hiddenPcrLabels],
   )
@@ -406,6 +458,7 @@ export default function PcrIncomeStatementPage() {
     () => splitMappedUnmapped(
       sections.find((s) => s.key === 'otherIncome')?.rows ?? [], 'otherIncome', pcrCategoryMappings,
       settings.hiddenPcrLabels?.otherIncome ?? [], settings.pcrRowOrder ?? {}, 'otherIncome', 'otherIncome:unmapped',
+      (key) => key, // otherIncome targetKeys are already free-form category names
     ),
     [sections, pcrCategoryMappings, settings.pcrRowOrder, settings.hiddenPcrLabels],
   )
@@ -470,7 +523,8 @@ export default function PcrIncomeStatementPage() {
       <p className="text-xs text-gray-600 mb-8">
         Reconstructed from every uploaded PCR's income-statement pages for {year} -- one column per month found,
         one row per line label. A blank cell means that label wasn't on that month's PCR at all (label wording can
-        vary between report periods); a $0 cell means it was there but printed as zero.
+        vary between report periods); a $0 cell means it was there but printed as zero. On smaller screens only the
+        yearly total is shown per row -- switch to a wider screen for the monthly breakdown.
       </p>
 
       {!hasData ? (
@@ -504,7 +558,7 @@ export default function PcrIncomeStatementPage() {
                 {openSections.revenue && (
                   <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
                     {professionalFeesGroup.rows.length > 0 && (
-                      <div className={`pl-4 pr-5 py-4 border-l-4 ${REVENUE_GROUP_META.professionalFees.border}`}>
+                      <div className={`${CATEGORY_BLOCK_CLS} ${REVENUE_GROUP_META.professionalFees.border}`}>
                         <span className={`inline-block text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full mb-3 ${REVENUE_GROUP_META.professionalFees.badge}`}>
                           {REVENUE_GROUP_META.professionalFees.title}
                         </span>
@@ -512,13 +566,13 @@ export default function PcrIncomeStatementPage() {
                       </div>
                     )}
                     {(stipendGroups.mapped.length > 0 || stipendGroups.unmapped.length > 0 || stipendGroups.hidden.length > 0) && (
-                      <div className={`pl-4 pr-5 py-4 border-l-4 ${REVENUE_GROUP_META.stipends.border} ${professionalFeesGroup.rows.length > 0 ? 'border-t border-gray-800' : ''}`}>
+                      <div className={`${CATEGORY_BLOCK_CLS} ${REVENUE_GROUP_META.stipends.border} ${professionalFeesGroup.rows.length > 0 ? 'border-t border-gray-800' : ''}`}>
                         <span className={`inline-block text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full mb-3 ${REVENUE_GROUP_META.stipends.badge}`}>
                           {REVENUE_GROUP_META.stipends.title}
                         </span>
                         <AmountTable rows={stipendGroups.mapped} months={months} groupId="stipend" onReorder={handleReorder} />
                         {(stipendGroups.unmapped.length > 0 || stipendGroups.hidden.length > 0) && (
-                          <div className={`mt-3 pl-4 pr-5 py-4 -ml-4 -mr-5 border-t border-gray-800 border-l-4 ${EXPENSE_GROUP_META.unmapped.border}`}>
+                          <div className={`${NESTED_UNMAPPED_CLS} ${EXPENSE_GROUP_META.unmapped.border}`}>
                             <span className={`inline-block text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full mb-3 ${EXPENSE_GROUP_META.unmapped.badge}`}>
                               {EXPENSE_GROUP_META.unmapped.title}
                             </span>
@@ -532,13 +586,13 @@ export default function PcrIncomeStatementPage() {
                       </div>
                     )}
                     {(otherIncomeGroups.mapped.length > 0 || otherIncomeGroups.unmapped.length > 0 || otherIncomeGroups.hidden.length > 0) && (
-                      <div className={`pl-4 pr-5 py-4 border-t border-gray-800 border-l-4 ${REVENUE_GROUP_META.otherIncome.border}`}>
+                      <div className={`${CATEGORY_BLOCK_CLS} border-t border-gray-800 ${REVENUE_GROUP_META.otherIncome.border}`}>
                         <span className={`inline-block text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full mb-3 ${REVENUE_GROUP_META.otherIncome.badge}`}>
                           {REVENUE_GROUP_META.otherIncome.title}
                         </span>
                         <AmountTable rows={otherIncomeGroups.mapped} months={months} groupId="otherIncome" onReorder={handleReorder} />
                         {(otherIncomeGroups.unmapped.length > 0 || otherIncomeGroups.hidden.length > 0) && (
-                          <div className={`mt-3 pl-4 pr-5 py-4 -ml-4 -mr-5 border-t border-gray-800 border-l-4 ${EXPENSE_GROUP_META.unmapped.border}`}>
+                          <div className={`${NESTED_UNMAPPED_CLS} ${EXPENSE_GROUP_META.unmapped.border}`}>
                             <span className={`inline-block text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full mb-3 ${EXPENSE_GROUP_META.unmapped.badge}`}>
                               {EXPENSE_GROUP_META.unmapped.title}
                             </span>
@@ -592,7 +646,7 @@ export default function PcrIncomeStatementPage() {
                     {section.key === 'expense' ? (
                       <>
                         {expenseGroups.business.length > 0 && (
-                          <div className={`pl-4 pr-5 py-4 border-l-4 ${EXPENSE_GROUP_META.business.border}`}>
+                          <div className={`${CATEGORY_BLOCK_CLS} ${EXPENSE_GROUP_META.business.border}`}>
                             <span className={`inline-block text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full mb-3 ${EXPENSE_GROUP_META.business.badge}`}>
                               {EXPENSE_GROUP_META.business.title}
                             </span>
@@ -600,14 +654,14 @@ export default function PcrIncomeStatementPage() {
                           </div>
                         )}
                         {(expenseGroups.benefits.length > 0 || expenseGroups.healthInsurance.length > 0) && (
-                          <div className={`pl-4 pr-5 py-4 border-t border-gray-800 border-l-4 ${EXPENSE_GROUP_META.benefits.border}`}>
+                          <div className={`${CATEGORY_BLOCK_CLS} border-t border-gray-800 ${EXPENSE_GROUP_META.benefits.border}`}>
                             <span className={`inline-block text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full mb-3 ${EXPENSE_GROUP_META.benefits.badge}`}>
                               {EXPENSE_GROUP_META.benefits.title}
                             </span>
                             {expenseGroups.healthInsurance.length > 0 && (
                               <div className="mb-3">
                                 <p className="text-xs text-gray-600 mb-2">Health Insurance</p>
-                                <div className="pl-3 border-l border-gray-800">
+                                <div className="pl-1.5 border-l md:pl-3 border-gray-800">
                                   <AmountTable rows={expenseGroups.healthInsurance} months={months} groupId="expense:healthInsurance" onReorder={handleReorder} />
                                 </div>
                               </div>
@@ -616,7 +670,7 @@ export default function PcrIncomeStatementPage() {
                           </div>
                         )}
                         {expenseGroups.retirement.length > 0 && (
-                          <div className={`pl-4 pr-5 py-4 border-t border-gray-800 border-l-4 ${EXPENSE_GROUP_META.retirement.border}`}>
+                          <div className={`${CATEGORY_BLOCK_CLS} border-t border-gray-800 ${EXPENSE_GROUP_META.retirement.border}`}>
                             <span className={`inline-block text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full mb-3 ${EXPENSE_GROUP_META.retirement.badge}`}>
                               {EXPENSE_GROUP_META.retirement.title}
                             </span>
@@ -624,7 +678,7 @@ export default function PcrIncomeStatementPage() {
                           </div>
                         )}
                         {(expenseGroups.unmapped.length > 0 || expenseGroups.hidden.length > 0) && (
-                          <div className={`pl-4 pr-5 py-4 border-t border-gray-800 border-l-4 ${EXPENSE_GROUP_META.unmapped.border}`}>
+                          <div className={`${CATEGORY_BLOCK_CLS} border-t border-gray-800 ${EXPENSE_GROUP_META.unmapped.border}`}>
                             <span className={`inline-block text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full mb-3 ${EXPENSE_GROUP_META.unmapped.badge}`}>
                               {EXPENSE_GROUP_META.unmapped.title}
                             </span>

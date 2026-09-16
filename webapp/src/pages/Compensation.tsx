@@ -8,7 +8,7 @@ import { formatCurrency, formatMonthYear, formatDateShort, randomId } from '../u
 import { resolveShiftAlias } from '../utils/shiftUtils'
 import {
   BUSINESS_LEAVES, BENEFITS_LEAVES, RETIREMENT_LEAVES, ALL_LEAVES, LEAF_LABELS,
-  BUSINESS_KEYS, BENEFITS_KEYS, RETIREMENT_KEYS,
+  BUSINESS_KEYS, BENEFITS_KEYS, RETIREMENT_KEYS, CASH_BENEFIT_KEYS,
 } from '../utils/expenseCategories'
 import type { ExpenseEntry, AnnualExpenses } from '../types'
 
@@ -149,7 +149,7 @@ export default function Compensation() {
   const [pcrSyncPreview, setPcrSyncPreview] = useState<PcrSyncPreview | null>(null)
   const [pcrSyncing, setPcrSyncing] = useState(false)
   const draftKey = useRef<string>('')
-  const [pieDrill, setPieDrill] = useState<'benefits' | 'retirement' | null>(null)
+  const [pieDrill, setPieDrill] = useState<'benefits' | 'retirement' | 'netIncome' | 'cashBenefits' | null>(null)
   const [grossBreakdownOpen, setGrossBreakdownOpen] = useState(true)
 
   const [bizCat, setBizCat] = useState(''); const [bizAmt, setBizAmt] = useState(''); const [bizNote, setBizNote] = useState('')
@@ -512,7 +512,15 @@ export default function Compensation() {
   }
 
   const businessExpenses     = recurringSum(BUSINESS_KEYS) + (currentRecord?.entries?.reduce((s, e) => s + e.amount, 0) ?? 0)
-  const benefitsTotal        = recurringSum(BENEFITS_KEYS) + (currentRecord?.benefitsEntries?.reduce((s, e) => s + e.amount, 0) ?? 0)
+  // Benicomp/CME/Phone-Internet are cash reimbursements that land in the
+  // physician's own bank account, unlike the rest of Benefits (paid to a
+  // third party) -- excluded here so they fall into Net Income below instead.
+  // clinicalNet/netCompensation/totalComp are unaffected by this split
+  // (they cancel out algebraically no matter how benefitsTotal is divided);
+  // only how much of the total lands in the "Net Income" vs. "Benefits"
+  // pie slice changes.
+  const cashBenefitsTotal    = recurringSum(CASH_BENEFIT_KEYS)
+  const benefitsTotal        = recurringSum(BENEFITS_KEYS) - cashBenefitsTotal + (currentRecord?.benefitsEntries?.reduce((s, e) => s + e.amount, 0) ?? 0)
   const healthcareTotal      = recurringSum(HEALTHCARE_KEYS)
   const retirementTotal      = recurringSum(RETIREMENT_KEYS) + (currentRecord?.retirementEntries?.reduce((s, e) => s + e.amount, 0) ?? 0)
   const otherIncome          = (currentRecord?.otherIncomeEntries ?? []).reduce((s, e) => s + e.amount, 0)
@@ -953,23 +961,44 @@ export default function Compensation() {
         const freeformBen = (currentRecord?.benefitsEntries ?? []).reduce((s, e) => s + e.amount, 0)
         const freeformRet = (currentRecord?.retirementEntries ?? []).reduce((s, e) => s + e.amount, 0)
 
-        type Drill = 'benefits' | 'retirement' | null
-        const topSlices = [
-          { label: 'Net Income', value: Math.max(netCompensation, 0), hex: '#818cf8', drill: null as Drill },
+        type Drill = 'benefits' | 'retirement' | 'netIncome' | 'cashBenefits' | null
+        interface PieSlice { label: string; value: number; hex: string; drill?: Drill }
+
+        // Benicomp/CME/Phone-Internet, broken out individually -- one more
+        // level down from Net Income's own "Cash Benefits" slice.
+        const cashBenefitsSlices: PieSlice[] = [
+          { label: 'Benicomp',          value: rec.healthBenicomp ?? 0, hex: '#f472b6' },
+          { label: 'CME',               value: rec.cme ?? 0,            hex: '#facc15' },
+          { label: 'Phone / Internet',  value: rec.phoneInternet ?? 0,  hex: '#f87171' },
+        ].filter(d => d.value > 0)
+
+        const topSlices: PieSlice[] = [
+          { label: 'Cash Compensation', value: Math.max(netCompensation, 0), hex: '#818cf8', drill: 'netIncome' as Drill },
           { label: 'Benefits',   value: Math.max(benefitsTotal, 0),   hex: '#fb923c', drill: 'benefits'   as Drill },
           { label: 'Retirement', value: Math.max(retirementTotal, 0), hex: '#4ade80', drill: 'retirement' as Drill },
         ].filter(d => d.value > 0)
 
-        const benefitsSlices = [
+        // Splits "Cash Compensation" into the cash reimbursements folded in
+        // above (Benicomp/CME/Phone-Internet) vs. everything else that makes
+        // up that figure (unit pay + stipends, net of business overhead,
+        // plus other income and any carryforward/year-end adjustment). Cash
+        // Benefits drills one level further into cashBenefitsSlices; Salary
+        // has no further breakdown.
+        const netIncomeSlices: PieSlice[] = [
+          { label: 'Salary',        value: netCompensation - cashBenefitsTotal, hex: '#818cf8' },
+          { label: 'Cash Benefits', value: cashBenefitsTotal,                    hex: '#f472b6', drill: 'cashBenefits' as Drill },
+        ].filter(d => d.value > 0)
+
+        // Benicomp/CME/Phone-Internet are deliberately excluded here -- they're
+        // cash reimbursements now folded into Net Income (see benefitsTotal
+        // above), so they're no longer part of what this Benefits total means.
+        const benefitsSlices: PieSlice[] = [
           { label: 'Health Insurance',  value: (rec.healthDental ?? 0) + (rec.healthMedical ?? 0) + (rec.healthVision ?? 0), hex: '#38bdf8' },
-          { label: 'Benicomp',          value: rec.healthBenicomp ?? 0,  hex: '#f472b6' },
           { label: 'Licenses & Dues',   value: rec.licensesDues ?? 0,    hex: '#a78bfa' },
-          { label: 'CME',               value: rec.cme ?? 0,             hex: '#facc15' },
-          { label: 'Phone / Internet',  value: rec.phoneInternet ?? 0,   hex: '#f87171' },
           { label: 'Other',             value: freeformBen,               hex: '#94a3b8' },
         ].filter(d => d.value > 0)
 
-        const retirementSlices = [
+        const retirementSlices: PieSlice[] = [
           { label: 'Profit Sharing',  value: rec.profitSharing ?? 0,  hex: '#4ade80' },
           { label: 'Cash Balance',    value: rec.cashBalance ?? 0,    hex: '#fb923c' },
           { label: 'Other',           value: freeformRet,              hex: '#94a3b8' },
@@ -977,21 +1006,36 @@ export default function Compensation() {
 
         const activeSlices = pieDrill === 'benefits' ? benefitsSlices
           : pieDrill === 'retirement' ? retirementSlices
+          : pieDrill === 'netIncome' ? netIncomeSlices
+          : pieDrill === 'cashBenefits' ? cashBenefitsSlices
           : topSlices
         const total = activeSlices.reduce((s, d) => s + d.value, 0)
-        const drillLabel: Record<NonNullable<Drill>, string> = { benefits: 'Benefits', retirement: 'Retirement' }
+        const drillLabel: Record<NonNullable<Drill>, string> = {
+          benefits: 'Benefits', retirement: 'Retirement', netIncome: 'Cash Compensation', cashBenefits: 'Cash Benefits',
+        }
+        // Drilling into a slice nested under another drill (currently just
+        // Cash Benefits, under Net Income) should step back up one level
+        // rather than all the way to the top -- everything else still goes
+        // straight back to Overview, same as before.
+        const parentDrill: Record<NonNullable<Drill>, Drill> = {
+          benefits: null, retirement: null, netIncome: null, cashBenefits: 'netIncome',
+        }
         const totalLabel = pieDrill ? drillLabel[pieDrill] : 'Total Compensation'
-        const totalColor = pieDrill === 'benefits' ? 'text-sky-400' : pieDrill === 'retirement' ? 'text-teal-400' : 'text-violet-400'
+        const totalColor = pieDrill === 'benefits' ? 'text-sky-400'
+          : pieDrill === 'retirement' ? 'text-teal-400'
+          : pieDrill === 'netIncome' ? 'text-indigo-400'
+          : pieDrill === 'cashBenefits' ? 'text-pink-400'
+          : 'text-violet-400'
 
         return (
           <div className="bg-gray-900 border border-gray-800 rounded-xl p-5 mb-6">
             <div className="flex items-center gap-3 mb-4">
               {pieDrill && (
-                <button onClick={() => setPieDrill(null)} className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-300 transition-colors">
+                <button onClick={() => setPieDrill(parentDrill[pieDrill])} className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-300 transition-colors">
                   <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
                   </svg>
-                  Overview
+                  {parentDrill[pieDrill] ? drillLabel[parentDrill[pieDrill]!] : 'Overview'}
                 </button>
               )}
               <p className="text-xs text-gray-500 uppercase tracking-wider">
@@ -1010,9 +1054,8 @@ export default function Compensation() {
                       paddingAngle={2}
                       strokeWidth={0}
                       onClick={(entry: { drill?: Drill }) => { if (entry.drill) setPieDrill(entry.drill) }}
-                      style={{ cursor: pieDrill ? 'default' : 'pointer' }}
                     >
-                      {activeSlices.map(d => <Cell key={d.label} fill={d.hex} />)}
+                      {activeSlices.map(d => <Cell key={d.label} fill={d.hex} style={{ cursor: d.drill ? 'pointer' : 'default' }} />)}
                     </Pie>
                     <Tooltip
                       formatter={(value: number) => formatCurrency(value)}
@@ -1040,8 +1083,8 @@ export default function Compensation() {
                   <span className={`text-xs font-bold tabular-nums ${totalColor}`}>{formatCurrency(pieDrill ? total : totalComp)}</span>
                   <span className="text-xs text-gray-600 w-9 text-right">100%</span>
                 </div>
-                {!pieDrill && benefitsTotal + retirementTotal > 0 && (
-                  <p className="text-xs text-gray-700 mt-2">Click Benefits or Retirement to drill down</p>
+                {activeSlices.some(s => s.drill) && (
+                  <p className="text-xs text-gray-700 mt-2">Click a slice to drill down</p>
                 )}
               </div>
             </div>

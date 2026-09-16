@@ -36,3 +36,12 @@ export const LEAF_LABELS = Object.fromEntries(ALL_LEAVES.map(l => [l.key, l.labe
 export const BUSINESS_KEYS = new Set(BUSINESS_LEAVES.map((l) => l.key))
 export const BENEFITS_KEYS = new Set(BENEFITS_LEAVES.map((l) => l.key))
 export const RETIREMENT_KEYS = new Set(RETIREMENT_LEAVES.map((l) => l.key))
+
+// Most Benefits categories (health insurance premiums, retirement
+// contributions) are paid to a third party -- real economic value, but never
+// cash the physician can spend. These three are cash reimbursements/
+// allowances that land directly in the physician's own bank account instead,
+// so Compensation.tsx folds them into Net Income rather than the (non-cash)
+// Benefits total. Hardcoded rather than user-configurable per category for
+// now -- see webapp/src/pages/Compensation.tsx's benefitsTotal computation.
+export const CASH_BENEFIT_KEYS = new Set(['healthBenicomp', 'cme', 'phoneInternet'])

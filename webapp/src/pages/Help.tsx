@@ -8,6 +8,7 @@ const TOC = [
   { id: 'holidays', label: 'Federal Holidays' },
   { id: 'defaults', label: 'Fixed-Hour Shifts & Defaults' },
   { id: 'cpt-ranges', label: 'CPT Code Ranges' },
+  { id: 'pcr-mapping', label: 'PCR Category Mapping' },
   { id: 'backup', label: 'Backup, Restore & Maintenance' },
   { id: 'views', label: 'Where to Find Your Data' },
   { id: 'physicians', label: 'Multiple Physicians' },
@@ -235,6 +236,44 @@ export default function Help() {
         <p>
           Optional. Define numeric CPT/ASA code ranges with a label to tag billing line items with add-on badges
           elsewhere in the app. Not required to get basic tracking working.
+        </p>
+      </Section>
+
+      <Section id="pcr-mapping" title="PCR Category Mapping">
+        <Where>
+          <span className="text-gray-300">Settings → Code Reference → PCR Category Mapping</span>.
+        </Where>
+        <p>
+          Every PCR PDF also includes an income-statement page (revenues, stipends, expenses, other income), which
+          BRACT reads automatically alongside the billing line items. The wording of each line varies between
+          report periods (e.g. "SMCS Acute Pain" one month, something slightly different the next), so this page
+          maps each PCR-printed label to one of BRACT's own fixed categories — matched as a case-insensitive
+          substring, so a short mapped label like "Acute Pain" matches the full printed text automatically.
+        </p>
+        <ul className="list-disc pl-5 space-y-1.5">
+          <li><span className="text-gray-300 font-medium">Stipend Labels</span> — map to a Stipend Calculator group (APS, BR, G1/G2 Call, etc.), including any standalone column you've promoted there. Feeds the <span className="text-gray-300">PCR Stipend Audit</span> at the top of the Audits page, which compares what the PCR actually paid against what the Stipend Calculator computes as owed (with the PCR's one-month payout lag already accounted for).</li>
+          <li><span className="text-gray-300 font-medium">Expense Labels</span> — map to one of Compensation's Business Expenses / Benefits / Retirement Benefits categories, or a free-form custom category you've already added there.</li>
+          <li><span className="text-gray-300 font-medium">Other Income Labels</span> — map to a custom Other Income category. Other Income has no built-in categories, so add one on Compensation first, then map a PCR label to it here.</li>
+        </ul>
+        <p>
+          A label with no mapping is never silently dropped — it shows up as an "Unmapped" chip you can click to
+          prefill a new mapping, or dismiss (with a "Show N dismissed" link to bring it back later) if it's not
+          worth tracking.
+        </p>
+        <p className="text-gray-300 font-medium text-xs uppercase tracking-wide mb-1 mt-4">How this connects Compensation and the PCR Income Statement page</p>
+        <p>
+          The <button onClick={() => navigate('/income-statement')} className="text-indigo-400 hover:text-indigo-300 underline underline-offset-2">PCR Income Statement</button> page
+          is a read-only, month-by-month reconstruction of what the PCR itself reported, grouped into the same
+          Business Expenses / Benefits / Retirement Benefits / Other Income buckets as Compensation — purely by
+          resolving each PCR line through these mappings. If a category's grouping looks wrong on that page, this
+          is the place to fix it.
+        </p>
+        <p>
+          The <button onClick={() => navigate('/compensation')} className="text-indigo-400 hover:text-indigo-300 underline underline-offset-2">Compensation</button> page's
+          own yearly totals are separate, editable numbers — viewing the Income Statement page never changes them.
+          Its <span className="text-gray-300">"Sync from PCR"</span> button is the actual bridge: it sums the
+          mapped PCR amounts for the selected year and shows a diff against what's currently entered, so you can
+          review and apply changes rather than having anything overwritten silently.
         </p>
       </Section>
 
