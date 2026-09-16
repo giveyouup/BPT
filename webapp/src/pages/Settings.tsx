@@ -3,6 +3,7 @@ import { api, type MaintenanceResult } from '../api'
 import { useNavigate } from 'react-router-dom'
 import { useData } from '../context/DataContext'
 import { computeFederalHolidays, getFederalHolidayLabels } from '../utils/shiftUtils'
+import pkg from '../../package.json'
 import { formatDateFull, formatMonthYear, lastDayOfMonth, MONTH_ABBREVS, randomId } from '../utils/dateUtils'
 import { parseStipendMapping } from '../utils/stipendMappingParser'
 import type { StipendMapping, StipendRate } from '../types'
@@ -1397,7 +1398,7 @@ export default function Settings() {
         </div>
       )}
       <div className="mt-12 pt-6 border-t border-gray-800 text-center">
-        <span className="text-xs text-gray-600">v2.1.0</span>
+        <span className="text-xs text-gray-600">v{pkg.version}</span>
       </div>
     </div>
   )
