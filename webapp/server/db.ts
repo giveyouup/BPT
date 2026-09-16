@@ -507,6 +507,15 @@ export function importDatabase(data: DatabaseExport): void {
     for (const record of data.annualExpenses ?? []) upsertAnnualExpenses(record)
     for (const record of data.pcrIncomeStatements ?? []) upsertPcrIncomeStatement(record)
     for (const mapping of data.pcrCategoryMappings ?? []) upsertPcrCategoryMapping(mapping)
+
+    // A backup from before this feature existed has no pcrCategoryMappings
+    // at all, and the table was just wiped above -- without this, importing
+    // one leaves the mapping settings page completely empty (no defaults,
+    // no configured mappings) until the next server restart, since seeding
+    // otherwise only happens once at module load. Already guarded by a
+    // count > 0 check, so this is a no-op whenever the backup did include
+    // real mappings.
+    seedPcrCategoryMappings()
   })
   run()
 }
