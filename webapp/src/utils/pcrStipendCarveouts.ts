@@ -62,6 +62,13 @@ function makeStubReport(id: string, year: number, month: number, physicianId: st
  * written, so re-running this (a corrected re-upload, or a schedule edit that
  * moves which day is "first") doesn't leave a stale duplicate amount behind.
  *
+ * Never overwrites a dayStipends entry this function didn't itself put there
+ * -- e.g. a value the user typed in by hand on the Dashboard for that same
+ * date -- since that map only stores one number per date with no record of
+ * who wrote it. Without this guard a manual correction sitting on the same
+ * date a carve-out would target gets silently clobbered on the next upload
+ * or backfill.
+ *
  * Returns the updated report to be saved, or null if there was nothing to
  * apply (no FS/ROC/Alhambra line mapped in this statement) or nothing changed.
  */
@@ -114,6 +121,7 @@ export function applyPcrStipendCarveouts(
     if (amount <= 0) continue // nothing to (re)apply -- same as Dashboard's own $0-clears-the-entry rule
     const targetDate = findFirstShiftDate(sourceYear, sourceMonth, group, allSchedules)
     if (!targetDate) continue // no matching shift this month -- nothing to attach to
+    if (dayStipends[targetDate] !== undefined) continue // a value already sits here that this function didn't write (manual entry, or another group's carve-out) -- leave it alone rather than silently overwrite it
     dayStipends[targetDate] = amount
     carveouts[targetDate] = group
     changed = true
