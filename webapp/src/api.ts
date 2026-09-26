@@ -160,6 +160,25 @@ export const api = {
       form.append('pages', pages)
       return reqForm<PcrPdfExtractResult>('/pcr-pdf/extract', form)
     },
+    // Keeps the source PDF on the server (pdfs/<physician>/<year>/) so flagged
+    // OCR cells can be re-cropped on the Raw PCR page later.
+    store: (file: File, physicianId: string, year: number, month: number) => {
+      const form = new FormData()
+      form.append('file', file)
+      form.append('physicianId', physicianId)
+      form.append('year', String(year))
+      form.append('month', String(month))
+      return reqForm<{ path: string }>('/pcr-pdf/store', form)
+    },
+    // Row crops from an in-flight (not yet stored) upload; one data URL per row.
+    cropPreview: (file: File, rows: { page: number; top: number }[]) => {
+      const form = new FormData()
+      form.append('file', file)
+      form.append('rows', JSON.stringify(rows))
+      return reqForm<{ images: string[] }>('/pcr-pdf/crop-preview', form)
+    },
+    cropUrl: (path: string, page: number, top: number) =>
+      `/api/pcr-pdf/crop?path=${encodeURIComponent(path)}&page=${page}&top=${top}`,
   },
   schedulePdf: {
     parse: (file: File) => {

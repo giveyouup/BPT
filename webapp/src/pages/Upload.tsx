@@ -13,9 +13,13 @@ import type { ParseScheduleResult } from '../utils/schedulePaste'
 import { formatMonthYear, formatDateFull, formatCurrency, lastDayOfMonth, MONTH_ABBREVS, getMonthName } from '../utils/dateUtils'
 import { useData } from '../context/DataContext'
 import type { LineItem, ShiftEntry, Schedule, StipendMapping, StipendRate, Physician } from '../types'
+import OcrReviewList from '../components/OcrReviewList'
 import { applyPcrStipendCarveouts } from '../utils/pcrStipendCarveouts'
 import { diffPcrStatementMonth } from '../utils/pcrStatementDiff'
+import { mergeFreshWithEdits } from '../utils/pcrStatementEdits'
 import type { PcrMonthDiff } from '../utils/pcrStatementDiff'
+
+const cropKey = (li: LineItem) => `${li.srcPage}:${li.srcTop}`
 
 function genId() { return `sched-${Date.now()}-${Math.random().toString(36).slice(2)}` }
 
@@ -220,6 +224,10 @@ function PcrUploadTab() {
   // preview. null for xlsx uploads and for any PDF where that row wasn't
   // found/didn't parse (never blocks the upload, it's advisory only).
   const [printedTotals, setPrintedTotals] = useState<PcrPdfPrintedTotals | null>(null)
+  // Source-row crops for OCR-flagged cells, keyed "page:top" (see cropKey) --
+  // fetched once after extraction so the review panel can show the original
+  // PDF row next to what the OCR read.
+  const [previewCrops, setPreviewCrops] = useState<Record<string, string>>({})
   // Count of months auto-saved from the PDF's own income-statement pages
   // (revenues/stipends/expenses breakdown), if any were found -- feeds the
   // stipend-audit and expense-sync features. null when none were found
@@ -280,6 +288,7 @@ function PcrUploadTab() {
     setPdfBusy(null)
     setDetectedUnitInfo(null)
     setPrintedTotals(null)
+    setPreviewCrops({})
     setIncomeStatementMonthsSaved(null)
     setPendingIncomeStatementReview(null)
   }
@@ -325,13 +334,18 @@ function PcrUploadTab() {
   // carve-out into the Dashboard's "Additional Stipend" entry -- shared by the
   // auto-apply path (new/unchanged months) and the reviewed-changes path.
   async function saveIncomeStatementMonth(month: PcrPdfIncomeStatementMonth, filename: string) {
+    const id = `${month.year}-${String(month.month).padStart(2, '0')}`
+    // Hand-corrected/added/deleted lines on an already-stored month survive
+    // the re-upload; only untouched lines take the new OCR output.
+    const merged = mergeFreshWithEdits(pcrIncomeStatements.find((s) => s.id === id), month.lines)
     const statement = {
-      id: `${month.year}-${String(month.month).padStart(2, '0')}`,
+      id,
       year: month.year,
       month: month.month,
       filename,
       uploadDate: new Date().toISOString(),
-      lines: month.lines,
+      lines: merged.lines,
+      ...(merged.deletedKeys?.length ? { deletedKeys: merged.deletedKeys } : {}),
     }
     await savePcrIncomeStatement(statement)
     const carveoutReport = applyPcrStipendCarveouts(statement, pcrCategoryMappings, reports, schedules, activePhysicianId, settings, stipendMappings)
@@ -367,6 +381,14 @@ function PcrUploadTab() {
       applyParsedItems(items, detected, false)
       setDetectedUnitInfo(result.unitInfo)
       setPrintedTotals(result.printedTotals)
+      // Crops are a review aid, not part of the import -- a failure here
+      // must never fail the extraction itself.
+      const flaggedRows = items.filter((li) => li.flags?.length && li.srcPage !== undefined && li.srcTop !== undefined)
+      if (flaggedRows.length > 0) {
+        api.pcrPdf.cropPreview(file, flaggedRows.map((li) => ({ page: li.srcPage!, top: li.srcTop! })))
+          .then(({ images }) => setPreviewCrops(Object.fromEntries(flaggedRows.map((li, i) => [cropKey(li), images[i]]))))
+          .catch((e) => console.warn('Row crop preview failed:', e))
+      }
       // Only auto-fill from the PDF's own summary page when there's no
       // existing report for that month to preserve -- a manually-verified
       // $/unit or correction is never silently overwritten by a fresh OCR
@@ -392,7 +414,9 @@ function PcrUploadTab() {
         for (const month of result.incomeStatement) {
           const id = `${month.year}-${String(month.month).padStart(2, '0')}`
           const existing = pcrIncomeStatements.find((s) => s.id === id)
-          const diff = diffPcrStatementMonth(existing, month)
+          // Compare against the edit-merged lines so a person's own corrections
+          // never show up as a "restatement" needing review.
+          const diff = diffPcrStatementMonth(existing, { ...month, lines: mergeFreshWithEdits(existing, month.lines).lines })
           if (diff) { diffs.push(diff); toReview.push(month) }
           else toAutoApply.push(month)
         }
@@ -438,6 +462,12 @@ function PcrUploadTab() {
     selectedSection && activePhysician && !namesLikelyMatch(activePhysician.name, selectedSection.doctorName)
   )
 
+  const flaggedEntries = parsed
+    ? parsed.map((item, index) => ({ item, index })).filter((e) => e.item.flags?.length)
+    : []
+  const updateParsedItem = (index: number, next: LineItem) =>
+    setParsed((prev) => prev ? prev.map((li, i) => (i === index ? next : li)) : prev)
+
   const totalUnits = parsed ? parsed.reduce((s, li) => s + li.totalDistributableUnits, 0) : 0
   const distributableUnitsSum = parsed ? parsed.reduce((s, li) => s + li.timeUnits, 0) : 0
   const uniqueTickets = parsed ? new Set(parsed.map((li) => li.ticketNum)).size : 0
@@ -468,11 +498,22 @@ function PcrUploadTab() {
     }
     setSaving(true)
     setShowConflict(false)
+    // Keep the source PDF so flagged cells can still be compared against it
+    // later. Best-effort: a storage failure shouldn't block saving the data.
+    let sourcePdf: string | undefined
+    if (file!.name.toLowerCase().endsWith('.pdf')) {
+      try {
+        sourcePdf = (await api.pcrPdf.store(file!, activePhysicianId, year, month)).path
+      } catch (e) {
+        console.warn('Could not store source PDF:', e)
+      }
+    }
     const report = {
       id: reportId,
       year,
       month,
       filename: file!.name,
+      sourcePdf,
       uploadDate: new Date().toISOString(),
       unitDollarValue: parseFloat(unitValue) || 32,
       paddingMinutes: parseInt(paddingMins) || 30,
@@ -739,6 +780,23 @@ function PcrUploadTab() {
                   </>
                 )}
               </div>
+            </div>
+          )}
+
+          {flaggedEntries.length > 0 && (
+            <div className="mb-3 border border-amber-700/50 bg-amber-900/10 rounded-lg p-3">
+              <p className="text-xs font-semibold text-amber-400 mb-1">
+                {flaggedEntries.length} row{flaggedEntries.length !== 1 ? 's' : ''} need a second look
+              </p>
+              <p className="text-xs text-amber-600/90 mb-3">
+                The OCR wasn't confident about, or had to correct, the cells below. Compare each against the
+                source row and fix or confirm it. You can also save now and review later on the month's Raw PCR page.
+              </p>
+              <OcrReviewList
+                entries={flaggedEntries}
+                cropSrc={(li) => previewCrops[cropKey(li)]}
+                onChange={updateParsedItem}
+              />
             </div>
           )}
 

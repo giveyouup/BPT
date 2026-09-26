@@ -46,6 +46,16 @@ export interface PcrLineItem {
   totalTime: string | null
   timeUnits: number
   totalDistributableUnits: number
+  flags?: PcrOcrFlag[]
+  srcPage?: number
+  srcTop?: number
+}
+
+export interface PcrOcrFlag {
+  field: string
+  reason: 'repaired' | 'invariant' | 'low-confidence'
+  raw: string
+  conf: number | null
 }
 
 export interface PcrUnitInfo {
@@ -124,4 +134,34 @@ export function detectPcrSections(buffer: Buffer): Promise<PcrDetectResult> {
 
 export function extractPcrLineItems(buffer: Buffer, pages: string): Promise<PcrExtractResult> {
   return withTempPdf(buffer, (tmpPath) => runPython(['extract', tmpPath, '--pages', pages, '--json']))
+}
+
+/** Renders one line-item row (with its column-header strip) to PNG bytes. */
+export function cropPcrRow(pdfPath: string, page: number, top: number): Promise<Buffer> {
+  const out = path.join(os.tmpdir(), `pcr-crop-${randomUUID()}.png`)
+  return new Promise((resolve, reject) => {
+    execFile(
+      PYTHON_BIN,
+      [SCRIPT_PATH, 'crop', pdfPath, '--page', String(page), '--top', String(top), '--out', out],
+      { timeout: 60_000 },
+      (err, _stdout, stderr) => {
+        if (err) {
+          fs.unlink(out, () => {})
+          reject(new Error(stderr?.trim() || err.message))
+          return
+        }
+        try {
+          resolve(fs.readFileSync(out))
+        } catch (e) {
+          reject(e as Error)
+        } finally {
+          fs.unlink(out, () => {})
+        }
+      }
+    )
+  })
+}
+
+export function cropPcrRowFromBuffer(buffer: Buffer, page: number, top: number): Promise<Buffer> {
+  return withTempPdf(buffer, (tmpPath) => cropPcrRow(tmpPath, page, top))
 }

@@ -417,6 +417,59 @@ class DoctorGroup:
         self.printed_totals = None
 
 
+# ─── OCR-suspicion flags ──────────────────────────────────────────────────────
+# Cells the user relies on for real money/time math. CPT/ASA and Modifier are
+# deliberately absent: they're low-stakes for this app and tesseract is noisy
+# on them, so flagging them would only bury the signal. Measured across ~2,000
+# real rows, good reads score 84-96 and bad reads 14-57, so 75 splits them
+# cleanly.
+FLAG_CONF_THRESHOLD = 75.0
+FLAG_FIELDS = {  # column index -> LineItem field name
+    2: "ticketNum", 5: "unitValue", 6: "distributionValue",
+    8: "startTime", 9: "endTime", 10: "totalTime",
+    11: "timeUnits", 12: "totalDistributableUnits",
+}
+
+
+def build_row_flags(raw_cells, cells, confs, times_before, times_after, units_before, units_after):
+    """One flag per suspicious essential cell. Reasons, strongest first:
+      repaired        -- the raw OCR read was wrong and a repair (colon fix,
+                         time/unit reconciliation) replaced it
+      invariant       -- still unparseable, or times don't add up, after repair
+      low-confidence  -- tesseract itself wasn't sure
+    `raw` is what the OCR actually read, so the reviewer can see the delta."""
+    flags = {}
+
+    def put(idx, reason):
+        field = FLAG_FIELDS[idx]
+        if field in flags:
+            return
+        conf = confs[idx]
+        flags[field] = {"field": field, "reason": reason, "raw": raw_cells[idx],
+                        "conf": round(conf, 1) if conf is not None else None}
+
+    for idx in (5, 6, 11, 12):
+        if raw_cells[idx] != cells[idx]:  # colon->decimal repair
+            put(idx, "repaired")
+    for idx, b, a in zip((8, 9, 10), times_before, times_after):
+        if b != a:
+            put(idx, "repaired")
+    for idx, b, a in zip((11, 12), units_before, units_after):
+        if b is None or a is None or abs(b - a) > 0.005:
+            put(idx, "repaired")
+    for idx in FLAG_FIELDS:
+        if cells[idx] and idx in (5, 6, 11, 12) and safe_float(cells[idx]) is None:
+            put(idx, "invariant")
+    st, en, tt = parse_hhmm(times_after[0]), parse_hhmm(times_after[1]), parse_hhmm(times_after[2])
+    if None not in (st, en, tt) and (en - st) % 1440 != tt:
+        put(10, "invariant")
+    for idx in FLAG_FIELDS:
+        c = confs[idx]
+        if c is not None and c < FLAG_CONF_THRESHOLD:
+            put(idx, "low-confidence")
+    return list(flags.values())
+
+
 def parse_page_spec(spec, n_pages):
     """Parse a page selection like '6-10', '6,7,8', or '1-3,7,10-12' into a
     sorted, de-duplicated list of 0-indexed page indices."""
@@ -501,13 +554,24 @@ def extract(pdf_path, first_page=None, last_page=None, pages=None):
                 if not cells[3]:
                     cells[3] = recover_cpt_asa(img, row["top"])
                 cells[4] = fix_modifier(cells[4], confs[4] if confs[4] is not None else 100.0)
+                raw_cells = list(cells)
                 cells[5] = fix_decimal_colon(cells[5])
                 cells[6] = fix_decimal_colon(cells[6])
                 cells[7] = fix_decimal_colon(cells[7])
+                # Same misread hits Distributable Time Units / Total Distrib
+                # Units (confirmed: "3.75" -> "3:75", which failed to parse and
+                # made reconcile_distrib_units back-derive it from a low-
+                # confidence Total, importing 701 instead of 3.75).
+                cells[11] = fix_decimal_colon(cells[11])
+                cells[12] = fix_decimal_colon(cells[12])
                 start_time, end_time, total_time = reconcile_times(cells[8], cells[9], cells[10])
                 value = safe_float(cells[6]) or 0.0
                 distrib_units, total_distrib_units = reconcile_distrib_units(
                     value, cells[11], confs[11], cells[12], confs[12])
+                flags = build_row_flags(
+                    raw_cells, cells, confs,
+                    (cells[8], cells[9], cells[10]), (start_time, end_time, total_time),
+                    (safe_float(cells[11]), safe_float(cells[12])), (distrib_units, total_distrib_units))
                 current.rows.append({
                     "incident_id": cells[0],
                     "service_dt": cells[1],
@@ -522,6 +586,9 @@ def extract(pdf_path, first_page=None, last_page=None, pages=None):
                     "total_time": total_time,
                     "distributable_units": distrib_units,
                     "total_distrib_units": total_distrib_units,
+                    "flags": flags,
+                    "page": pi,
+                    "top": row["top"],
                 })
                 continue
             # otherwise: footer/copyright/noise line -> ignore
@@ -560,6 +627,11 @@ def to_line_items(doctors):
                 "totalTime": row["total_time"] or None,
                 "timeUnits": row["distributable_units"],
                 "totalDistributableUnits": row["total_distrib_units"],
+                # Row location is always emitted (not just for flagged rows) so
+                # any row can be compared against its source crop for manual edits.
+                "srcPage": row["page"],
+                "srcTop": round(row["top"], 2),
+                **({"flags": row["flags"]} if row.get("flags") else {}),
             })
     return items
 
@@ -813,6 +885,7 @@ MONTH_HEADER_RE = re.compile(
     r"^(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)$", re.IGNORECASE
 )
 YEAR_RE = re.compile(r"^\d{4}$")
+MONEY_TEXT_RE = re.compile(r"^[\$\(]*[\d,]+(\.\d+)?\)?$|^\$$")
 
 # The only three top-level dividers this feature needs to recognize by
 # name. A section opens on the bare header and closes on its own exact
@@ -880,6 +953,27 @@ def parse_money(text):
     return -v if neg else v
 
 
+def parse_income_header(header_words):
+    """Month columns (+ the trailing TOTAL anchor, if any) from one page's own
+    header row of `MON YYYY` word pairs."""
+    cols, total_anchor = [], None
+    i = 0
+    while i < len(header_words):
+        text = header_words[i]["text"].upper()
+        if text == "TOTAL":
+            total_anchor = header_words[i]["left"] + header_words[i]["width"] / 2
+            i += 1
+        elif MONTH_HEADER_RE.match(text) and i + 1 < len(header_words) and YEAR_RE.match(header_words[i + 1]["text"]):
+            month = MONTH_ABBR3.index(text.lower()) + 1
+            year = int(header_words[i + 1]["text"])
+            anchor = (header_words[i]["left"] + header_words[i + 1]["left"] + header_words[i + 1]["width"]) / 2
+            cols.append({"month": month, "year": year, "anchor": anchor})
+            i += 2
+        else:
+            i += 1
+    return cols, total_anchor
+
+
 def extract_income_statement(doc, page_indices):
     """Parse the multi-page cash-basis income statement. Returns a list of
     {"year", "month", "lines": [{"label", "section", "amount"}, ...]}, one
@@ -916,32 +1010,24 @@ def extract_income_statement(doc, page_indices):
                                         start_boundary=header_row["top"],
                                         header_gap_pt=13.7, row_gap_pt=13.7)
 
+        # Each page carries its own header row and, crucially, its own column
+        # x-positions: a continuation page with shorter labels starts its table
+        # further left (confirmed on a real Prokop sample: 33pt shift), so
+        # reusing the first page's anchors misfiles every amount and swallows
+        # the first number column into the label. Month identity comes from
+        # the first page; positions come from whichever page is being read.
+        page_cols, page_total = (parse_income_header(header_row["words"]) if header_row is not None else ([], None))
         if columns is None:
-            if header_row is None:
+            if not page_cols:
                 continue  # can't establish columns from this page; try the next
-            columns, total_anchor = [], None
-            hw = header_row["words"]
-            i = 0
-            while i < len(hw):
-                text = hw[i]["text"].upper()
-                if text == "TOTAL":
-                    total_anchor = hw[i]["left"] + hw[i]["width"] / 2
-                    i += 1
-                elif MONTH_HEADER_RE.match(text) and i + 1 < len(hw) and YEAR_RE.match(hw[i + 1]["text"]):
-                    month = MONTH_ABBR3.index(text.lower()) + 1
-                    year = int(hw[i + 1]["text"])
-                    anchor = (hw[i]["left"] + hw[i + 1]["left"] + hw[i + 1]["width"]) / 2
-                    columns.append({"month": month, "year": year, "anchor": anchor})
-                    i += 2
-                else:
-                    i += 1
-            if not columns:
-                columns = None
-                continue
+            columns, total_anchor = page_cols, page_total
             column_lines = [[] for _ in columns]
+        page_anchor_cols, page_total_anchor = columns, total_anchor
+        if page_cols and [(c["month"], c["year"]) for c in page_cols] == [(c["month"], c["year"]) for c in columns]:
+            page_anchor_cols, page_total_anchor = page_cols, page_total
 
-        anchors = [c["anchor"] for c in columns]
-        last_anchor = total_anchor if total_anchor is not None else anchors[-1] + (anchors[-1] - anchors[-2] if len(anchors) > 1 else 100.0)
+        anchors = [c["anchor"] for c in page_anchor_cols]
+        last_anchor = page_total_anchor if page_total_anchor is not None else anchors[-1] + (anchors[-1] - anchors[-2] if len(anchors) > 1 else 100.0)
         all_anchors = anchors + [last_anchor]
         label_boundary = anchors[0] - (all_anchors[1] - anchors[0]) / 2
         bounds = [label_boundary] + [(a + b) / 2 for a, b in zip(all_anchors, all_anchors[1:])] + [last_anchor + 1000.0]
@@ -953,7 +1039,15 @@ def extract_income_statement(doc, page_indices):
             label_parts, cells = [], [[] for _ in columns]
             for w in row["words"]:
                 cx = w["left"] + w["width"] / 2
-                if cx < bounds[0]:
+                # Also treat a word that *starts* well left of the first month
+                # column as label text whatever its centre says: a bold section
+                # header's OCR box can be absurdly wide (confirmed: "EXPENSES"
+                # on a real sample), which pushes its centre into the number
+                # columns and silently drops the row -- and with it the
+                # section it opens. Values are excluded from this rule -- a wide
+                # box around a stray "$0.00" also starts far left, and letting
+                # it through would leak the amount into the label.
+                if cx < bounds[0] or (w["left"] < anchors[0] - 60 and not MONEY_TEXT_RE.match(w["text"])):
                     label_parts.append(w)
                     continue
                 for ci in range(len(columns)):
@@ -1147,6 +1241,32 @@ def write_xlsx(doctors, criteria, out_path):
 
 # ─── CLI ───────────────────────────────────────────────────────────────────────
 
+CROP_ZOOM = 3
+CROP_HEADER_BAND_PT = (95.0, 118.5)  # the repeating column-header block
+
+
+def write_row_crop(pdf_path, page_index, row_top, out_path):
+    """Header strip stacked above the row's own strip, so a reviewer can see
+    which column is which without hunting through the source PDF."""
+    doc = fitz.open(pdf_path)
+    if not 0 <= page_index < len(doc):
+        raise ValueError(f"page {page_index} out of range")
+    page = doc[page_index]
+    mat = fitz.Matrix(CROP_ZOOM, CROP_ZOOM)
+    width = page.rect.width
+
+    def strip(y0, y1):
+        pix = page.get_pixmap(matrix=mat, clip=fitz.Rect(0, max(y0, 0), width, y1))
+        return Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+
+    header = strip(*CROP_HEADER_BAND_PT)
+    row = strip(row_top - 1.5, row_top + 10.5)
+    out = Image.new("RGB", (max(header.width, row.width), header.height + row.height + 6), "white")
+    out.paste(header, (0, 0))
+    out.paste(row, (0, header.height + 6))
+    out.save(out_path, "PNG")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                   formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -1162,6 +1282,12 @@ def main():
     p_extract.add_argument("--json", action="store_true",
                             help="Print LineItem-shaped JSON to stdout")
 
+    p_crop = sub.add_parser("crop", help="Render one line-item row (with the column header) to a PNG")
+    p_crop.add_argument("pdf")
+    p_crop.add_argument("--page", type=int, required=True, help="0-indexed page")
+    p_crop.add_argument("--top", type=float, required=True, help="row top, in PDF points")
+    p_crop.add_argument("--out", required=True)
+
     p_xlsx = sub.add_parser("xlsx", help="Write an .xlsx replica (standalone CLI use)")
     p_xlsx.add_argument("pdf")
     p_xlsx.add_argument("-o", "--output", required=True)
@@ -1175,6 +1301,10 @@ def main():
         if args.command == "detect":
             page_count, sections = detect_sections(args.pdf)
             json.dump({"pageCount": page_count, "sections": sections}, sys.stdout)
+            return
+
+        if args.command == "crop":
+            write_row_crop(args.pdf, args.page, args.top, args.out)
             return
 
         if args.command == "extract":

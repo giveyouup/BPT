@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect, Fragment } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useData } from '../context/DataContext'
 import { computeMonthlyStats, getApplicableMapping } from '../utils/calculations'
@@ -7,6 +7,9 @@ import {
 } from '../utils/dateUtils'
 import StatCard from '../components/StatCard'
 import { getCptCategory } from '../utils/cptLookup'
+import { api } from '../api'
+import OcrReviewList from '../components/OcrReviewList'
+import type { LineItem } from '../types'
 
 const inputCls = 'border border-gray-700 bg-gray-800 text-gray-100 rounded focus:outline-none focus:ring-2 focus:ring-indigo-500'
 
@@ -32,7 +35,17 @@ export default function MonthlyDetail() {
   // Case filter
   const [caseFilter, setCaseFilter] = useState('')
 
+  // OCR review: `reviewOpen` shows the flagged-rows list under the banner;
+  // `reviewTicket` opens an edit panel inline, right under that ticket's row.
+  const [reviewOpen, setReviewOpen] = useState(false)
+  const [reviewTicket, setReviewTicket] = useState<string | null>(null)
+
   const { reports, schedules: allSchedules, settings, stipendMappings: allMappings, cptRanges, saveReport, deleteReport } = useData()
+
+  // Bring the inline edit panel into view when it opens (the row may be far down the page)
+  useEffect(() => {
+    if (reviewTicket) document.getElementById('ocr-inline-review')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+  }, [reviewTicket])
 
   if (!id) return null
   const liveReport = reports.find((r) => r.id === id)
@@ -47,6 +60,35 @@ export default function MonthlyDetail() {
 
   const liveStats = computeMonthlyStats(liveReport, allSchedules, settings, allMappings)
   const autoMapping = getApplicableMapping(liveReport.year, liveReport.month, allMappings)
+
+  // ── OCR flags (PDF uploads) ──────────────────────────────────────────────
+  const flaggedEntries = liveReport.lineItems
+    .map((item, index) => ({ item, index }))
+    .filter((e) => e.item.flags?.length)
+  const flaggedFieldsByTicket = new Map<string, Set<string>>()
+  for (const { item } of flaggedEntries) {
+    if (!flaggedFieldsByTicket.has(item.ticketNum)) flaggedFieldsByTicket.set(item.ticketNum, new Set())
+    for (const f of item.flags!) flaggedFieldsByTicket.get(item.ticketNum)!.add(f.field)
+  }
+  // Inline edit panel: every line item of the chosen ticket, flagged or not.
+  const ticketEntries = (ticket: string) =>
+    liveReport.lineItems.map((item, index) => ({ item, index })).filter((e) => e.item.ticketNum === ticket)
+  const reviewedTickets = new Set(
+    liveReport.lineItems.filter((li) => li.reviewed && !li.flags?.length).map((li) => li.ticketNum),
+  )
+  const saveLineItem = async (index: number, next: LineItem) => {
+    // Editing the ticket number itself would otherwise make the open panel lose its row.
+    if (reviewTicket && liveReport.lineItems[index].ticketNum === reviewTicket && next.ticketNum !== reviewTicket) {
+      setReviewTicket(next.ticketNum)
+    }
+    await saveReport({ ...liveReport, lineItems: liveReport.lineItems.map((li, i) => (i === index ? next : li)) })
+  }
+  const cropSrc = (li: LineItem) =>
+    liveReport.sourcePdf && li.srcPage !== undefined && li.srcTop !== undefined
+      ? api.pcrPdf.cropUrl(liveReport.sourcePdf, li.srcPage, li.srcTop)
+      : undefined
+  const flagCell = (ticket: string, ...fields: string[]) =>
+    fields.some((f) => flaggedFieldsByTicket.get(ticket)?.has(f)) ? ' bg-amber-500/15 ring-1 ring-inset ring-amber-500/40' : ''
 
   const calendarYearMonth = `${liveReport.year}-${String(liveReport.month).padStart(2, '0')}`
 
@@ -266,6 +308,32 @@ export default function MonthlyDetail() {
           sub={liveStats.totalStipends > 0 ? `Incl. ${formatCurrency(liveStats.totalStipends)} stipends` : undefined} />
         <StatCard label="Hours Worked" value={formatHours(liveStats.totalHours)} sub={`${liveStats.daysWorked} days`} />
       </div>
+      {flaggedEntries.length > 0 && (
+        <div className="mb-6 border border-amber-700/50 bg-amber-900/10 rounded-lg p-4">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <p className="text-sm text-amber-300">
+              <span className="font-semibold">{flaggedEntries.length} line item{flaggedEntries.length !== 1 ? 's' : ''}</span> had
+              OCR cells worth double-checking against the source PDF. Click a ⚑ in the table to edit a ticket in place.
+            </p>
+            <button
+              onClick={() => setReviewOpen((o) => !o)}
+              className="text-xs px-3 py-1.5 rounded-lg bg-amber-600/20 text-amber-300 hover:bg-amber-600/30 font-medium"
+            >
+              {reviewOpen ? 'Hide list' : 'List all flagged cells'}
+            </button>
+          </div>
+          {reviewOpen && (
+            <div className="mt-3">
+              {!liveReport.sourcePdf && (
+                <p className="text-xs text-gray-600 mb-2">
+                  No source PDF is stored for this month, so there's no crop to compare against. Re-upload the PDF to enable it.
+                </p>
+              )}
+              <OcrReviewList entries={flaggedEntries} cropSrc={cropSrc} onChange={saveLineItem} />
+            </div>
+          )}
+        </div>
+      )}
       {/* Cases */}
       <section className="mb-8">
         <div className="flex items-center justify-between mb-3">
@@ -315,15 +383,36 @@ export default function MonthlyDetail() {
                   </td>
                 </tr>
               ) : filteredCases.map((c) => (
-                <tr key={c.ticketNum} className="group border-b border-gray-800 hover:bg-gray-800">
-                  <td className="px-4 py-3 font-mono text-xs text-gray-300 min-w-[104px] sticky left-0 z-10 bg-gray-900 group-hover:bg-gray-800">{c.ticketNum}</td>
+                <Fragment key={c.ticketNum}>
+                <tr className="group border-b border-gray-800 hover:bg-gray-800">
+                  <td className="px-4 py-3 font-mono text-xs text-gray-300 min-w-[104px] sticky left-0 z-10 bg-gray-900 group-hover:bg-gray-800">
+                    {c.ticketNum}
+                    {flaggedFieldsByTicket.has(c.ticketNum) ? (
+                      <button
+                        onClick={() => setReviewTicket(reviewTicket === c.ticketNum ? null : c.ticketNum)}
+                        title="OCR flagged cells on this ticket — click to review"
+                        className="ml-1.5 text-amber-400 hover:text-amber-300"
+                      >⚑</button>
+                    ) : (
+                      <>
+                        {reviewedTickets.has(c.ticketNum) && (
+                          <span title="Reviewed" className="ml-1.5 text-emerald-600">✓</span>
+                        )}
+                        <button
+                          onClick={() => setReviewTicket(reviewTicket === c.ticketNum ? null : c.ticketNum)}
+                          title="Edit this ticket's values"
+                          className="ml-1.5 text-gray-600 hover:text-indigo-400"
+                        >✎</button>
+                      </>
+                    )}
+                  </td>
                   <td className="px-4 py-3 text-gray-400 whitespace-nowrap min-w-[120px] sticky left-[104px] z-10 bg-gray-900 group-hover:bg-gray-800">{formatDateFull(c.serviceDate)}</td>
-                  <td className="px-4 py-3 font-mono text-xs text-gray-400 whitespace-nowrap">{c.startTime ?? '—'}</td>
-                  <td className="px-4 py-3 font-mono text-xs text-gray-400 whitespace-nowrap">{c.endTime ?? '—'}</td>
+                  <td className={`px-4 py-3 font-mono text-xs text-gray-400 whitespace-nowrap${flagCell(c.ticketNum, 'startTime', 'totalTime')}`}>{c.startTime ?? '—'}</td>
+                  <td className={`px-4 py-3 font-mono text-xs text-gray-400 whitespace-nowrap${flagCell(c.ticketNum, 'endTime', 'totalTime')}`}>{c.endTime ?? '—'}</td>
                   <td className="px-4 py-3 font-mono text-xs text-gray-400">{c.primaryCptAsa}</td>
                   <td className="px-4 py-3 text-xs text-gray-500 max-w-[160px]">{getCptCategory(c.primaryCptAsa, cptRanges) ?? '—'}</td>
-                  <td className="px-4 py-3 text-gray-400">{c.primaryDistributionValue.toFixed(2)}</td>
-                  <td className="px-4 py-3 text-gray-400">{c.primaryTimeUnits.toFixed(2)}</td>
+                  <td className={`px-4 py-3 text-gray-400${flagCell(c.ticketNum, 'distributionValue', 'unitValue')}`}>{c.primaryDistributionValue.toFixed(2)}</td>
+                  <td className={`px-4 py-3 text-gray-400${flagCell(c.ticketNum, 'timeUnits')}`}>{c.primaryTimeUnits.toFixed(2)}</td>
                   <td className="px-4 py-3">
                     {c.addOnTags.length > 0 ? (
                       <span className="flex flex-wrap gap-1">
@@ -344,11 +433,31 @@ export default function MonthlyDetail() {
                     )}
                   </td>
                   <td className="px-4 py-3 text-gray-500">{c.addOnUnits > 0 ? `+${c.addOnUnits.toFixed(2)}` : '—'}</td>
-                  <td className="px-4 py-3 font-semibold text-indigo-400">{c.totalUnits.toFixed(2)}</td>
+                  <td className={`px-4 py-3 font-semibold text-indigo-400${flagCell(c.ticketNum, 'totalDistributableUnits')}`}>{c.totalUnits.toFixed(2)}</td>
                   <td className="px-4 py-3 flex items-center gap-1 flex-wrap">
                     {c.isSplit && <span className="bg-amber-900/40 text-amber-400 text-xs px-1.5 py-0.5 rounded">split</span>}
                   </td>
                 </tr>
+                {reviewTicket === c.ticketNum && (
+                  <tr id="ocr-inline-review" className="border-b border-gray-800 bg-gray-950/60">
+                    <td colSpan={12} className="p-0">
+                      {/* sticky so the panel stays in view when the wide table is scrolled sideways */}
+                      <div className="sticky left-0 p-3 w-[min(1000px,calc(100vw-2rem))]">
+                        <div className="flex items-center justify-between mb-2">
+                          <p className="text-xs text-gray-400">Editing ticket {c.ticketNum}</p>
+                          <button onClick={() => setReviewTicket(null)} className="text-xs text-gray-500 hover:text-gray-300">Close ✕</button>
+                        </div>
+                        {!liveReport.sourcePdf && (
+                          <p className="text-xs text-gray-600 mb-2">
+                            No source PDF is stored for this month, so there's no crop to compare against. Re-upload the PDF to enable it.
+                          </p>
+                        )}
+                        <OcrReviewList entries={ticketEntries(c.ticketNum)} cropSrc={cropSrc} onChange={saveLineItem} showAllFields />
+                      </div>
+                    </td>
+                  </tr>
+                )}
+                </Fragment>
               ))}
             </tbody>
             <tfoot>
