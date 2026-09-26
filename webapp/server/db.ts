@@ -6,7 +6,7 @@ import type { MonthlyReport, Schedule, Settings, StipendMapping, CptRange, Physi
 import { DEFAULT_CPT_RANGES } from '../src/utils/cptLookup'
 import { DEFAULT_PCR_CATEGORY_MAPPINGS } from '../src/utils/pcrCategoryDefaults'
 
-const DATA_DIR = process.env.DATA_DIR ?? '/opt/stacks/BPT'
+export const DATA_DIR = process.env.DATA_DIR ?? '/opt/stacks/BPT'
 const DB_PATH = path.join(DATA_DIR, 'bpt.db')
 
 fs.mkdirSync(DATA_DIR, { recursive: true })

@@ -17,6 +17,20 @@ export interface LineItem {
   totalTime: string | null // "HH:MM"
   timeUnits: number
   totalDistributableUnits: number
+  // PDF (OCR) uploads only: cells the parser doubted (cleared as each is
+  // reviewed/edited), plus where the row sits in the source PDF so a crop can
+  // be rendered for comparison.
+  flags?: OcrFlag[]
+  srcPage?: number   // 0-indexed page in the source PDF
+  srcTop?: number    // row top, in PDF points
+  reviewed?: boolean // a person has checked/edited this row's cells (set when a flag is cleared or a cell is edited)
+}
+
+export interface OcrFlag {
+  field: 'ticketNum' | 'unitValue' | 'distributionValue' | 'startTime' | 'endTime' | 'totalTime' | 'timeUnits' | 'totalDistributableUnits'
+  reason: 'repaired' | 'invariant' | 'low-confidence'
+  raw: string          // what the OCR actually read
+  conf: number | null  // tesseract confidence (0-100)
 }
 
 export interface ShiftEntry {
@@ -96,6 +110,7 @@ export interface MonthlyReport {
   year: number
   month: number // 1–12
   filename: string
+  sourcePdf?: string // stored source PDF, relative to the server's pdfs/ dir (PDF uploads only)
   uploadDate: string // ISO datetime
   unitDollarValue: number
   paddingMinutes: number
@@ -205,6 +220,12 @@ export interface PcrStatementLine {
   label: string       // verbatim PCR-printed label, e.g. "SMCS Acute Pain"
   section: 'stipend' | 'expense' | 'otherIncome' | 'other'
   amount: number
+  // Hand corrections (see utils/pcrStatementEdits.ts). `ocr` holds what the
+  // parser originally read, present only while this line differs from it;
+  // `added` marks a line typed in by hand that the PDF never had. Both make a
+  // line survive a re-upload of the same month.
+  ocr?: { label: string; section: 'stipend' | 'expense' | 'otherIncome' | 'other'; amount: number }
+  added?: boolean
 }
 
 export interface PcrIncomeStatement {
@@ -215,6 +236,9 @@ export interface PcrIncomeStatement {
   filename: string
   uploadDate: string
   lines: PcrStatementLine[]
+  // Original-OCR identities ("section|label|n") of lines deleted by hand, so a
+  // re-upload doesn't bring them back.
+  deletedKeys?: string[]
 }
 
 // User-configured mapping from a PCR-printed label to one of the app's own

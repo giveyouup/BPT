@@ -1,11 +1,14 @@
-import { useMemo, useState } from 'react'
+import { createContext, useContext, useMemo, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useData } from '../context/DataContext'
 import { formatCurrency, getMonthName } from '../utils/dateUtils'
 import { resolvePcrCategoryMapping } from '../utils/pcrCategoryMatching'
 import { describeStipendGroupKey } from '../utils/calculations'
 import { BUSINESS_LEAVES, BENEFITS_LEAVES, RETIREMENT_LEAVES, BUSINESS_KEYS, BENEFITS_KEYS, RETIREMENT_KEYS, LEAF_LABELS } from '../utils/expenseCategories'
-import type { PcrStatementLine, PcrCategoryMapping } from '../types'
+import type { PcrStatementLine, PcrCategoryMapping, PcrIncomeStatement } from '../types'
+import StatementLineEditor from '../components/StatementLineEditor'
+import { isHandEdited } from '../utils/pcrStatementEdits'
+import { applyPcrStipendCarveouts } from '../utils/pcrStipendCarveouts'
 
 interface SectionMeta {
   key: PcrStatementLine['section']
@@ -35,6 +38,9 @@ interface SectionRow {
   // were merged into this one category row. Shown as a hover tooltip so the
   // original printed text is never fully lost behind the category name.
   sourceLabels?: string[]
+  // Months where at least one underlying statement line was hand-edited or
+  // hand-added, so those cells can be marked in the table.
+  editedMonths?: Set<number>
 }
 
 // A row paired with its stable identity for ordering/drag-and-drop purposes:
@@ -91,27 +97,33 @@ const RETIREMENT_ORDER = new Map(RETIREMENT_LEAVES.map((l, i) => [l.key, i]))
 // displayed under the mapped category's own name, rather than showing two
 // identically-labeled rows side by side. The row's id becomes the target key
 // itself (stable across relabeling, unlike a raw PCR label).
+// Lets any AmountTable cell open the line editor for its month without
+// threading a callback through every table instance.
+const CellEditContext = createContext<((month: number, row: SectionRow) => void) | null>(null)
+
 function mergeRowsByTarget(
   entries: { row: SectionRow; targetKey: string }[],
   describeLabel: (key: string) => string,
 ): OrderedRow[] {
-  const byKey = new Map<string, { amounts: Record<number, number>; sourceLabels: string[] }>()
+  const byKey = new Map<string, { amounts: Record<number, number>; sourceLabels: string[]; editedMonths: Set<number> }>()
   for (const { row, targetKey } of entries) {
-    if (!byKey.has(targetKey)) byKey.set(targetKey, { amounts: {}, sourceLabels: [] })
+    if (!byKey.has(targetKey)) byKey.set(targetKey, { amounts: {}, sourceLabels: [], editedMonths: new Set() })
     const bucket = byKey.get(targetKey)!
+    for (const m of row.editedMonths ?? []) bucket.editedMonths.add(m)
     for (const [month, amount] of Object.entries(row.amounts)) {
       const m = Number(month)
       bucket.amounts[m] = (bucket.amounts[m] ?? 0) + amount
     }
     if (!bucket.sourceLabels.includes(row.label)) bucket.sourceLabels.push(row.label)
   }
-  return [...byKey.entries()].map(([targetKey, { amounts, sourceLabels }]) => ({
+  return [...byKey.entries()].map(([targetKey, { amounts, sourceLabels, editedMonths }]) => ({
     id: targetKey,
     row: {
       label: describeLabel(targetKey),
       amounts,
       total: Object.values(amounts).reduce((s, v) => s + v, 0),
       sourceLabels,
+      editedMonths,
     },
   }))
 }
@@ -196,6 +208,7 @@ function AmountTable({ rows, months, groupId, onReorder, onHideRow }: {
   const [dragId, setDragId] = useState<string | null>(null)
   const [overId, setOverId] = useState<string | null>(null)
   const reorderable = !!groupId && !!onReorder
+  const openCellEditor = useContext(CellEditContext)
 
   if (rows.length === 0) return null
 
@@ -267,8 +280,17 @@ function AmountTable({ rows, months, groupId, onReorder, onHideRow }: {
               </td>
               {months.map((m) => {
                 const v = row.amounts[m]
+                const edited = row.editedMonths?.has(m)
                 return (
-                  <td key={m} className="hidden md:table-cell px-4 py-2.5 text-right text-gray-400 tabular-nums whitespace-nowrap">
+                  <td
+                    key={m}
+                    onClick={openCellEditor ? () => openCellEditor(m, row) : undefined}
+                    title={edited ? 'Hand-edited — kept if you re-upload this month. Click to edit.' : openCellEditor ? 'Click to edit this month\'s lines' : undefined}
+                    className={`hidden md:table-cell px-4 py-2.5 text-right text-gray-400 tabular-nums whitespace-nowrap ${
+                      openCellEditor ? 'cursor-pointer hover:bg-gray-700/40' : ''
+                    } ${edited ? 'bg-amber-500/15 ring-1 ring-inset ring-amber-500/40' : ''}`}
+                  >
+                    {edited && <span className="text-amber-400 mr-1">✎</span>}
                     {v !== undefined ? formatCurrency(v) : <span className="text-gray-700">—</span>}
                   </td>
                 )
@@ -321,7 +343,19 @@ function HiddenRowsToggle({ hidden, onUnhide }: { hidden: OrderedRow[]; onUnhide
 export default function PcrIncomeStatementPage() {
   const { year: yearParam } = useParams<{ year: string }>()
   const navigate = useNavigate()
-  const { pcrIncomeStatements, pcrCategoryMappings, annualExpenses, settings, saveSettings } = useData()
+  const {
+    pcrIncomeStatements, pcrCategoryMappings, annualExpenses, settings, saveSettings,
+    savePcrIncomeStatement, reports, schedules, stipendMappings, saveReport, activePhysicianId,
+  } = useData()
+  const [editTarget, setEditTarget] = useState<{ month: number; labels?: string[] } | null>(null)
+
+  // Persists a hand edit, then refreshes the Fort Sutter / ROC / Alhambra
+  // carve-outs for that month since they're derived straight from its lines.
+  async function saveEditedStatement(next: PcrIncomeStatement) {
+    await savePcrIncomeStatement(next)
+    const carveout = applyPcrStipendCarveouts(next, pcrCategoryMappings, reports, schedules, activePhysicianId, settings, stipendMappings)
+    if (carveout) await saveReport(carveout)
+  }
 
   function handleReorder(groupId: string, newOrder: string[]) {
     saveSettings({ ...settings, pcrRowOrder: { ...(settings.pcrRowOrder ?? {}), [groupId]: newOrder } })
@@ -347,17 +381,22 @@ export default function PcrIncomeStatementPage() {
     return SECTION_META.map((meta) => {
       const labelOrder: string[] = []
       const rowsByLabel = new Map<string, Record<number, number>>()
+      const editedByLabel = new Map<string, Set<number>>()
       for (const stmt of statementsForYear) {
         for (const line of stmt.lines) {
           if (line.section !== meta.key) continue
           if (!rowsByLabel.has(line.label)) { rowsByLabel.set(line.label, {}); labelOrder.push(line.label) }
           const amounts = rowsByLabel.get(line.label)!
           amounts[stmt.month] = (amounts[stmt.month] ?? 0) + line.amount
+          if (isHandEdited(line)) {
+            if (!editedByLabel.has(line.label)) editedByLabel.set(line.label, new Set())
+            editedByLabel.get(line.label)!.add(stmt.month)
+          }
         }
       }
       const rows: SectionRow[] = labelOrder.map((label) => {
         const amounts = rowsByLabel.get(label)!
-        return { label, amounts, total: Object.values(amounts).reduce((s, v) => s + v, 0) }
+        return { label, amounts, total: Object.values(amounts).reduce((s, v) => s + v, 0), editedMonths: editedByLabel.get(label) }
       })
       return { ...meta, rows }
     })
@@ -526,10 +565,15 @@ export default function PcrIncomeStatementPage() {
         vary between report periods); a $0 cell means it was there but printed as zero. On smaller screens only the
         yearly total is shown per row -- switch to a wider screen for the monthly breakdown.
       </p>
+      <p className="text-xs text-gray-600 -mt-6 mb-8">
+        Click any monthly amount to correct an OCR misread (amount, label or section) or add/delete a line.
+        Cells marked <span className="text-amber-400">✎</span> were edited by hand and are kept when that month's PDF is uploaded again.
+      </p>
 
       {!hasData ? (
         <p className="text-gray-500 text-sm">No PCR income-statement data found for {year}.</p>
       ) : (
+        <CellEditContext.Provider value={(month, row) => setEditTarget({ month, labels: row.sourceLabels ?? [row.label] })}>
         <div className="space-y-10">
           {(() => {
             const isEmpty = professionalFeesGroup.rows.length === 0
@@ -699,7 +743,20 @@ export default function PcrIncomeStatementPage() {
             )
           })}
         </div>
+        </CellEditContext.Provider>
       )}
+
+      {editTarget && (() => {
+        const stmt = statementsForYear.find((st) => st.month === editTarget.month)
+        return stmt ? (
+          <StatementLineEditor
+            statement={stmt}
+            focusLabels={editTarget.labels}
+            onChange={saveEditedStatement}
+            onClose={() => setEditTarget(null)}
+          />
+        ) : null
+      })()}
     </div>
   )
 }

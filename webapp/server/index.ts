@@ -1,7 +1,8 @@
 import express from 'express'
 import multer from 'multer'
 import path from 'path'
-import { detectPcrSections, extractPcrLineItems } from './pdfParser'
+import { detectPcrSections, extractPcrLineItems, cropPcrRow, cropPcrRowFromBuffer } from './pdfParser'
+import { storePcrPdf, resolveStoredPdf } from './pdfStore'
 import { parseSchedulePdf } from './schedulePdfParser'
 import {
   getPhysicians, upsertPhysician, deletePhysician,
@@ -95,6 +96,67 @@ app.post('/api/pcr-pdf/extract', pdfUpload.single('file'), async (req, res) => {
     res.json(result)
   } catch (err) {
     console.error('PDF extract failed:', err)
+    res.status(500).json({ error: String(err) })
+  }
+})
+
+// Keeps the uploaded PDF on disk so flagged OCR cells can be re-cropped later.
+app.post('/api/pcr-pdf/store', pdfUpload.single('file'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded' })
+  const { physicianId } = req.body as Record<string, string | undefined>
+  const year = parseInt(req.body.year, 10)
+  const month = parseInt(req.body.month, 10)
+  if (!Number.isFinite(year) || !Number.isFinite(month) || month < 1 || month > 12) {
+    return res.status(400).json({ error: 'valid year and month required' })
+  }
+  const physician = getPhysicians().find((p) => p.id === physicianId)
+  try {
+    const rel = storePcrPdf(req.file.buffer, physician?.name ?? 'unknown', year, month, req.file.originalname)
+    res.json({ path: rel })
+  } catch (err) {
+    console.error('PDF store failed:', err)
+    res.status(500).json({ error: String(err) })
+  }
+})
+
+// Row crop from a stored PDF (Raw PCR Report page).
+app.get('/api/pcr-pdf/crop', async (req, res) => {
+  const rel = String(req.query.path ?? '')
+  const page = parseInt(String(req.query.page), 10)
+  const top = parseFloat(String(req.query.top))
+  const abs = rel ? resolveStoredPdf(rel) : null
+  if (!abs) return res.status(404).json({ error: 'Stored PDF not found' })
+  if (!Number.isFinite(page) || !Number.isFinite(top)) return res.status(400).json({ error: 'page and top required' })
+  try {
+    const png = await cropPcrRow(abs, page, top)
+    res.type('png').set('Cache-Control', 'private, max-age=86400').send(png)
+  } catch (err) {
+    console.error('PDF crop failed:', err)
+    res.status(500).json({ error: String(err) })
+  }
+})
+
+// Row crops straight from an in-flight upload (before the PDF has been
+// stored): one upload, many rows, returned as data URLs.
+app.post('/api/pcr-pdf/crop-preview', pdfUpload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded' })
+  let rows: { page: number; top: number }[]
+  try {
+    rows = JSON.parse(req.body.rows)
+    if (!Array.isArray(rows) || rows.length > 200 || rows.some((r) => !Number.isFinite(r.page) || !Number.isFinite(r.top))) {
+      throw new Error('bad rows')
+    }
+  } catch {
+    return res.status(400).json({ error: 'rows must be a JSON array of {page, top}' })
+  }
+  try {
+    const buffer = req.file.buffer
+    const images = await Promise.all(
+      rows.map(async (r) => `data:image/png;base64,${(await cropPcrRowFromBuffer(buffer, r.page, r.top)).toString('base64')}`)
+    )
+    res.json({ images })
+  } catch (err) {
+    console.error('PDF crop failed:', err)
     res.status(500).json({ error: String(err) })
   }
 })
