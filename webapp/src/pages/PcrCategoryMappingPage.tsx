@@ -432,7 +432,7 @@ export default function PcrCategoryMappingPage() {
         <p className="text-xs text-gray-400 flex-1">
           Fort Sutter and Alhambra are paid as a lump monthly PCR amount rather than a per-shift rate;
           ROC has both a per-shift rate and a variable lump sum on top, so only the excess over the
-          rate-sheet amount is carried over. Either way it lands in the Dashboard's "Additional Stipend"
+          rate-sheet amount is carried over. Either way it lands in the Dashboard's "Stipend Adjustment"
           entry automatically on upload. Use this after mapping one of those labels for the first time
           to backfill months already uploaded.
         </p>

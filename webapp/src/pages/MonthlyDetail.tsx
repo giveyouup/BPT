@@ -514,9 +514,9 @@ export default function MonthlyDetail() {
               <p className="text-base font-semibold text-gray-100">{formatCurrencyFull(liveStats.shiftStipends)}</p>
             </div>
           )}
-          {liveStats.additionalStipends > 0 && (
+          {liveStats.additionalStipends !== 0 && (
             <div className="flex justify-between items-center px-5 py-4">
-              <p className="text-sm text-gray-300">Additional Stipend</p>
+              <p className="text-sm text-gray-300">Stipend Adjustment</p>
               <p className="text-base font-semibold text-gray-100">{formatCurrencyFull(liveStats.additionalStipends)}</p>
             </div>
           )}

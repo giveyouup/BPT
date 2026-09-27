@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect, useRef, Fragment } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, ResponsiveContainer } from 'recharts'
 import { useData } from '../context/DataContext'
 import {
@@ -8,6 +9,7 @@ import {
 import { formatCurrency, formatCurrencyFull, formatDateFull, getMonthName } from '../utils/dateUtils'
 import { isOffDayShift, isWeekendOrHoliday, resolveShiftAlias, computeFederalHolidays } from '../utils/shiftUtils'
 import { resolvePcrCategoryMapping } from '../utils/pcrCategoryMatching'
+import { applyDayAdjustment, parseSignedAmount } from '../utils/stipendAdjustments'
 
 const CHART_STYLE = {
   contentStyle: { fontSize: 12, borderRadius: 8, border: '1px solid #1f2937', backgroundColor: '#111827', color: '#f3f4f6' },
@@ -41,7 +43,9 @@ interface DayDetail {
   shift: string
   group: string
   isWeekend: boolean
-  amount: number
+  amount: number        // rate-sheet amount for this shift
+  adjustment?: number   // stipend adjustment (signed) for the day, shown on the row that carries it
+  adjustable?: boolean  // this row is where the day's adjustment can be entered
 }
 
 interface MonthRow {
@@ -178,8 +182,9 @@ function PcrMatchBadge({ status, paid, owed }: { status: PcrMatchStatus; paid: n
 export default function StipendCalculator() {
   const {
     reports, schedules: allSchedules, settings, stipendMappings: allMappings, saveReport, saveSettings,
-    pcrIncomeStatements, pcrCategoryMappings,
+    pcrIncomeStatements, pcrCategoryMappings, activePhysicianId,
   } = useData()
+  const [searchParams, setSearchParams] = useSearchParams()
 
   const scheduleYears = allSchedules.flatMap((s) => s.entries.map((e) => parseInt(e.date.slice(0, 4))))
   const reportYears = reports.map((r) => r.year)
@@ -190,6 +195,33 @@ export default function StipendCalculator() {
   const [savingMonth, setSavingMonth] = useState<number | null>(null)
   const [configOpen, setConfigOpen] = useState(false)
   const [viewMode, setViewMode] = useState<'accrual' | 'pcr'>('accrual')
+  const [editingAdjDate, setEditingAdjDate] = useState<string | null>(null)
+  const [adjInput, setAdjInput] = useState('')
+  const pendingScroll = useRef(false)
+
+  // Deep link from the Audits page: /stipends?view=pcr&year=Y&month=M&group=G
+  // opens that PCR month's cell with its days listed.
+  useEffect(() => {
+    const group = searchParams.get('group')
+    const month = Number(searchParams.get('month'))
+    const year = Number(searchParams.get('year'))
+    if (!group || !month) return
+    if (searchParams.get('view') === 'pcr') setViewMode('pcr')
+    if (year) setSelectedYear(year)
+    setActiveCell({ month, group })
+    pendingScroll.current = true
+    setSearchParams({}, { replace: true })
+  }, [searchParams, setSearchParams])
+
+  useEffect(() => {
+    if (!pendingScroll.current || !activeCell) return
+    const t = setTimeout(() => {
+      const el = [...document.querySelectorAll<HTMLElement>('[data-stipend-detail]')].find((e) => e.offsetParent !== null)
+      el?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+      pendingScroll.current = false
+    }, 80)
+    return () => clearTimeout(t)
+  }, [activeCell, viewMode, selectedYear])
 
   const promoted = useMemo(() => new Set(settings.promotedStipendCodes ?? []), [settings.promotedStipendCodes])
   const groups = useMemo(() => buildGroups(settings.promotedStipendCodes ?? []), [settings.promotedStipendCodes])
@@ -283,6 +315,7 @@ export default function StipendCalculator() {
 
     for (const [date, shiftTypes] of entries) {
       const isWeekend = isWeekendOrHoliday(date, holidayList)
+      const dayRows: DayDetail[] = []
 
       for (const raw of shiftTypes) {
         if (isOffDayShift(raw)) continue
@@ -291,20 +324,35 @@ export default function StipendCalculator() {
         const amount = mapping ? getShiftStipend(raw, isWeekend, mapping) : 0
         row.amounts[group] = (row.amounts[group] ?? 0) + amount
         if (amount > 0) {
-          row.details.push({ date, shift: canonical, group, isWeekend, amount })
+          const detail: DayDetail = { date, shift: canonical, group, isWeekend, amount }
+          dayRows.push(detail)
+          row.details.push(detail)
         }
       }
 
+      const groupsOnDay = new Set(
+        shiftTypes
+          .filter(r => !isOffDayShift(r))
+          .map(r => getStipendGroup(resolveShiftAlias(r.toUpperCase()), isWeekend, promoted))
+      )
       const addl = additionalByDate.get(date) ?? 0
-      if (addl > 0) {
-        const groupsOnDay = new Set(
-          shiftTypes
-            .filter(r => !isOffDayShift(r))
-            .map(r => getStipendGroup(resolveShiftAlias(r.toUpperCase()), isWeekend, promoted))
-        )
-        const addlGroup = groupsOnDay.size === 1 ? [...groupsOnDay][0] : 'additional'
-        row.amounts[addlGroup] = (row.amounts[addlGroup] ?? 0) + addl
-        row.details.push({ date, shift: '—', group: addlGroup, isWeekend, amount: addl })
+      if (groupsOnDay.size === 1) {
+        // One shift group that day: its adjustment belongs to that group and
+        // is entered on the day's first row for it.
+        const onlyGroup = [...groupsOnDay][0]
+        const anchor = dayRows.find((d) => d.group === onlyGroup)
+        if (addl !== 0) row.amounts[onlyGroup] = (row.amounts[onlyGroup] ?? 0) + addl
+        if (anchor) {
+          anchor.adjustable = true
+          if (addl !== 0) anchor.adjustment = addl
+        } else if (addl !== 0) {
+          row.details.push({ date, shift: '—', group: onlyGroup, isWeekend, amount: 0, adjustment: addl, adjustable: true })
+        }
+      } else if (addl !== 0) {
+        // Several shift groups that day: no way to tell which one it belongs
+        // to, so it's tracked in the separate "additional" bucket.
+        row.amounts['additional'] = (row.amounts['additional'] ?? 0) + addl
+        row.details.push({ date, shift: '—', group: 'additional', isWeekend, amount: 0, adjustment: addl, adjustable: true })
       }
     }
 
@@ -366,7 +414,7 @@ export default function StipendCalculator() {
   // exists for it in some month with nothing owed to offset it against — e.g.
   // no NIR shifts worked but the PCR still paid out $1,500 for NIR that month.
   const visibleGroups = groups.filter((g) =>
-    rows.some((r) => (r.amounts[g.key] ?? 0) > 0) ||
+    rows.some((r) => (r.amounts[g.key] ?? 0) !== 0) ||
     (viewMode === 'pcr' && rows.some((r) => getPcrStatus(r.month, g.key, r.amounts[g.key] ?? 0) === 'mismatch'))
   )
 
@@ -374,8 +422,103 @@ export default function StipendCalculator() {
   const footerMappingLabel = mappingNames.length === 1 ? mappingNames[0] : mappingNames.length > 1 ? 'varies' : null
 
   const toggleCell = (month: number, group: string) => {
+    setEditingAdjDate(null)
     setActiveCell((prev) =>
       prev?.month === month && prev?.group === group ? null : { month, group }
+    )
+  }
+
+  // Sets (or with 0 clears) the signed stipend adjustment for one date --
+  // e.g. -500 when someone else covered half of a $1,000 shift.
+  async function saveAdjustment(date: string) {
+    const amount = parseSignedAmount(adjInput)
+    setEditingAdjDate(null)
+    if (isNaN(amount)) return
+    for (const r of applyDayAdjustment(reports, date, Math.round(amount * 100) / 100, activePhysicianId, settings)) {
+      await saveReport(r)
+    }
+  }
+
+  const renderDetailTable = (detailRows: DayDetail[], showExtra: boolean, g: (typeof groups)[number]) => {
+    const rateTotal = detailRows.reduce((sum, d) => sum + d.amount, 0)
+    const adjTotal = detailRows.reduce((sum, d) => sum + (d.adjustment ?? 0), 0)
+    const shiftCount = detailRows.filter((d) => d.shift !== '—').length
+    const th = 'px-3 py-1.5 text-gray-600 font-semibold uppercase tracking-wider whitespace-nowrap'
+    const adjCls = (v: number) => (v < 0 ? 'text-red-400' : 'text-emerald-400')
+    return (
+      <div data-stipend-detail className={`rounded-lg border border-gray-700/50 overflow-x-auto ${g.activeBg}`}>
+        <table className="text-xs w-full">
+          <thead>
+            <tr className="border-b border-gray-700/50">
+              <th className={`${th} text-left`}>Date</th>
+              {showExtra && <th className={`${th} text-left`}>Shift</th>}
+              {showExtra && <th className={`${th} text-left`}>DOW</th>}
+              <th className={`${th} text-left`}>Day</th>
+              <th className={`${th} text-right`}>Rate</th>
+              <th className={`${th} text-right`} title="Stipend adjustment: enter a negative amount to reduce (e.g. a split shift)">Adjustment</th>
+              <th className={`${th} text-right`}>Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            {detailRows.map((d, i) => (
+              <tr key={i} className="border-b border-gray-700/30 last:border-0">
+                <td className="px-3 py-1.5 text-gray-300 whitespace-nowrap">{formatDateFull(d.date)}</td>
+                {showExtra && <td className="px-3 py-1.5 text-gray-400 whitespace-nowrap font-medium">{d.shift}</td>}
+                {showExtra && <td className="px-3 py-1.5 text-gray-500 whitespace-nowrap">{getDayOfWeek(d.date)}</td>}
+                <td className="px-3 py-1.5 text-gray-500 whitespace-nowrap">{d.isWeekend ? 'WE/Hol' : 'WD'}</td>
+                <td className={`px-3 py-1.5 text-right whitespace-nowrap ${d.amount > 0 ? g.cellClass : 'text-gray-600'}`}>
+                  {d.amount > 0 ? formatCurrencyFull(d.amount) : '—'}
+                </td>
+                <td className="px-3 py-1.5 text-right whitespace-nowrap">
+                  {d.adjustable ? (
+                    editingAdjDate === d.date ? (
+                      <span className="inline-flex items-center gap-1">
+                        <input
+                          type="text" placeholder="0" autoFocus
+                          value={adjInput}
+                          onChange={(e) => setAdjInput(e.target.value)}
+                          onKeyDown={(e) => { if (e.key === 'Enter') void saveAdjustment(d.date); if (e.key === 'Escape') setEditingAdjDate(null) }}
+                          className="w-20 bg-gray-800 border border-gray-600 rounded px-1.5 py-0.5 text-right text-gray-100 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                        />
+                        <button onClick={() => void saveAdjustment(d.date)} className="text-indigo-400 hover:text-indigo-300">✓</button>
+                        <button onClick={() => setEditingAdjDate(null)} className="text-gray-600 hover:text-gray-400">✕</button>
+                      </span>
+                    ) : (
+                      <button
+                        onClick={() => { setEditingAdjDate(d.date); setAdjInput(d.adjustment ? String(d.adjustment) : '') }}
+                        title="Set a stipend adjustment for this day (negative reduces it)"
+                        className="bg-gray-800/50 rounded px-1.5 hover:bg-gray-700/50 transition-colors"
+                      >
+                        {d.adjustment
+                          ? <span className={`${adjCls(d.adjustment)} border-b border-dashed border-current`}>{formatCurrencyFull(d.adjustment)}</span>
+                          : <span className="text-gray-600">+</span>}
+                      </button>
+                    )
+                  ) : d.adjustment ? (
+                    <span className={adjCls(d.adjustment)}>{formatCurrencyFull(d.adjustment)}</span>
+                  ) : <span className="text-gray-700">—</span>}
+                </td>
+                <td className={`px-3 py-1.5 text-right font-semibold whitespace-nowrap ${g.cellClass}`}>
+                  {formatCurrencyFull(d.amount + (d.adjustment ?? 0))}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+          <tfoot>
+            <tr className="border-t border-gray-700/50">
+              <td className="px-3 py-1.5 text-gray-500 font-semibold">{shiftCount} shift{shiftCount !== 1 ? 's' : ''}</td>
+              {showExtra && <td />}
+              {showExtra && <td />}
+              <td />
+              <td className="px-3 py-1.5 text-right text-gray-400 whitespace-nowrap">{formatCurrencyFull(rateTotal)}</td>
+              <td className={`px-3 py-1.5 text-right whitespace-nowrap ${adjTotal === 0 ? 'text-gray-600' : adjCls(adjTotal)}`}>
+                {adjTotal === 0 ? '—' : formatCurrencyFull(adjTotal)}
+              </td>
+              <td className={`px-3 py-1.5 text-right font-bold whitespace-nowrap ${g.cellClass}`}>{formatCurrencyFull(rateTotal + adjTotal)}</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
     )
   }
 
@@ -581,7 +724,7 @@ export default function StipendCalculator() {
             const isRowExpanded = activeCell?.month === row.month
             const expandedGroup = isRowExpanded ? activeCell!.group : null
             const nonZeroGroups = visibleGroups.filter((g) =>
-              (row.amounts[g.key] ?? 0) > 0 ||
+              (row.amounts[g.key] ?? 0) !== 0 ||
               (viewMode === 'pcr' && getPcrStatus(row.month, g.key, row.amounts[g.key] ?? 0) === 'mismatch')
             )
 
@@ -620,37 +763,12 @@ export default function StipendCalculator() {
                           </span>
                         </button>
                         {/* Inline detail panel */}
-                        {isActive && detailRows.length > 0 && (() => {
-                          const showExtra = detailGroups.has(g.key)
-                          return (
-                            <div className={`mt-1 mb-1 rounded-lg border border-gray-700/50 overflow-hidden ${g.activeBg}`}>
-                              <table className="text-xs w-full">
-                                <tbody>
-                                  {detailRows.map((d, i) => (
-                                    <tr key={i} className="border-b border-gray-700/30 last:border-0">
-                                      <td className="px-3 py-1.5 text-gray-300 whitespace-nowrap">{formatDateFull(d.date)}</td>
-                                      {showExtra && <td className="px-3 py-1.5 text-gray-400 whitespace-nowrap font-medium">{d.shift}</td>}
-                                      {showExtra && <td className="px-3 py-1.5 text-gray-500 whitespace-nowrap">{getDayOfWeek(d.date)}</td>}
-                                      <td className="px-3 py-1.5 text-gray-500 whitespace-nowrap">{d.isWeekend ? 'WE/Hol' : 'WD'}</td>
-                                      <td className={`px-3 py-1.5 text-right font-semibold whitespace-nowrap ${g.cellClass}`}>{formatCurrencyFull(d.amount)}</td>
-                                    </tr>
-                                  ))}
-                                </tbody>
-                                <tfoot>
-                                  <tr className="border-t border-gray-700/50">
-                                    <td className="px-3 py-1.5 text-gray-500 font-semibold">{detailRows.length} shift{detailRows.length !== 1 ? 's' : ''}</td>
-                                    {showExtra && <td />}
-                                    {showExtra && <td />}
-                                    <td />
-                                    <td className={`px-3 py-1.5 text-right font-bold whitespace-nowrap ${g.cellClass}`}>
-                                      {formatCurrencyFull(detailRows.reduce((s, d) => s + d.amount, 0))}
-                                    </td>
-                                  </tr>
-                                </tfoot>
-                              </table>
-                            </div>
-                          )
-                        })()}
+                        {isActive && detailRows.length > 0 && (
+                          <div className="mt-1 mb-1">{renderDetailTable(detailRows, detailGroups.has(g.key), g)}</div>
+                        )}
+                        {isActive && detailRows.length === 0 && (
+                          <p className="mt-1 mb-1 px-2 text-xs text-gray-600">No shifts in this category for {getMonthName(row.sourceMonth)}.</p>
+                        )}
                       </div>
                     )
                   })}
@@ -732,7 +850,7 @@ export default function StipendCalculator() {
                         {visibleGroups.map((g) => {
                           const isActive = expandedGroup === g.key
                           const value = row.amounts[g.key] ?? 0
-                          const hasValue = value > 0
+                          const hasValue = value !== 0
                           const pcrStatus = viewMode === 'pcr' ? getPcrStatus(row.month, g.key, value) : null
                           return (
                             <td
@@ -782,7 +900,7 @@ export default function StipendCalculator() {
                         return (
                           <tr className={`border-b border-gray-800 ${expandedGroupMeta.activeBg}`}>
                             <td colSpan={colSpan} className="p-0">
-                              <div className={`sticky left-0 w-fit px-4 py-3 ${showExtra ? 'max-w-[min(calc(100vw-2rem),540px)]' : 'max-w-[min(calc(100vw-2rem),420px)]'}`}>
+                              <div className={`sticky left-0 w-fit px-4 py-3 ${showExtra ? 'max-w-[min(calc(100vw-2rem),760px)]' : 'max-w-[min(calc(100vw-2rem),620px)]'}`}>
                                 {/* Panel header */}
                                 <div className="flex items-center justify-between mb-2 gap-4">
                                   <p className={`text-xs font-semibold uppercase tracking-wider ${expandedGroupMeta.headerClass}`}>
@@ -796,49 +914,22 @@ export default function StipendCalculator() {
                                     ✕
                                   </button>
                                 </div>
-                                {/* Detail table */}
-                                <div className={`rounded-lg border border-gray-700/50 overflow-hidden ${expandedGroupMeta.activeBg}`}>
-                                  <table className="text-xs w-full">
-                                    <thead>
-                                      <tr className="border-b border-gray-700/50">
-                                        <th className="px-3 py-1.5 text-left text-gray-600 font-semibold uppercase tracking-wider whitespace-nowrap">Date</th>
-                                        {showExtra && <th className="px-3 py-1.5 text-left text-gray-600 font-semibold uppercase tracking-wider whitespace-nowrap">Shift</th>}
-                                        {showExtra && <th className="px-3 py-1.5 text-left text-gray-600 font-semibold uppercase tracking-wider whitespace-nowrap">DOW</th>}
-                                        <th className="px-3 py-1.5 text-left text-gray-600 font-semibold uppercase tracking-wider whitespace-nowrap">Day</th>
-                                        <th className="px-3 py-1.5 text-right text-gray-600 font-semibold uppercase tracking-wider whitespace-nowrap">Amount</th>
-                                      </tr>
-                                    </thead>
-                                    <tbody>
-                                      {detailRows.map((d, i) => (
-                                        <tr key={i} className="border-b border-gray-700/30 last:border-0">
-                                          <td className="px-3 py-1.5 text-gray-300 whitespace-nowrap">{formatDateFull(d.date)}</td>
-                                          {showExtra && <td className="px-3 py-1.5 text-gray-400 whitespace-nowrap font-medium">{d.shift}</td>}
-                                          {showExtra && <td className="px-3 py-1.5 text-gray-500 whitespace-nowrap">{getDayOfWeek(d.date)}</td>}
-                                          <td className="px-3 py-1.5 text-gray-500 whitespace-nowrap">{d.isWeekend ? 'WE/Hol' : 'WD'}</td>
-                                          <td className={`px-3 py-1.5 text-right font-semibold whitespace-nowrap ${expandedGroupMeta.cellClass}`}>
-                                            {formatCurrencyFull(d.amount)}
-                                          </td>
-                                        </tr>
-                                      ))}
-                                    </tbody>
-                                    <tfoot>
-                                      <tr className="border-t border-gray-700/50">
-                                        <td className="px-3 py-1.5 text-gray-500 font-semibold">{detailRows.length} shift{detailRows.length !== 1 ? 's' : ''}</td>
-                                        {showExtra && <td />}
-                                        {showExtra && <td />}
-                                        <td />
-                                        <td className={`px-3 py-1.5 text-right font-bold whitespace-nowrap ${expandedGroupMeta.cellClass}`}>
-                                          {formatCurrencyFull(detailRows.reduce((s, d) => s + d.amount, 0))}
-                                        </td>
-                                      </tr>
-                                    </tfoot>
-                                  </table>
-                                </div>
+                                {renderDetailTable(detailRows, showExtra, expandedGroupMeta)}
                               </div>
                             </td>
                           </tr>
                         )
                       })()}
+                      {isRowExpanded && expandedGroupMeta && detailRows.length === 0 && (
+                        <tr className={`border-b border-gray-800 ${expandedGroupMeta.activeBg}`}>
+                          <td colSpan={colSpan} className="p-0">
+                            <p className="sticky left-0 w-fit px-4 py-3 text-xs text-gray-500">
+                              No shifts in {expandedGroupMeta.label} for {getMonthName(row.sourceMonth)}
+                              {viewMode === 'pcr' && getPcrPaid(row.month, expandedGroupMeta.key) !== 0 && <> — the PCR paid {formatCurrencyFull(getPcrPaid(row.month, expandedGroupMeta.key))}</>}.
+                            </p>
+                          </td>
+                        </tr>
+                      )}
                     </Fragment>
                   )
                 })}

@@ -1,3 +1,4 @@
+import { parseSignedAmount } from '../utils/stipendAdjustments'
 import React, { useState, useMemo, useEffect, useRef } from 'react'
 import { exportDashboardMonth } from '../utils/exportXlsx'
 import { createPortal } from 'react-dom'
@@ -147,9 +148,9 @@ export default function Dashboard() {
     if (!selStats) return
     const report = getOrCreateStubReport(selStats)
     if (!report) return
-    const amount = parseFloat(dayStipendInput)
+    const amount = parseSignedAmount(dayStipendInput)
     const dayStipends = { ...report.dayStipends }
-    if (!isNaN(amount) && amount > 0) {
+    if (!isNaN(amount) && amount !== 0) {
       dayStipends[date] = amount
     } else {
       delete dayStipends[date]
@@ -673,12 +674,12 @@ export default function Dashboard() {
                           ['Units/hr', 'w-14 text-right', true ],
                           ['Unit Pay', 'w-16 text-right', true ],
                           ['Stipend',  'w-16 text-right', true ],
-                          ["Add'l",    'w-20 text-right', true ],
+                          ["Adj.",     'w-20 text-right', true ],
                           ['$/hr',     'w-12 text-right', false],
                           ['Total',    'w-16 text-right', false],
                           ['Hours',    'w-14 text-right', true ],
                         ] as [string, string, boolean][]).map(([label, cls, mobileHide], i) => (
-                          <th key={label} className={`pb-1 font-semibold text-gray-600 uppercase tracking-wider ${cls}${i === 0 ? ' sticky left-0 bg-gray-900' : i === 1 ? ' sticky left-14 bg-gray-900' : ''}${mobileHide ? ' hidden sm:table-cell' : ''}`}>{label}</th>
+                          <th key={label} title={label === 'Adj.' ? 'Stipend Adjustment (enter a negative amount to reduce, e.g. a split shift)' : undefined} className={`pb-1 font-semibold text-gray-600 uppercase tracking-wider ${cls}${i === 0 ? ' sticky left-0 bg-gray-900' : i === 1 ? ' sticky left-14 bg-gray-900' : ''}${mobileHide ? ' hidden sm:table-cell' : ''}`}>{label}</th>
                         ))}
                       </tr>
                     </thead>
@@ -776,7 +777,7 @@ export default function Dashboard() {
                             {editingDayDate === day.date ? (
                               <span className="flex items-center justify-end gap-1">
                                 <input
-                                  type="number" step="0.01" placeholder="0"
+                                  type="text" placeholder="0"
                                   value={dayStipendInput}
                                   onChange={(e) => setDayStipendInput(e.target.value)}
                                   onKeyDown={(e) => {
@@ -791,11 +792,11 @@ export default function Dashboard() {
                               </span>
                             ) : (
                               <button
-                                onClick={() => { setEditingDayDate(day.date); setDayStipendInput(day.additionalStipend > 0 ? day.additionalStipend.toFixed(2) : '') }}
+                                onClick={() => { setEditingDayDate(day.date); setDayStipendInput(day.additionalStipend !== 0 ? day.additionalStipend.toFixed(2) : '') }}
                                 className="text-right w-full flex justify-end"
                               >
-                                {day.additionalStipend > 0
-                                  ? <span className="text-emerald-400 border-b border-dashed border-emerald-700 bg-gray-800/50 rounded px-1 hover:bg-gray-700/50 transition-colors">{formatCurrency(day.additionalStipend)}</span>
+                                {day.additionalStipend !== 0
+                                  ? <span className={`${day.additionalStipend < 0 ? 'text-red-400 border-red-700' : 'text-emerald-400 border-emerald-700'} border-b border-dashed bg-gray-800/50 rounded px-1 hover:bg-gray-700/50 transition-colors`}>{formatCurrency(day.additionalStipend)}</span>
                                   : <span className="text-gray-600 bg-gray-800/50 rounded px-1 hover:bg-gray-700/50 transition-colors">+</span>}
                               </button>
                             )}
@@ -851,11 +852,11 @@ export default function Dashboard() {
                               <div className="sm:hidden grid grid-cols-3 gap-x-4 gap-y-1 mb-3 text-xs">
                                 <div><span className="text-gray-600">Stipend</span><span className="ml-1 text-emerald-400">{(isProj ? dayProj!.stipendAmount : day.stipendAmount) > 0 ? formatCurrency(isProj ? dayProj!.stipendAmount : day.stipendAmount) : '—'}</span></div>
                                 <div onClick={(e) => e.stopPropagation()}>
-                                  <span className="text-gray-600">Addl</span>
+                                  <span className="text-gray-600">Adjustment</span>
                                   {!isProj && editingDayDate === day.date ? (
                                     <span className="inline-flex items-center gap-1 ml-1">
                                       <input
-                                        type="number" step="0.01" placeholder="0"
+                                        type="text" placeholder="0"
                                         value={dayStipendInput}
                                         onChange={(e) => setDayStipendInput(e.target.value)}
                                         onKeyDown={(e) => {
@@ -870,11 +871,11 @@ export default function Dashboard() {
                                     </span>
                                   ) : (
                                     <button
-                                      onClick={() => { setEditingDayDate(day.date); setDayStipendInput(day.additionalStipend > 0 ? day.additionalStipend.toFixed(2) : '') }}
+                                      onClick={() => { setEditingDayDate(day.date); setDayStipendInput(day.additionalStipend !== 0 ? day.additionalStipend.toFixed(2) : '') }}
                                       className="ml-1 bg-gray-800/50 rounded px-1 hover:bg-gray-700/50 transition-colors"
                                     >
-                                      {day.additionalStipend > 0
-                                        ? <span className="text-emerald-400 border-b border-dashed border-emerald-700">{formatCurrency(day.additionalStipend)}</span>
+                                      {day.additionalStipend !== 0
+                                        ? <span className={`${day.additionalStipend < 0 ? 'text-red-400 border-red-700' : 'text-emerald-400 border-emerald-700'} border-b border-dashed`}>{formatCurrency(day.additionalStipend)}</span>
                                         : <span className="text-gray-600">+</span>}
                                     </button>
                                   )}
