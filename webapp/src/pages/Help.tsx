@@ -3,12 +3,14 @@ import { useNavigate } from 'react-router-dom'
 const TOC = [
   { id: 'quick-start', label: 'Quick Start' },
   { id: 'pcr-report', label: 'Uploading a PCR Report' },
+  { id: 'ocr-review', label: 'Checking OCR Results' },
   { id: 'schedule', label: 'Uploading Your Schedule' },
   { id: 'stipends', label: 'Stipend Rate Schedules' },
   { id: 'holidays', label: 'Federal Holidays' },
   { id: 'defaults', label: 'Fixed-Hour Shifts & Defaults' },
   { id: 'cpt-ranges', label: 'CPT Code Ranges' },
   { id: 'pcr-mapping', label: 'PCR Category Mapping' },
+  { id: 'income-statement', label: 'PCR Income Statement & Carve-Outs' },
   { id: 'backup', label: 'Backup, Restore & Maintenance' },
   { id: 'views', label: 'Where to Find Your Data' },
 ]
@@ -82,7 +84,13 @@ export default function Help() {
           </li>
           <li>
             Upload your monthly <span className="text-gray-300">PCR report</span> (Upload → PCR Report) once
-            billing is processed for that month — this fills in actual units, case times, and hours.
+            billing is processed for that month — this fills in actual units, case times, and hours. If it's a
+            PDF, glance at any rows flagged for review (see <a href="#ocr-review" className="text-indigo-400 hover:text-indigo-300 underline underline-offset-2">Checking OCR Results</a>).
+          </li>
+          <li>
+            Review <span className="text-gray-300">Settings → Code Reference → PCR Category Mapping</span> — it
+            starts with sensible defaults, but any PCR line label it doesn't recognize needs a mapping before it
+            feeds the Stipend Audit and Compensation.
           </li>
           <li>Explore the Dashboard, Annual Summary, Compensation, and Stipend Calculator pages.</li>
         </ol>
@@ -102,8 +110,11 @@ export default function Help() {
             Drop in a PDF of the Case Distribution Report — it's read with OCR, so there's nothing to
             request from the office first. The report is often bundled with unrelated pages; the correct
             page range is auto-detected, but it's worth a quick check before parsing. Because it's OCR'd
-            from a scan, occasional misreads are possible (a garbled ticket number or modifier, for
-            example) — spot-check the preview totals against the source PDF, especially for larger reports.
+            from a scan, occasional misreads are possible — BRACT flags the cells it isn't sure about (see
+            Checking OCR Results below) and compares your totals against the PDF's own printed "Total for"
+            row as a cross-check. The same PDF's summary/corrections pages (dollar value per unit, unit
+            correction) and income-statement pages are picked up automatically, and the original PDF is kept
+            so you can compare against it later.
           </p>
         </div>
         <div>
@@ -122,8 +133,47 @@ export default function Help() {
           <li>Dollar Value per Unit pre-fills from a prior report for the same month, if one exists.</li>
           <li>Hours Padding and Default Hours (no-time days) pre-fill from your Settings defaults but can be adjusted per report.</li>
           <li>Re-uploading a month you've already saved shows a conflict warning before it overwrites.</li>
+          <li>Income-statement months already on file are only replaced automatically if nothing changed — if the new PDF restates a number, you're asked to review the changes first, and anything you've corrected by hand is kept (see PCR Income Statement below).</li>
           <li>Excel files spanning 3+ distinct months offer an automatic split into separate monthly reports (a PDF is always a single month, so this doesn't apply).</li>
         </ul>
+      </Section>
+
+      <Section id="ocr-review" title="Checking OCR Results">
+        <Where>
+          Right after parsing a PDF on the Upload page, and afterwards on each month's page (sidebar →
+          PCR Reports → the month).
+        </Where>
+        <p>
+          PDF uploads are read with OCR, so a digit or decimal point is occasionally misread. Rather than let
+          that slip in silently, BRACT marks any line-item cell it doubts — because the OCR wasn't confident, because
+          it had to auto-correct the read, or because the row doesn't add up (Value + Time Units should equal Total
+          Units; End − Start should equal Total Time). Only the cells that drive pay and hours are checked: ticket,
+          unit value, value, start/end/total time, and the two unit columns. Excel uploads aren't OCR'd, so they're
+          never flagged.
+        </p>
+        <div>
+          <p className="text-gray-300 font-medium text-xs uppercase tracking-wide mb-1">At upload</p>
+          <p className="mt-1">
+            A "rows need a second look" panel lists each flagged row with a picture of the original PDF row, what the OCR
+            read, and an edit box. Type the correct value and Save, or click "Looks right" to keep it. Nothing blocks
+            saving — you can also review later.
+          </p>
+        </div>
+        <div>
+          <p className="text-gray-300 font-medium text-xs uppercase tracking-wide mb-1">On the month page</p>
+          <ul className="list-disc pl-5 space-y-1.5 mt-1">
+            <li>A ⚑ next to a ticket, with amber-highlighted cells, means something on that ticket was flagged. Click it to open the editor right under that row.</li>
+            <li>The ✎ next to <span className="text-gray-300">any</span> ticket opens the same editor, so you can correct a value the OCR was confident about but got wrong.</li>
+            <li>Changing Value or Time Units recalculates Total Units; changing Start or End recalculates Total Time.</li>
+            <li>A green ✓ marks a ticket you've reviewed or edited.</li>
+          </ul>
+        </div>
+        <p className="text-xs text-gray-500">
+          The picture comes from the original PDF, which is saved on the server (in the data folder under{' '}
+          <span className="font-mono">pdfs/&lt;name&gt;/&lt;year&gt;/</span>) when you save a PDF upload. Months uploaded before
+          this feature existed have no saved PDF, so they can be edited but show no picture — re-upload the PDF to add one.
+          The saved PDFs are not part of Export Backup; back up the data folder too if you want to keep them.
+        </p>
       </Section>
 
       <Section id="schedule" title="Uploading Your Schedule">
@@ -260,7 +310,7 @@ export default function Help() {
         <p className="text-gray-300 font-medium text-xs uppercase tracking-wide mb-1 mt-4">How this connects Compensation and the PCR Income Statement page</p>
         <p>
           The <button onClick={() => navigate('/income-statement')} className="text-indigo-400 hover:text-indigo-300 underline underline-offset-2">PCR Income Statement</button> page
-          is a read-only, month-by-month reconstruction of what the PCR itself reported, grouped into the same
+          is a month-by-month reconstruction of what the PCR itself reported, grouped into the same
           Business Expenses / Benefits / Retirement Benefits / Other Income buckets as Compensation — purely by
           resolving each PCR line through these mappings. If a category's grouping looks wrong on that page, this
           is the place to fix it.
@@ -274,11 +324,44 @@ export default function Help() {
         </p>
       </Section>
 
+      <Section id="income-statement" title="PCR Income Statement & Carve-Outs">
+        <Where>
+          Sidebar → PCR Reports → <button onClick={() => navigate('/income-statement')} className="text-indigo-400 hover:text-indigo-300 underline underline-offset-2">Income Statement</button>.
+        </Where>
+        <p>
+          One column per month found in your uploaded PCRs: Revenue (professional fees, stipends, other income),
+          Expenses (grouped like Compensation), and an "Other (Balance Rollups)" section for running balances such as the
+          rolled-forward balance and PCR surplus/deficit — those are point-in-time figures, so summing them across
+          months isn't always meaningful. A blank cell means that label wasn't on that month's PCR at all; $0 means it was
+          printed as zero.
+        </p>
+        <div>
+          <p className="text-gray-300 font-medium text-xs uppercase tracking-wide mb-1">Correcting a misread</p>
+          <ul className="list-disc pl-5 space-y-1.5 mt-1">
+            <li>Click any monthly amount to open that month's lines. Fix an amount, rename a label, or move a line to a different section; add a line the OCR missed, or delete one that shouldn't be there.</li>
+            <li>Cells you've changed by hand carry a ✎ and an amber tint. "Revert to PDF" restores what the OCR read.</li>
+            <li>Hand corrections are kept if you upload that month's PDF again; only lines you haven't touched take the new reading.</li>
+            <li>Your corrections flow through to the Stipend Audit, the Compensation sync, and the carve-outs below.</li>
+          </ul>
+        </div>
+        <div>
+          <p className="text-gray-300 font-medium text-xs uppercase tracking-wide mb-1">Stipend carve-outs (Fort Sutter, ROC, Alhambra)</p>
+          <p className="mt-1">
+            These are paid as lump sums on the PCR rather than per shift. Once a PCR label is mapped to FS, ROC or
+            Alhambra (Stipend Labels), the amount is placed in the Dashboard's "Additional Stipend" entry on the first
+            matching shift day of the month before the PCR's month, matching the PCR's one-month payout lag. For ROC only the
+            amount above the rate-sheet stipend is carried over, since the per-shift part is already counted. A value you've
+            entered yourself for that day is never overwritten. After adding or changing one of these mappings, use{' '}
+            <span className="text-gray-300">Backfill Now</span> on the PCR Category Mapping page to apply it to months already uploaded.
+          </p>
+        </div>
+      </Section>
+
       <Section id="backup" title="Backup, Restore & Maintenance">
         <Where><span className="text-gray-300">Settings → Backup &amp; Restore</span>.</Where>
         <ul className="list-disc pl-5 space-y-1.5">
-          <li><span className="text-gray-300">Export Backup</span> downloads one JSON file with everything: reports, schedules, settings, stipend mappings, and CPT ranges.</li>
-          <li><span className="text-gray-300">Import Backup</span> replaces all existing data — you'll be asked to confirm, and a pre-import backup copy is saved automatically.</li>
+          <li><span className="text-gray-300">Export Backup</span> downloads one JSON file with everything: reports, schedules, settings, stipend mappings, CPT ranges, PCR income statements, and PCR category mappings. It does not include the saved source PDFs (see Checking OCR Results).</li>
+          <li><span className="text-gray-300">Import Backup</span> replaces all existing data — you'll be asked to confirm, and a pre-import backup copy is saved automatically. A backup from before the PCR Category Mapping feature existed keeps the default mappings instead of leaving the list empty.</li>
           <li><span className="text-gray-300">Run Maintenance</span> checkpoints the database's WAL file and compacts it (VACUUM) — safe to run any time.</li>
         </ul>
       </Section>
@@ -286,6 +369,11 @@ export default function Help() {
       <Section id="views" title="Where to Find Your Data">
         <ul className="list-disc pl-5 space-y-2">
           <li><span className="text-gray-300 font-medium">Dashboard</span> — current month at a glance plus YTD stats; empty until your first PCR report is uploaded.</li>
+          <li>
+            <span className="text-gray-300 font-medium">PCR Reports (sidebar)</span> — one entry per uploaded month
+            (the raw PCR line items, with any OCR flags and inline editing) and the{' '}
+            <span className="text-gray-300">Income Statement</span> page for the selected year.
+          </li>
           <li>
             <span className="text-gray-300 font-medium">Annual Summary</span> — yearly charts and shift-type
             analytics. Charts built from billing-derived numbers (hours, units, dollar/unit trend, end-of-day
@@ -295,6 +383,11 @@ export default function Help() {
           <li>
             <span className="text-gray-300 font-medium">Compensation</span> — accrual view (by PCR billing period)
             by default; switch to Cash view for calendar-year cash-received tracking, with an editable per-year cutoff date.
+            Enter yearly expenses by hand or use <span className="text-gray-300">Sync from PCR</span>. The
+            Total Compensation pie splits into Cash Compensation, Benefits and Retirement — click a slice to drill
+            in. Cash Compensation includes cash reimbursements that land in your own account (Benicomp, CME and
+            Phone/Internet, shown as "Cash Benefits"), while Benefits is value paid to third parties such as health
+            insurance premiums.
           </li>
           <li>
             <span className="text-gray-300 font-medium">Stipend Calculator</span> — monthly stipend totals by
@@ -304,7 +397,7 @@ export default function Help() {
             matching how PCR pay periods lag).
           </li>
           <li><span className="text-gray-300 font-medium">Schedule Calendar</span> — month-by-month calendar view of imported shifts, with manual add/edit per day.</li>
-          <li><span className="text-gray-300 font-medium">Audits</span> — reconciliation and discrepancy checks across reports and schedules.</li>
+          <li><span className="text-gray-300 font-medium">Audits</span> — reconciliation and discrepancy checks across reports and schedules, plus the PCR Stipend Audit (what the PCR paid vs. what the Stipend Calculator says is owed) at the top.</li>
         </ul>
       </Section>
     </div>

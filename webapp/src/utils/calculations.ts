@@ -1,3 +1,4 @@
+import { payUnitRate } from './unitRate'
 import type {
   LineItem,
   MonthlyReport,
@@ -577,12 +578,12 @@ export function computeMonthlyStats(
 ): MonthlyStats {
   const {
     lineItems,
-    unitDollarValue,
     paddingMinutes,
     workingDayOverrides,
     dayStipends,
     stipends,
   } = report
+  const unitDollarValue = payUnitRate(report)  // precise rate for pay math (see utils/unitRate.ts)
   const defaultNoTimeHours = report.defaultNoTimeHours ?? settings?.defaultNoTimeHours ?? 4
 
   const totalCases = new Set(lineItems.map((li) => li.ticketNum)).size
@@ -679,7 +680,7 @@ export function computeCalendarMonthWorkingDays(
         const adjustedLi = effDate === li.serviceDate ? li : { ...li, serviceDate: effDate }
         allItems.push(adjustedLi)
         dailyUnits.set(effDate, (dailyUnits.get(effDate) ?? 0) + li.totalDistributableUnits)
-        dailyUnitPay.set(effDate, (dailyUnitPay.get(effDate) ?? 0) + li.totalDistributableUnits * report.unitDollarValue)
+        dailyUnitPay.set(effDate, (dailyUnitPay.get(effDate) ?? 0) + li.totalDistributableUnits * payUnitRate(report))
       }
     }
   }
@@ -814,13 +815,13 @@ export function computeCalendarMonthStats(
         const adjustedLi = effDate === li.serviceDate ? li : { ...li, serviceDate: effDate }
         allItems.push(adjustedLi)
         totalDistributableUnits += li.totalDistributableUnits
-        unitCompensation += li.totalDistributableUnits * report.unitDollarValue
+        unitCompensation += li.totalDistributableUnits * payUnitRate(report)
       }
     }
     // Apply manual unit correction from any report whose billing label matches this calendar month
     if (report.year === calYear && report.month === calMonth && report.unitCorrection) {
       totalDistributableUnits += report.unitCorrection
-      unitCompensation += report.unitCorrection * report.unitDollarValue
+      unitCompensation += report.unitCorrection * payUnitRate(report)
     }
   }
 
@@ -1140,7 +1141,7 @@ export function computeCashYearStats(
 
     // Filter line items across all reports by serviceDate within the cash window
     for (const report of allReports) {
-      const rate = report.unitDollarValue ?? 0
+      const rate = payUnitRate(report)
       let reportUnits = 0
       for (const li of report.lineItems) {
         if (li.serviceDate >= unitPayStart && li.serviceDate <= unitPayEnd) {

@@ -488,6 +488,11 @@ export default function MonthlyDetail() {
               <p className="text-sm text-gray-300">Unit-Based Compensation</p>
               <p className="text-xs text-gray-600 mt-0.5">
                 {liveStats.totalDistributableUnits.toFixed(2)} units × ${liveReport.unitDollarValue.toFixed(2)}/unit
+                {liveReport.effectiveUnitValue !== undefined && (
+                  <span className="ml-1 text-gray-500" title="The PCR prints $/unit to two decimals; the exact rate is recovered from this month's income statement (Professional Fees ÷ units).">
+                    (exact rate ${liveReport.effectiveUnitValue.toFixed(4)})
+                  </span>
+                )}
                 {liveReport.unitCorrection ? (
                   <span className={`ml-1 ${liveReport.unitCorrection > 0 ? 'text-emerald-600' : 'text-red-600'}`}>
                     (incl. {liveReport.unitCorrection > 0 ? '+' : ''}{liveReport.unitCorrection} correction)

@@ -1,3 +1,4 @@
+import { withEffectiveUnitValues } from '../utils/unitRate'
 import { createContext, useContext, useEffect, useState, useMemo } from 'react'
 import type { MonthlyReport, Schedule, Settings, StipendMapping, CptRange, Physician, MonthlyExpenses, AnnualExpenses, PcrIncomeStatement, PcrCategoryMapping } from '../types'
 import { api } from '../api'
@@ -154,7 +155,10 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
     setActivePhysicianIdState(id)
   }
 
-  const reports = useMemo(() => rawReports.map(normalizeReport), [rawReports])
+  const reports = useMemo(
+    () => withEffectiveUnitValues(rawReports.map(normalizeReport), pcrIncomeStatements),
+    [rawReports, pcrIncomeStatements],
+  )
 
   const schedules = useMemo(() => {
     const normalized = rawSchedules.map((s) => ({
@@ -214,7 +218,9 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
   // ─── Mutations ────────────────────────────────────────────────────────────
 
   const saveReport = async (report: MonthlyReport) => {
-    const r = { ...report, physicianId: report.physicianId ?? activePhysicianId }
+    // effectiveUnitValue is derived from the income statement on every load -- never persist it
+    const { effectiveUnitValue: _derived, ...persistable } = report
+    const r = { ...persistable, physicianId: report.physicianId ?? activePhysicianId }
     await api.reports.upsert(r)
     const normalized = normalizeReport(r)
     setRawReports((prev) => {
