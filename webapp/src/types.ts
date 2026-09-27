@@ -113,6 +113,10 @@ export interface MonthlyReport {
   sourcePdf?: string // stored source PDF, relative to the server's pdfs/ dir (PDF uploads only)
   uploadDate: string // ISO datetime
   unitDollarValue: number
+  // Derived, never saved: precise $/unit implied by the month's income-statement
+  // Professional Fees (see utils/unitRate.ts). Pay math uses it; the printed
+  // two-decimal unitDollarValue above is what's shown and entered.
+  effectiveUnitValue?: number
   paddingMinutes: number
   defaultNoTimeHours: number
   unitCorrection?: number    // manual unit adjustment (positive or negative)
