@@ -34,7 +34,7 @@ function findFirstShiftDate(year: number, month: number, group: string, allSched
   return earliest
 }
 
-function makeStubReport(id: string, year: number, month: number, physicianId: string, settings: Settings): MonthlyReport {
+export function makeStubReport(id: string, year: number, month: number, physicianId: string, settings: Settings): MonthlyReport {
   return {
     id, year, month,
     physicianId,

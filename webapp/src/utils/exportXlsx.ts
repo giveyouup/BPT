@@ -129,7 +129,7 @@ export function exportDashboardMonth(
   month: number,
 ) {
   // Day-level sheet
-  const dayHeaders = ['Date', 'Shift', 'Start', 'End', 'Cases', 'Units', 'Units/hr', 'Unit Pay', 'Stipend', "Add'l Stipend", '$/hr', 'Total Pay', 'Hours']
+  const dayHeaders = ['Date', 'Shift', 'Start', 'End', 'Cases', 'Units', 'Units/hr', 'Unit Pay', 'Stipend', 'Stipend Adjustment', '$/hr', 'Total Pay', 'Hours']
   const dayRows = monthDays.map((day) => {
     const unitsPerHr = day.hours > 0 && day.totalUnits > 0 ? day.totalUnits / day.hours : null
     const dollarPerHr = day.hours > 0 && day.totalDayPay > 0 ? day.totalDayPay / day.hours : null
@@ -143,7 +143,7 @@ export function exportDashboardMonth(
       unitsPerHr,
       day.unitPay > 0 ? day.unitPay : null,
       day.stipendAmount > 0 ? day.stipendAmount : null,
-      day.additionalStipend > 0 ? day.additionalStipend : null,
+      day.additionalStipend !== 0 ? day.additionalStipend : null,
       dollarPerHr,
       day.totalDayPay > 0 ? day.totalDayPay : null,
       day.hours > 0 ? day.hours : null,

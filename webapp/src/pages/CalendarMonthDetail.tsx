@@ -196,7 +196,7 @@ export default function CalendarMonthDetail() {
           <table className="w-full text-sm min-w-max">
             <thead>
               <tr className="border-b border-gray-800">
-                {['Date', 'Shift', 'Cases', 'Units', 'Unit Pay', 'Stipend', 'Add\'l', 'Total', 'Hours'].map((h, i) => (
+                {['Date', 'Shift', 'Cases', 'Units', 'Unit Pay', 'Stipend', 'Stipend Adjustment', 'Total', 'Hours'].map((h, i) => (
                   <th key={h} className={`px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider${i === 0 ? ' sticky left-0 z-10 bg-gray-900' : i === 1 ? ' sticky left-[148px] z-10 bg-gray-900' : ''}`}>{h}</th>
                 ))}
               </tr>
@@ -292,7 +292,7 @@ export default function CalendarMonthDetail() {
                     </td>
                     <td className="px-4 py-3 text-emerald-400">{day.unitPay > 0 ? formatCurrencyFull(day.unitPay) : '—'}</td>
                     <td className="px-4 py-3 text-gray-400">{day.stipendAmount > 0 ? formatCurrencyFull(day.stipendAmount) : '—'}</td>
-                    <td className="px-4 py-3 text-gray-400">{day.additionalStipend > 0 ? formatCurrencyFull(day.additionalStipend) : '—'}</td>
+                    <td className="px-4 py-3 text-gray-400">{day.additionalStipend !== 0 ? formatCurrencyFull(day.additionalStipend) : '—'}</td>
                     <td className="px-4 py-3 font-semibold text-gray-100">{day.totalDayPay > 0 ? formatCurrencyFull(day.totalDayPay) : '—'}</td>
                     <td className="px-4 py-3">
                       {editingHoursDate === day.date ? (

@@ -137,6 +137,11 @@ export default function Audits() {
     return { rows, mismatches, unmappedLabels: [...unmappedLabels].sort() }
   }, [pcrIncomeStatements, pcrCategoryMappings, selectedYear, reports, schedules, settings, stipendMappings])
 
+  // A mismatch row opens the Stipend Calculator's PCR view on that PCR month
+  // with the category's days already listed, where adjustments can be entered.
+  const openInStipendCalculator = (r: StipendAuditRow) =>
+    navigate(`/stipends?view=pcr&year=${r.year}&month=${r.month}&group=${encodeURIComponent(r.group)}`)
+
   // Section 1: production that landed on a non-working day and couldn't be attributed
   const orphanedProduction = useMemo(
     () => allDays
@@ -387,7 +392,14 @@ export default function Audits() {
                       </thead>
                       <tbody>
                         {stipendAudit.mismatches.map(r => (
-                          <tr key={`${r.year}-${r.month}-${r.group}`} className="border-b border-gray-800 last:border-0 hover:bg-gray-800/40">
+                          <tr
+                            key={`${r.year}-${r.month}-${r.group}`}
+                            onClick={() => openInStipendCalculator(r)}
+                            onKeyDown={(e) => { if (e.key === 'Enter') openInStipendCalculator(r) }}
+                            tabIndex={0}
+                            title="Open the days behind this in the Stipend Calculator"
+                            className="border-b border-gray-800 last:border-0 hover:bg-gray-800/60 cursor-pointer focus:outline-none focus:bg-gray-800/60"
+                          >
                             <td className="px-4 py-3 text-gray-200 whitespace-nowrap">{getMonthName(r.month)} {r.year}</td>
                             <td className="px-4 py-3 text-gray-500 whitespace-nowrap hidden sm:table-cell">{getMonthName(r.sourceMonth)} {r.sourceYear}</td>
                             <td className="px-4 py-3 text-gray-300">{r.label}</td>
@@ -395,6 +407,7 @@ export default function Audits() {
                             <td className="px-4 py-3 text-right text-gray-200">{formatCurrency(r.owed)}</td>
                             <td className={`px-4 py-3 text-right font-semibold ${r.diff >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
                               {r.diff >= 0 ? '+' : ''}{formatCurrency(r.diff)}
+                              <span className="ml-2 text-gray-600 font-normal">›</span>
                             </td>
                           </tr>
                         ))}

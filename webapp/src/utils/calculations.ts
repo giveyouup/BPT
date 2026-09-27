@@ -245,7 +245,7 @@ export function computeStipendGroupTotals(
 
   for (const [date, shiftTypes] of entries) {
     const addl = additionalByDate.get(date) ?? 0
-    if (addl <= 0) continue
+    if (addl === 0) continue // a negative value is a stipend adjustment (e.g. a split shift), not just an addition
     const isWeekend = isWeekendOrHoliday(date, holidayList)
     const dayGroups = new Set<string>()
     for (const raw of shiftTypes) {

@@ -348,7 +348,7 @@ export default function Help() {
           <p className="text-gray-300 font-medium text-xs uppercase tracking-wide mb-1">Stipend carve-outs (Fort Sutter, ROC, Alhambra)</p>
           <p className="mt-1">
             These are paid as lump sums on the PCR rather than per shift. Once a PCR label is mapped to FS, ROC or
-            Alhambra (Stipend Labels), the amount is placed in the Dashboard's "Additional Stipend" entry on the first
+            Alhambra (Stipend Labels), the amount is placed in the Dashboard's "Stipend Adjustment" entry on the first
             matching shift day of the month before the PCR's month, matching the PCR's one-month payout lag. For ROC only the
             amount above the rate-sheet stipend is carried over, since the per-shift part is already counted. A value you've
             entered yourself for that day is never overwritten. After adding or changing one of these mappings, use{' '}
@@ -394,10 +394,13 @@ export default function Help() {
             shift-code group. Use the gear icon to promote specific shift codes (and independently, their
             weekend/holiday occurrences) out of "Other G"/"Other" into their own column. Toggle between Accrual
             (numbers shown for the month they were earned) and PCR (each row shows the prior month's numbers,
-            matching how PCR pay periods lag).
+            matching how PCR pay periods lag). Click any amount to list the days behind it; each day has a{' '}
+            <span className="text-gray-300">Stipend Adjustment</span> you can set (a negative number reduces it — for
+            example, −$500 on a $1,000 shift when someone else covered half). Adjustments apply to that one day only,
+            and flow into your totals, the Dashboard and the PCR Stipend Audit.
           </li>
           <li><span className="text-gray-300 font-medium">Schedule Calendar</span> — month-by-month calendar view of imported shifts, with manual add/edit per day.</li>
-          <li><span className="text-gray-300 font-medium">Audits</span> — reconciliation and discrepancy checks across reports and schedules, plus the PCR Stipend Audit (what the PCR paid vs. what the Stipend Calculator says is owed) at the top.</li>
+          <li><span className="text-gray-300 font-medium">Audits</span> — reconciliation and discrepancy checks across reports and schedules, plus the PCR Stipend Audit (what the PCR paid vs. what the Stipend Calculator says is owed) at the top. Click any mismatch row to jump to the Stipend Calculator with that month's days listed, then adjust the days that were split or covered by someone else until it reconciles.</li>
         </ul>
       </Section>
     </div>

@@ -228,7 +228,7 @@ export default function Compensation() {
           }
         }
 
-        if (day.additionalStipend > 0) {
+        if (day.additionalStipend !== 0) {
           if (dayIsAsc) {
             // Attribute to the specific ASC category if unambiguous, else "Additional"
             const ascCatsOnDay = ASC_CATS.filter(c =>
