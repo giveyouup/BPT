@@ -63,11 +63,22 @@ def find_day_header_band(words, page_height):
         count = sum(1 for x in tops if abs(x - t) <= 2.5)
         if count > best_count:
             best_count, best_top = count, t
-    band = sorted([w for w in candidates if abs(w[1] - best_top) <= 2.5], key=lambda w: w[0])
-    if not (28 <= len(band) <= 31):
+    raw_band = sorted([w for w in candidates if abs(w[1] - best_top) <= 2.5], key=lambda w: w[0])
+    if len(raw_band) < 28:
         return None
-    values = [int(w[4]) for w in band]
-    if values != sorted(values):
+    # Trim a trailing lookahead column into next month: confirmed on a real
+    # sample (an October grid with one extra "1" column for November 1st),
+    # which otherwise pushes the raw band to 32 words and fails the day-count
+    # check below. Keep only the run starting at 1 and increasing by 1 each
+    # column -- this also makes the old separate "already sorted" check
+    # redundant, since a run built this way is sorted by construction.
+    band = [raw_band[0]]
+    for w in raw_band[1:]:
+        if int(w[4]) == int(band[-1][4]) + 1:
+            band.append(w)
+        else:
+            break
+    if not (28 <= len(band) <= 31):
         return None
     return band
 
