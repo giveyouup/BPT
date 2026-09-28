@@ -403,6 +403,14 @@ export default function AnnualSummary() {
   const daysScheduled  = yearStats.flatMap(m => m.workingDays)
     .filter(d => d.shiftTypes.length > 0 && !d.shiftTypes.every(isOffDayShift)).length
   const daysWithProduction = yearStats.reduce((s, m) => s + m.daysWorked, 0)
+  // BR ("Board Runner") is a fixed-hour shift that often has no PCR line items of
+  // its own, so it's already folded into daysWorked (see computeCalendarMonthStats)
+  // -- but it's worth breaking out separately since "worked, no production" isn't
+  // obvious from that combined total. A day with a producing case alongside BR
+  // still counts as a real production day (hasProduction is per-day, not per-shift).
+  const daysBrNoProduction = yearStats.flatMap(m => m.workingDays)
+    .filter(d => !d.hasProduction && d.shiftTypes.some(s => resolveShiftAlias(s.toUpperCase()) === 'BR')).length
+  const daysProductionOnly = daysWithProduction - daysBrNoProduction
 
   const isProjectionActive = whatIfMapping !== null || whatIfUnitRate !== null
 
@@ -582,9 +590,20 @@ export default function AnnualSummary() {
     : -1
   const cutoffChartData = cutoffMonthIndex === -1 ? chartData : chartData.slice(0, cutoffMonthIndex)
 
+  // Average $/unit across the months actually plotted (skips months with no
+  // billed units, so a $0 placeholder doesn't drag the average down).
+  const avgRatePerUnit = (() => {
+    const rates = cutoffChartData.map((d) => d.ratePerUnit).filter((r) => r > 0)
+    return rates.length ? rates.reduce((s, r) => s + r, 0) / rates.length : null
+  })()
+
   // ── Weekly hours data ─────────────────────────────────────────────────────
   const weeklyHoursData = useMemo(() => {
-    const weekMap = new Map<string, number>()
+    // hasWork tracks whether the week had any day that wasn't entirely vacation
+    // (V), holiday-off (H) or Postcall -- a week that's 100% one of those isn't
+    // a "work week" at all, so it shouldn't drag down the /week average below,
+    // even though it still shows up as a $0 bar for visual continuity.
+    const weekMap = new Map<string, { hours: number; hasWork: boolean }>()
     for (const month of yearStats) {
       for (const day of month.workingDays) {
         if (shiftDataCutoff && day.date > shiftDataCutoff) continue
@@ -593,14 +612,17 @@ export default function AnnualSummary() {
         const dow = date.getDay()
         date.setDate(date.getDate() + (dow === 0 ? -6 : 1 - dow))
         const wk = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
-        weekMap.set(wk, (weekMap.get(wk) ?? 0) + day.hours)
+        const entry = weekMap.get(wk) ?? { hours: 0, hasWork: false }
+        entry.hours += day.hours
+        if (!day.shiftTypes.every(isOffDayShift)) entry.hasWork = true
+        weekMap.set(wk, entry)
       }
     }
     return Array.from(weekMap.entries())
       .sort(([a], [b]) => a.localeCompare(b))
-      .map(([iso, hours]) => {
+      .map(([iso, { hours, hasWork }]) => {
         const [, m, d] = iso.split('-').map(Number)
-        return { week: `${getMonthName(m).slice(0, 3)} ${d}`, iso, hours: Math.round(hours * 10) / 10 }
+        return { week: `${getMonthName(m).slice(0, 3)} ${d}`, iso, hours: Math.round(hours * 10) / 10, hasWork }
       })
   }, [yearStats, shiftDataCutoff])
 
@@ -1043,9 +1065,13 @@ export default function AnnualSummary() {
           sub="working shift assignments"
         />
         <StatCard
-          label="Days w/ Production"
-          value={daysWithProduction > 0 ? String(daysWithProduction) : '—'}
-          sub="days with PCR line items"
+          label="Days Worked"
+          value={daysWithProduction > 0
+            ? (daysBrNoProduction > 0 ? `${daysProductionOnly} + ${daysBrNoProduction}` : String(daysProductionOnly))
+            : '—'}
+          sub={daysBrNoProduction > 0
+            ? `+${daysBrNoProduction} BR w/o production`
+            : 'days with PCR line items'}
         />
       </div>
 
@@ -1129,6 +1155,26 @@ export default function AnnualSummary() {
               />
               <Line type="monotone" dataKey="ratePerUnit" stroke="#f59e0b" strokeWidth={2}
                 dot={{ r: 4, fill: '#f59e0b' }} />
+              {avgRatePerUnit != null && (
+                <ReferenceLine y={avgRatePerUnit} stroke="#6b7280" strokeDasharray="4 4"
+                  label={(props: { viewBox?: { x: number; y: number; width: number } }) => {
+                    const vb = props.viewBox
+                    if (!vb) return <g />
+                    // A plain text label here regularly landed right on top of the trend
+                    // line/its dots wherever the average happened to sit -- an opaque chip
+                    // above the line reads correctly no matter what's behind it.
+                    const text = `Avg $${avgRatePerUnit.toFixed(2)}`
+                    const boxWidth = text.length * 5.6 + 10
+                    const x = vb.x + vb.width - boxWidth - 2
+                    const y = vb.y - 17
+                    return (
+                      <g>
+                        <rect x={x} y={y} width={boxWidth} height={14} rx={3} fill="#111827" />
+                        <text x={x + boxWidth / 2} y={y + 10} fill="#9ca3af" fontSize={10} textAnchor="middle">{text}</text>
+                      </g>
+                    )
+                  }} />
+              )}
               {whatIfUnitRate != null && (
                 <Line type="monotone" dataKey="projRatePerUnit" stroke="#fb923c" strokeWidth={2}
                   strokeDasharray="5 3" dot={{ r: 3, fill: '#fb923c' }} />
@@ -1168,19 +1214,33 @@ export default function AnnualSummary() {
             </BarChart>
           </ResponsiveContainer>
           {(() => {
-            const avgWeekly = weeklyHoursData.length > 0
-              ? weeklyHoursData.reduce((s, w) => s + w.hours, 0) / weeklyHoursData.length
+            // Excludes weeks/months that were entirely vacation/holiday-off/Postcall
+            // (no real shift at all) from the averages -- otherwise a week or month
+            // off drags the "how many hours am I working" number down even though
+            // nothing was actually worked. Still plotted as a $0 bar on the chart.
+            const workWeeks = weeklyHoursData.filter((w) => w.hasWork)
+            const workMonths = cutoffChartData.filter((m) => m.hours > 0)
+            const avgWeekly = workWeeks.length > 0
+              ? workWeeks.reduce((s, w) => s + w.hours, 0) / workWeeks.length
               : null
-            const avgMonthly = cutoffChartData.length > 0
-              ? cutoffChartData.reduce((s, m) => s + m.hours, 0) / cutoffChartData.length
+            const avgMonthly = workMonths.length > 0
+              ? workMonths.reduce((s, m) => s + m.hours, 0) / workMonths.length
               : null
+            const excludedWeeks = weeklyHoursData.length - workWeeks.length
+            const excludedMonths = cutoffChartData.length - workMonths.length
             return (
               <>
                 <div className="mt-3 flex items-center justify-between gap-4 text-xs text-gray-500">
                   <div className="flex items-center gap-4">
-                    <span>Avg <span className="text-gray-300 font-medium">{avgWeekly != null ? formatHours(avgWeekly) : '—'}</span> / week</span>
+                    <span>
+                      Avg <span className="text-gray-300 font-medium">{avgWeekly != null ? formatHours(avgWeekly) : '—'}</span> / week
+                      {excludedWeeks > 0 && <span className="text-gray-700"> (excl. {excludedWeeks} off wk{excludedWeeks !== 1 ? 's' : ''})</span>}
+                    </span>
                     <span className="text-gray-700">·</span>
-                    <span>Avg <span className="text-gray-300 font-medium">{avgMonthly != null ? formatHours(avgMonthly) : '—'}</span> / month</span>
+                    <span>
+                      Avg <span className="text-gray-300 font-medium">{avgMonthly != null ? formatHours(avgMonthly) : '—'}</span> / month
+                      {excludedMonths > 0 && <span className="text-gray-700"> (excl. {excludedMonths} off mo{excludedMonths !== 1 ? 's' : ''})</span>}
+                    </span>
                   </div>
                   <span className="hidden md:inline text-gray-700 text-[10px]">click bar to open in dashboard</span>
                 </div>
