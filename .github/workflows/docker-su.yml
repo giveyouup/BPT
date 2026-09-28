@@ -47,5 +47,5 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
           repository: ${{ env.IMAGE_NAME }}
-          short-description: "BRACT — self-hosted anesthesiologist billing, schedule and compensation tracker"
+          short-description: "BRACT — self-hosted PCR demystifier. Billing, schedule and compensation tracker."
           readme-filepath: ./CHANGELOG.md
