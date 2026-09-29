@@ -12,11 +12,12 @@ import { getWeekendPairs, buildDayList, parseScheduleText } from '../utils/sched
 import type { ParseScheduleResult } from '../utils/schedulePaste'
 import { formatMonthYear, formatDateFull, formatCurrency, lastDayOfMonth, MONTH_ABBREVS, getMonthName } from '../utils/dateUtils'
 import { useData } from '../context/DataContext'
-import type { LineItem, ShiftEntry, Schedule, StipendMapping, StipendRate, Physician } from '../types'
+import type { LineItem, ShiftEntry, Schedule, StipendMapping, StipendRate, Physician, PcrIncomeStatement } from '../types'
 import OcrReviewList from '../components/OcrReviewList'
 import { applyPcrStipendCarveouts } from '../utils/pcrStipendCarveouts'
 import { diffPcrStatementMonth } from '../utils/pcrStatementDiff'
 import { mergeFreshWithEdits } from '../utils/pcrStatementEdits'
+import { applySafePcrSync } from '../utils/pcrExpenseSync'
 import type { PcrMonthDiff } from '../utils/pcrStatementDiff'
 
 const cropKey = (li: LineItem) => `${li.srcPage}:${li.srcTop}`
@@ -188,6 +189,7 @@ function PcrUploadTab() {
   const {
     reports, schedules, settings, saveReport, physicians, activePhysicianId,
     savePcrIncomeStatement, pcrCategoryMappings, stipendMappings, pcrIncomeStatements,
+    annualExpenses, saveAnnualExpenses,
   } = useData()
   const activePhysician = physicians.find(p => p.id === activePhysicianId)
 
@@ -333,12 +335,20 @@ function PcrUploadTab() {
   // Saves one income-statement month and carries any Fort Sutter/ROC/Alhambra
   // carve-out into the Dashboard's "Additional Stipend" entry -- shared by the
   // auto-apply path (new/unchanged months) and the reviewed-changes path.
-  async function saveIncomeStatementMonth(month: PcrPdfIncomeStatementMonth, filename: string) {
+  // `workingStatements` is the caller's own running list of what's been saved
+  // so far *in this batch* -- a multi-month upload saves each month one at a
+  // time, and pcrIncomeStatements (from context) won't reflect an earlier
+  // save in the same batch yet, so a naive read of it here would miss a
+  // month just saved moments ago (both for the edit-merge below and for the
+  // Cash Compensation sync that follows the whole batch).
+  async function saveIncomeStatementMonth(
+    month: PcrPdfIncomeStatementMonth, filename: string, workingStatements: PcrIncomeStatement[],
+  ): Promise<PcrIncomeStatement> {
     const id = `${month.year}-${String(month.month).padStart(2, '0')}`
     // Hand-corrected/added/deleted lines on an already-stored month survive
     // the re-upload; only untouched lines take the new OCR output.
-    const merged = mergeFreshWithEdits(pcrIncomeStatements.find((s) => s.id === id), month.lines)
-    const statement = {
+    const merged = mergeFreshWithEdits(workingStatements.find((s) => s.id === id), month.lines)
+    const statement: PcrIncomeStatement = {
       id,
       year: month.year,
       month: month.month,
@@ -350,15 +360,38 @@ function PcrUploadTab() {
     await savePcrIncomeStatement(statement)
     const carveoutReport = applyPcrStipendCarveouts(statement, pcrCategoryMappings, reports, schedules, activePhysicianId, settings, stipendMappings)
     if (carveoutReport) await saveReport(carveoutReport)
+    return statement
+  }
+
+  // Compensation's Cash Compensation/Business Expenses/Benefits/Retirement
+  // categories only get auto-populated for a category with no existing value
+  // at all (current === 0) -- first-time population, nothing to lose. Any
+  // change that would overwrite an existing non-zero value is left for
+  // Compensation's own manual "Sync from PCR" review instead, since that's
+  // exactly the case where a restated/misread PCR figure or a deliberate
+  // manual override could otherwise be silently clobbered.
+  async function autoSyncExpenses(savedStatements: PcrIncomeStatement[]) {
+    const years = new Set(savedStatements.map((s) => s.year))
+    for (const year of years) {
+      const record = annualExpenses.find((r) => r.id === String(year))
+        ?? { id: String(year), year, physicianId: activePhysicianId, recurring: {}, entries: [] }
+      const updated = applySafePcrSync(year, pcrIncomeStatements, pcrCategoryMappings, annualExpenses, record)
+      if (updated) await saveAnnualExpenses(updated)
+    }
   }
 
   async function applyPendingIncomeStatementReview() {
     if (!pendingIncomeStatementReview) return
     setApplyingIncomeStatementReview(true)
     try {
+      let working = pcrIncomeStatements
+      const saved: PcrIncomeStatement[] = []
       for (const month of pendingIncomeStatementReview.months) {
-        await saveIncomeStatementMonth(month, pendingIncomeStatementReview.filename)
+        const statement = await saveIncomeStatementMonth(month, pendingIncomeStatementReview.filename, working)
+        working = [...working.filter((s) => s.id !== statement.id), statement]
+        saved.push(statement)
       }
+      await autoSyncExpenses(saved)
       setIncomeStatementMonthsSaved((n) => (n ?? 0) + pendingIncomeStatementReview.months.length)
       setPendingIncomeStatementReview(null)
     } finally {
@@ -421,9 +454,14 @@ function PcrUploadTab() {
           else toAutoApply.push(month)
         }
 
+        let working = pcrIncomeStatements
+        const saved: PcrIncomeStatement[] = []
         for (const month of toAutoApply) {
-          await saveIncomeStatementMonth(month, file.name)
+          const statement = await saveIncomeStatementMonth(month, file.name, working)
+          working = [...working.filter((s) => s.id !== statement.id), statement]
+          saved.push(statement)
         }
+        await autoSyncExpenses(saved)
         setIncomeStatementMonthsSaved(toAutoApply.length)
 
         if (toReview.length > 0) {

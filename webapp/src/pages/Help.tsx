@@ -299,28 +299,47 @@ export default function Help() {
         </p>
         <ul className="list-disc pl-5 space-y-1.5">
           <li><span className="text-gray-300 font-medium">Stipend Labels</span> — map to a Stipend Calculator group (APS, BR, G1/G2 Call, etc.), including any standalone column you've promoted there. Feeds the <span className="text-gray-300">PCR Stipend Audit</span> at the top of the Audits page, which compares what the PCR actually paid against what the Stipend Calculator computes as owed (with the PCR's one-month payout lag already accounted for).</li>
-          <li><span className="text-gray-300 font-medium">Expense Labels</span> — map to one of Compensation's Business Expenses / Benefits / Retirement Benefits categories, or a free-form custom category you've already added there.</li>
-          <li><span className="text-gray-300 font-medium">Other Income Labels</span> — map to a custom Other Income category. Other Income has no built-in categories, so add one on Compensation first, then map a PCR label to it here.</li>
+          <li><span className="text-gray-300 font-medium">Expense Labels</span> — map to one of Compensation's Cash Compensation / Business Expenses / Benefits / Retirement Benefits categories, or a free-form custom category you've already added there.</li>
+          <li><span className="text-gray-300 font-medium">Other Income Labels</span> — map to a custom Non-clinical Revenues category. That section has no built-in categories, so add one on Compensation first, then map a PCR label to it here.</li>
         </ul>
         <p>
           A label with no mapping is never silently dropped — it shows up as an "Unmapped" chip you can click to
           prefill a new mapping, or dismiss (with a "Show N dismissed" link to bring it back later) if it's not
           worth tracking.
         </p>
+        <p className="text-gray-300 font-medium text-xs uppercase tracking-wide mb-1 mt-4">Where a free-form category "lives"</p>
+        <p>
+          The four Expense sections on Compensation (Cash Compensation, Business Expenses, Benefits, Retirement
+          Benefits) each have their own <span className="text-gray-300">+ Add category</span> button. Whichever
+          section's button you used to create a custom category is that category's permanent home — the dropdown
+          here groups each custom category under its actual home section automatically instead of lumping them all
+          together, so you'll find "Uniform Allowance" listed under Cash Compensation, not in a generic bucket.
+        </p>
+        <p>
+          The expected order is usually: add the category on Compensation first (in whichever section it belongs),
+          then come here and map the matching PCR-printed label to it. Occasionally a mapping ends up pointing at a
+          category that no longer exists — e.g. you renamed or deleted it after mapping it — and the reverse can
+          happen too, a category exists with no mapping targeting it yet. Neither case is silently ignored: both
+          show up as dismissible reminders in Compensation's <span className="text-gray-300">"Sync from PCR"</span> preview
+          panel (see below), not on this page.
+        </p>
         <p className="text-gray-300 font-medium text-xs uppercase tracking-wide mb-1 mt-4">How this connects Compensation and the PCR Income Statement page</p>
         <p>
           The <button onClick={() => navigate('/income-statement')} className="text-indigo-400 hover:text-indigo-300 underline underline-offset-2">PCR Income Statement</button> page
           is a month-by-month reconstruction of what the PCR itself reported, grouped into the same
-          Business Expenses / Benefits / Retirement Benefits / Other Income buckets as Compensation — purely by
-          resolving each PCR line through these mappings. If a category's grouping looks wrong on that page, this
-          is the place to fix it.
+          Cash Compensation / Business Expenses / Benefits / Retirement Benefits / Other Income buckets as
+          Compensation — purely by resolving each PCR line through these mappings. If a category's grouping looks
+          wrong on that page, this is the place to fix it.
         </p>
         <p>
           The <button onClick={() => navigate('/compensation')} className="text-indigo-400 hover:text-indigo-300 underline underline-offset-2">Compensation</button> page's
-          own yearly totals are separate, editable numbers — viewing the Income Statement page never changes them.
-          Its <span className="text-gray-300">"Sync from PCR"</span> button is the actual bridge: it sums the
-          mapped PCR amounts for the selected year and shows a diff against what's currently entered, so you can
-          review and apply changes rather than having anything overwritten silently.
+          own yearly totals are separate, editable numbers. Most of the sync happens automatically now: when you
+          upload a PCR, any mapped category that currently reads <span className="font-mono">$0</span> is filled
+          in right away. A mapped amount is only held back for manual review when applying it would change a value
+          you've already entered by hand — click <span className="text-gray-300">"Sync from PCR"</span> to see that
+          diff and apply it (or not) yourself, so nothing you've entered is ever silently overwritten. The same
+          preview panel also surfaces unmapped PCR labels, categories that need a home, and categories with no
+          mapping yet — each dismissible on its own if it's not worth tracking.
         </p>
       </Section>
 
@@ -381,13 +400,22 @@ export default function Help() {
             billing data — a banner above the charts shows that cutoff.
           </li>
           <li>
-            <span className="text-gray-300 font-medium">Compensation</span> — accrual view (by PCR billing period)
-            by default; switch to Cash view for calendar-year cash-received tracking, with an editable per-year cutoff date.
-            Enter yearly expenses by hand or use <span className="text-gray-300">Sync from PCR</span>. The
-            Total Compensation pie splits into Cash Compensation, Benefits and Retirement — click a slice to drill
-            in. Cash Compensation includes cash reimbursements that land in your own account (Benicomp, CME and
-            Phone/Internet, shown as "Cash Benefits"), while Benefits is value paid to third parties such as health
-            insurance premiums.
+            <span className="text-gray-300 font-medium">Compensation</span> — Cash view (calendar-year
+            cash-received tracking, with an editable per-year cutoff date) by default; switch to Accrual for the
+            PCR billing-period view instead. The <span className="text-gray-300">Revenues</span> section pairs
+            Clinical Revenues Breakdown (professional fees, stipends) with Non-clinical Revenues (everything else,
+            e.g. committee pay) as the two streams that together make up Total Gross Revenue. The{' '}
+            <span className="text-gray-300">PCR Breakdown</span> section below it (open by default) is where Cash
+            Compensation, Business Expenses, Benefits, and Retirement Benefits are entered or synced — together
+            these four sum to Total Gross Revenue. Cash Compensation itself is Physician Salary (from the PCR's
+            MD Salaries line) plus Cash Reimbursements (Benicomp, CME, Phone/Internet, Business Meetings, and any
+            custom category you add there); the gap between that and what the PCR ledger says has actually accrued
+            is shown as <span className="text-gray-300">Outstanding Salary Balance</span> — the true-up still owed
+            once the PCR closes out for the year, shown in red when negative (more has been drawn as salary than
+            earned so far). Every section's <span className="text-gray-300">+ Add category</span> button stays
+            collapsed until clicked, needs only a category name to add a row (the amount can be filled in then or
+            later, and stays editable afterward like any other row). The Total Compensation pie splits into Cash
+            Compensation, Benefits and Retirement — click a slice or its legend label to drill in.
           </li>
           <li>
             <span className="text-gray-300 font-medium">Stipend Calculator</span> — monthly stipend totals by
