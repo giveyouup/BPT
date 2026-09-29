@@ -177,6 +177,13 @@ export interface Settings {
   // (which have no stable key of their own). Items not yet in the list fall
   // back to the page's own default order and are appended after it.
   pcrRowOrder?: Record<string, string[]>
+  // Custom (free-form) expense categories dismissed from the "Sync from PCR"
+  // panel's "no PCR mapping yet" reminder -- for a category that's
+  // deliberately hand-managed and was never meant to sync from the PCR.
+  // Keyed by category name, not by PCR label (see hiddenPcrLabels above),
+  // since this reminder starts from the category and asks "is there a
+  // mapping for it?", the reverse direction of an unmapped PCR label.
+  dismissedUnmappedCategories?: string[]
 }
 
 export interface CptRange {
@@ -208,6 +215,7 @@ export interface AnnualExpenses {
   physicianId?: string
   recurring: Record<string, number>  // category key -> annual amount
   entries: ExpenseEntry[]             // free-form business entries
+  cashCompEntries?: ExpenseEntry[]    // free-form Cash Reimbursements entries
   benefitsEntries?: ExpenseEntry[]    // free-form benefits entries
   retirementEntries?: ExpenseEntry[]  // free-form retirement entries
   otherIncomeEntries?: ExpenseEntry[] // free-form other income entries

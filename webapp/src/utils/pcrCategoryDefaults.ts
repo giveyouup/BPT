@@ -22,7 +22,7 @@
  * revenue/balance rollups that were never meant to be categorized).
  *
  * A handful of `otherIncome` and `expense` defaults below target a free-form
- * category name (e.g. "CASE Board", "Student Loan Reimbursement") rather than
+ * category name (e.g. "Committee", "Student Loan Reimbursement") rather than
  * a fixed leaf key -- Other Income has no fixed leaves at all, and these are
  * specific category names, not universal ones. They're included anyway
  * because Compensation's own sync auto-creates a same-named entry on first
@@ -65,6 +65,8 @@ export const DEFAULT_PCR_CATEGORY_MAPPINGS: Array<{
   { label: 'Vision Insurance', section: 'expense', targetKey: 'healthVision' },
   { label: 'Medical Reimbursement-Benicomp', section: 'expense', targetKey: 'healthBenicomp' },
   { label: 'CME \\ Professional Development', section: 'expense', targetKey: 'cme' },
+  { label: 'MD Salaries', section: 'expense', targetKey: 'salary' },
+  { label: 'Business Meetings', section: 'expense', targetKey: 'businessMeetings' },
   { label: 'Professional Liability-Physicians', section: 'expense', targetKey: 'liabilityInsurance' },
   { label: 'Telephone/Internet', section: 'expense', targetKey: 'phoneInternet' },
   { label: 'License/Dues', section: 'expense', targetKey: 'licensesDues' },
@@ -72,6 +74,6 @@ export const DEFAULT_PCR_CATEGORY_MAPPINGS: Array<{
   { label: 'Corporate Operating Fee', section: 'expense', targetKey: 'operatingFee' },
   { label: 'Operating Expense', section: 'expense', targetKey: 'operatingExpense' },
   { label: 'Student Loan Reimbursement-Cares Act', section: 'expense', targetKey: 'Student Loan Reimbursement' },
-  { label: 'CASE Board / Chairs / Comm / Schedule', section: 'otherIncome', targetKey: 'CASE Board' },
-  { label: 'CASE Board', section: 'otherIncome', targetKey: 'Director of Board' },
+  { label: 'CASE Board / Chairs / Comm / Schedule', section: 'otherIncome', targetKey: 'Committee' },
+  { label: 'CASE Board', section: 'otherIncome', targetKey: 'Committee' },
 ]

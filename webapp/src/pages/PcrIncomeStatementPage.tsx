@@ -4,10 +4,11 @@ import { useData } from '../context/DataContext'
 import { formatCurrency, getMonthName } from '../utils/dateUtils'
 import { resolvePcrCategoryMapping } from '../utils/pcrCategoryMatching'
 import { describeStipendGroupKey } from '../utils/calculations'
-import { BUSINESS_LEAVES, BENEFITS_LEAVES, RETIREMENT_LEAVES, BUSINESS_KEYS, BENEFITS_KEYS, RETIREMENT_KEYS, LEAF_LABELS } from '../utils/expenseCategories'
+import { CASH_COMP_LEAVES, BUSINESS_LEAVES, BENEFITS_LEAVES, RETIREMENT_LEAVES, CASH_COMP_KEYS, BUSINESS_KEYS, BENEFITS_KEYS, RETIREMENT_KEYS, LEAF_LABELS } from '../utils/expenseCategories'
 import type { PcrStatementLine, PcrCategoryMapping, PcrIncomeStatement } from '../types'
 import StatementLineEditor from '../components/StatementLineEditor'
 import { isHandEdited } from '../utils/pcrStatementEdits'
+import { findExpenseCategoryHome } from '../utils/pcrExpenseSync'
 import { applyPcrStipendCarveouts } from '../utils/pcrStipendCarveouts'
 
 interface SectionMeta {
@@ -56,6 +57,7 @@ interface OrderedRow {
 // Benefits sections, so a PCR expense line's category is visually traceable
 // to exactly where it lands on that page.
 const EXPENSE_GROUP_META = {
+  cashComp:  { title: 'Cash Compensation',   badge: 'bg-indigo-950 text-indigo-400', border: 'border-indigo-700' },
   business:  { title: 'Business Expenses',   badge: 'bg-red-950 text-red-400',       border: 'border-red-700' },
   benefits:  { title: 'Benefits',            badge: 'bg-orange-950 text-orange-400', border: 'border-orange-700' },
   retirement:{ title: 'Retirement Benefits', badge: 'bg-green-950 text-green-400',   border: 'border-green-700' },
@@ -88,6 +90,7 @@ const NESTED_UNMAPPED_CLS = 'mt-3 pl-2 pr-3 py-4 -ml-2 -mr-3 md:pl-4 md:pr-5 md:
 // fixed leaf (free-form categories, "Unmapped") keep first-appearance order,
 // sorted after every fixed leaf. A user's own drag-and-drop order (applyCustomOrder)
 // is layered on top of this default afterward.
+const CASH_COMP_ORDER = new Map(CASH_COMP_LEAVES.map((l, i) => [l.key, i]))
 const BUSINESS_ORDER = new Map(BUSINESS_LEAVES.map((l, i) => [l.key, i]))
 const BENEFITS_ORDER = new Map(BENEFITS_LEAVES.map((l, i) => [l.key, i]))
 const RETIREMENT_ORDER = new Map(RETIREMENT_LEAVES.map((l, i) => [l.key, i]))
@@ -427,6 +430,8 @@ export default function PcrIncomeStatementPage() {
     const otherSection = sections.find((s) => s.key === 'other')
     const hiddenExpenseLabels = settings.hiddenPcrLabels?.expense ?? []
     const buckets = {
+      cashComp: [] as { row: SectionRow; targetKey: string }[],
+      cashReimbursements: [] as { row: SectionRow; targetKey: string }[],
       business: [] as { row: SectionRow; targetKey: string }[],
       benefits: [] as { row: SectionRow; targetKey: string }[],
       retirement: [] as { row: SectionRow; targetKey: string }[],
@@ -447,6 +452,12 @@ export default function PcrIncomeStatementPage() {
       if (isOther) absorbed.add(row.label)
       const key = mapping.targetKey
 
+      if (CASH_COMP_KEYS.has(key)) {
+        const leaf = CASH_COMP_LEAVES.find((l) => l.key === key)
+        if (leaf?.subGroup) buckets.cashReimbursements.push({ row, targetKey: key })
+        else buckets.cashComp.push({ row, targetKey: key })
+        return
+      }
       if (BUSINESS_KEYS.has(key)) { buckets.business.push({ row, targetKey: key }); return }
       if (BENEFITS_KEYS.has(key)) {
         const leaf = BENEFITS_LEAVES.find((l) => l.key === key)
@@ -456,12 +467,19 @@ export default function PcrIncomeStatementPage() {
       }
       if (RETIREMENT_KEYS.has(key)) { buckets.retirement.push({ row, targetKey: key }); return }
 
-      // Free-form category -- find which section it actually lives in on Compensation
-      for (const rec of annualExpenses) {
-        if ((rec.benefitsEntries ?? []).some((e) => e.category === key)) { buckets.benefits.push({ row, targetKey: key }); return }
-        if ((rec.retirementEntries ?? []).some((e) => e.category === key)) { buckets.retirement.push({ row, targetKey: key }); return }
-        if ((rec.entries ?? []).some((e) => e.category === key)) { buckets.business.push({ row, targetKey: key }); return }
-      }
+      // Free-form category -- find which section it actually lives in on
+      // Compensation (shared with utils/pcrExpenseSync.ts's sync logic, so
+      // the two pages never disagree about where a category belongs).
+      // Defaults to Business Expenses if it's never been created anywhere
+      // yet -- unlike the sync side, this page still has to put the row
+      // somewhere to display it.
+      const home = findExpenseCategoryHome(annualExpenses, key)
+      // A free-form Cash Compensation category is always a reimbursement --
+      // Physician Salary is the only thing that ever lives in the top-level
+      // bucket, and it's a fixed leaf key, never a free-form category.
+      if (home === 'cashComp') { buckets.cashReimbursements.push({ row, targetKey: key }); return }
+      if (home === 'benefits') { buckets.benefits.push({ row, targetKey: key }); return }
+      if (home === 'retirement') { buckets.retirement.push({ row, targetKey: key }); return }
       buckets.business.push({ row, targetKey: key })
     }
 
@@ -470,7 +488,9 @@ export default function PcrIncomeStatementPage() {
 
     const describeExpenseKey = (key: string) => LEAF_LABELS[key] ?? key
     const rowOrder = settings.pcrRowOrder ?? {}
-    const groups: Record<ExpenseGroupKey, OrderedRow[]> & { healthInsurance: OrderedRow[]; hidden: OrderedRow[] } = {
+    const groups: Record<ExpenseGroupKey, OrderedRow[]> & { healthInsurance: OrderedRow[]; hidden: OrderedRow[]; cashReimbursements: OrderedRow[] } = {
+      cashComp: applyCustomOrder(sortByOrder(mergeRowsByTarget(buckets.cashComp, describeExpenseKey), CASH_COMP_ORDER), rowOrder['expense:cashComp']),
+      cashReimbursements: applyCustomOrder(sortByOrder(mergeRowsByTarget(buckets.cashReimbursements, describeExpenseKey), CASH_COMP_ORDER), rowOrder['expense:cashReimbursements']),
       business: applyCustomOrder(sortByOrder(mergeRowsByTarget(buckets.business, describeExpenseKey), BUSINESS_ORDER), rowOrder['expense:business']),
       benefits: applyCustomOrder(sortByOrder(mergeRowsByTarget(buckets.benefits, describeExpenseKey), BENEFITS_ORDER), rowOrder['expense:benefits']),
       retirement: applyCustomOrder(sortByOrder(mergeRowsByTarget(buckets.retirement, describeExpenseKey), RETIREMENT_ORDER), rowOrder['expense:retirement']),
@@ -689,8 +709,24 @@ export default function PcrIncomeStatementPage() {
                   <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
                     {section.key === 'expense' ? (
                       <>
+                        {(expenseGroups.cashComp.length > 0 || expenseGroups.cashReimbursements.length > 0) && (
+                          <div className={`${CATEGORY_BLOCK_CLS} ${EXPENSE_GROUP_META.cashComp.border}`}>
+                            <span className={`inline-block text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full mb-3 ${EXPENSE_GROUP_META.cashComp.badge}`}>
+                              {EXPENSE_GROUP_META.cashComp.title}
+                            </span>
+                            <AmountTable rows={expenseGroups.cashComp} months={months} groupId="expense:cashComp" onReorder={handleReorder} />
+                            {expenseGroups.cashReimbursements.length > 0 && (
+                              <div className="mt-3">
+                                <p className="text-xs text-gray-600 mb-2">Cash Reimbursements</p>
+                                <div className="pl-1.5 border-l md:pl-3 border-gray-800">
+                                  <AmountTable rows={expenseGroups.cashReimbursements} months={months} groupId="expense:cashReimbursements" onReorder={handleReorder} />
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
                         {expenseGroups.business.length > 0 && (
-                          <div className={`${CATEGORY_BLOCK_CLS} ${EXPENSE_GROUP_META.business.border}`}>
+                          <div className={`${CATEGORY_BLOCK_CLS} border-t border-gray-800 ${EXPENSE_GROUP_META.business.border}`}>
                             <span className={`inline-block text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full mb-3 ${EXPENSE_GROUP_META.business.badge}`}>
                               {EXPENSE_GROUP_META.business.title}
                             </span>

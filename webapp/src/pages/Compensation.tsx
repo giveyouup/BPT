@@ -3,33 +3,28 @@ import { useNavigate } from 'react-router-dom'
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from 'recharts'
 import { useData } from '../context/DataContext'
 import { computeCalendarYearStats, computeCashYearStats, computeCalendarMonthStats, getStipendForDay, getApplicableMapping } from '../utils/calculations'
-import { resolvePcrCategoryMapping } from '../utils/pcrCategoryMatching'
 import { formatCurrency, formatMonthYear, formatDateShort, randomId } from '../utils/dateUtils'
 import { resolveShiftAlias } from '../utils/shiftUtils'
 import {
-  BUSINESS_LEAVES, BENEFITS_LEAVES, RETIREMENT_LEAVES, ALL_LEAVES, LEAF_LABELS,
-  BUSINESS_KEYS, BENEFITS_KEYS, RETIREMENT_KEYS, CASH_BENEFIT_KEYS,
+  CASH_COMP_LEAVES, BUSINESS_LEAVES, BENEFITS_LEAVES, RETIREMENT_LEAVES, ALL_LEAVES, LEAF_LABELS,
+  CASH_COMP_KEYS, BUSINESS_KEYS, BENEFITS_KEYS, RETIREMENT_KEYS, KNOWN_RECURRING_KEYS,
 } from '../utils/expenseCategories'
+import { buildPcrSyncPreview as buildPcrSyncPreviewShared, applyPcrSyncChanges } from '../utils/pcrExpenseSync'
+import type { PcrSyncPreview } from '../utils/pcrExpenseSync'
 import type { ExpenseEntry, AnnualExpenses } from '../types'
 
 // ─── Category definitions ──────────────────────────────────────────────────────
 
 const HEALTHCARE_KEYS  = new Set(['healthDental', 'healthMedical', 'healthVision', 'healthBenicomp'])
-const ACTIVE_KEYS      = new Set([...BUSINESS_KEYS, ...BENEFITS_KEYS, ...RETIREMENT_KEYS, 'carryforwardIn', 'yearEndBalance'])
 
-type Section = 'business' | 'benefits' | 'retirement' | 'otherIncome'
+type Section = 'cashComp' | 'business' | 'benefits' | 'retirement' | 'otherIncome'
 
-interface PcrSyncChange {
-  key: string
-  label: string
-  current: number
-  proposed: number
-  section: 'expense' | 'otherIncome'
-}
-
-interface PcrSyncPreview {
-  changes: PcrSyncChange[]
-  unmappedLabels: string[]
+const SECTION_FIELD: Record<Section, 'cashCompEntries' | 'entries' | 'benefitsEntries' | 'retirementEntries' | 'otherIncomeEntries'> = {
+  cashComp: 'cashCompEntries',
+  business: 'entries',
+  benefits: 'benefitsEntries',
+  retirement: 'retirementEntries',
+  otherIncome: 'otherIncomeEntries',
 }
 
 function initDraft(rec: AnnualExpenses | undefined, annualGross: number): Record<string, string> {
@@ -77,47 +72,146 @@ function AmountInput({ value, onChange, onBlur }: {
   )
 }
 
-function EntryList({ entries, onDelete }: { entries: ExpenseEntry[]; onDelete: (id: string) => void }) {
+// Replaces the old always-visible "Category / Amount / Note" add-form with a
+// collapsed "+ Add category" trigger, and makes every entry's amount (new or
+// existing) an editable AmountInput instead of static text -- matching how
+// every fixed-leaf row on this page already behaves, so a custom category
+// never requires delete-and-re-add just to correct its amount. A category
+// name alone is enough to add a row; the amount defaults to $0 and can be
+// filled in (here, or later) same as any other row.
+function EditableEntryList({
+  entries, onAdd, onUpdateAmount, onDelete, datalistId, datalistOptions,
+}: {
+  entries: ExpenseEntry[]
+  onAdd: (category: string, amount: number, note?: string) => void | Promise<void>
+  onUpdateAmount: (id: string, amount: number) => void | Promise<void>
+  onDelete: (id: string) => void | Promise<void>
+  datalistId: string
+  datalistOptions: string[]
+}) {
   const [confirmId, setConfirmId] = useState<string | null>(null)
-  if (entries.length === 0) return null
+  const [amountDrafts, setAmountDrafts] = useState<Record<string, string>>({})
+  const [adding, setAdding] = useState(false)
+  const [newCat, setNewCat] = useState('')
+  const [newAmt, setNewAmt] = useState('')
+  const [newNote, setNewNote] = useState('')
+  const newCatRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => { if (adding) newCatRef.current?.focus() }, [adding])
+
+  const amountDraftFor = (entry: ExpenseEntry) => amountDrafts[entry.id] ?? String(entry.amount)
+
+  async function commitAmount(entry: ExpenseEntry) {
+    const raw = amountDrafts[entry.id]
+    if (raw === undefined) return
+    const parsed = parseFloat(raw)
+    const next = isNaN(parsed) ? 0 : parsed
+    setAmountDrafts(d => { const n = { ...d }; delete n[entry.id]; return n })
+    if (next !== entry.amount) await onUpdateAmount(entry.id, next)
+  }
+
+  function cancelAdd() {
+    setNewCat(''); setNewAmt(''); setNewNote(''); setAdding(false)
+  }
+
+  async function submitAdd() {
+    if (!newCat.trim()) return
+    const parsed = parseFloat(newAmt)
+    await onAdd(newCat.trim(), isNaN(parsed) ? 0 : parsed, newNote.trim() || undefined)
+    setNewCat(''); setNewAmt(''); setNewNote(''); setAdding(false)
+  }
+
+  const onFormKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') submitAdd()
+    if (e.key === 'Escape') cancelAdd()
+  }
+
   return (
-    <div className="space-y-1.5 mb-3">
-      {entries.map(entry => (
-        <div key={entry.id} className="flex items-center gap-3">
-          <span className="text-sm text-gray-400 flex-1">{entry.category}</span>
-          {entry.note && <span className="text-xs text-gray-600 truncate max-w-[160px]">{entry.note}</span>}
-          <span className="text-sm font-semibold text-gray-300 tabular-nums">{formatCurrency(entry.amount)}</span>
-          <div className="relative">
-            <button
-              onClick={() => setConfirmId(entry.id)}
-              className="text-gray-600 hover:text-red-400 transition-colors"
-            >
-              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-              </svg>
-            </button>
-            {confirmId === entry.id && (
-              <div className="absolute right-0 top-6 z-20 bg-gray-950 border border-gray-700 rounded-lg shadow-xl p-3 w-44">
-                <p className="text-xs text-gray-300 mb-2">Delete this entry?</p>
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => { onDelete(entry.id); setConfirmId(null) }}
-                    className="flex-1 px-2 py-1 bg-red-600 hover:bg-red-500 text-white text-xs rounded transition-colors font-medium"
-                  >
-                    Delete
-                  </button>
-                  <button
-                    onClick={() => setConfirmId(null)}
-                    className="flex-1 px-2 py-1 bg-gray-800 hover:bg-gray-700 text-gray-300 text-xs rounded transition-colors"
-                  >
-                    Cancel
-                  </button>
-                </div>
+    <div className="mb-3">
+      {entries.length > 0 && (
+        <div className="space-y-1.5 mb-2">
+          {entries.map(entry => (
+            <div key={entry.id} className="flex items-center gap-3">
+              <span className="text-sm text-gray-400 flex-1">{entry.category}</span>
+              {entry.note && <span className="text-xs text-gray-600 truncate max-w-[160px]">{entry.note}</span>}
+              <AmountInput
+                value={amountDraftFor(entry)}
+                onChange={v => setAmountDrafts(d => ({ ...d, [entry.id]: v }))}
+                onBlur={() => commitAmount(entry)}
+              />
+              <div className="relative">
+                <button
+                  onClick={() => setConfirmId(entry.id)}
+                  className="text-gray-600 hover:text-red-400 transition-colors"
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+                {confirmId === entry.id && (
+                  <div className="absolute right-0 top-6 z-20 bg-gray-950 border border-gray-700 rounded-lg shadow-xl p-3 w-44">
+                    <p className="text-xs text-gray-300 mb-2">Delete this entry?</p>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => { onDelete(entry.id); setConfirmId(null) }}
+                        className="flex-1 px-2 py-1 bg-red-600 hover:bg-red-500 text-white text-xs rounded transition-colors font-medium"
+                      >
+                        Delete
+                      </button>
+                      <button
+                        onClick={() => setConfirmId(null)}
+                        className="flex-1 px-2 py-1 bg-gray-800 hover:bg-gray-700 text-gray-300 text-xs rounded transition-colors"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
-            )}
-          </div>
+            </div>
+          ))}
         </div>
-      ))}
+      )}
+      {adding ? (
+        <div className="flex flex-wrap items-end gap-2 pt-1">
+          <div className="flex-1 min-w-[130px]">
+            <label className="block text-[10px] text-gray-600 mb-1 uppercase tracking-wider">Category</label>
+            <input
+              ref={newCatRef} list={datalistId} value={newCat}
+              onChange={e => setNewCat(e.target.value)}
+              onKeyDown={onFormKeyDown}
+              placeholder="Description"
+              className="w-full bg-gray-800 border border-gray-700 rounded px-2.5 py-1.5 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+            />
+            <datalist id={datalistId}>{datalistOptions.map(s => <option key={s} value={s} />)}</datalist>
+          </div>
+          <div className="w-28">
+            <label className="block text-[10px] text-gray-600 mb-1 uppercase tracking-wider">Amount</label>
+            <input
+              type="number" step="1" value={newAmt} onChange={e => setNewAmt(e.target.value)} onKeyDown={onFormKeyDown}
+              placeholder="0 (optional)"
+              className="w-full bg-gray-800 border border-gray-700 rounded px-2.5 py-1.5 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+            />
+          </div>
+          <div className="flex-1 min-w-[90px]">
+            <label className="block text-[10px] text-gray-600 mb-1 uppercase tracking-wider">Note</label>
+            <input
+              value={newNote} onChange={e => setNewNote(e.target.value)} onKeyDown={onFormKeyDown}
+              placeholder="optional"
+              className="w-full bg-gray-800 border border-gray-700 rounded px-2.5 py-1.5 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+            />
+          </div>
+          <button onClick={submitAdd} disabled={!newCat.trim()} className="px-3 py-1.5 bg-indigo-600 text-white text-sm rounded-md hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors font-medium">Add</button>
+          <button onClick={cancelAdd} className="px-3 py-1.5 text-gray-500 hover:text-gray-300 text-sm transition-colors">Cancel</button>
+        </div>
+      ) : (
+        <button onClick={() => setAdding(true)} className="text-xs text-indigo-400 hover:text-indigo-300 font-medium flex items-center gap-1">
+          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+          </svg>
+          Add category
+        </button>
+      )}
     </div>
   )
 }
@@ -149,13 +243,11 @@ export default function Compensation() {
   const [pcrSyncPreview, setPcrSyncPreview] = useState<PcrSyncPreview | null>(null)
   const [pcrSyncing, setPcrSyncing] = useState(false)
   const draftKey = useRef<string>('')
-  const [pieDrill, setPieDrill] = useState<'benefits' | 'retirement' | 'netIncome' | 'cashBenefits' | null>(null)
-  const [grossBreakdownOpen, setGrossBreakdownOpen] = useState(true)
+  const [pieDrill, setPieDrill] = useState<'benefits' | 'retirement' | 'netIncome' | 'cashReimbursements' | null>(null)
+  // All page sections collapsed by default (pieChart excepted); keyed by section id.
+  const [openSections, setOpenSections] = useState<Record<string, boolean>>({ pieChart: true, expenses: true })
+  const toggleSection = (key: string) => setOpenSections(o => ({ ...o, [key]: !o[key] }))
 
-  const [bizCat, setBizCat] = useState(''); const [bizAmt, setBizAmt] = useState(''); const [bizNote, setBizNote] = useState('')
-  const [benCat, setBenCat] = useState(''); const [benAmt, setBenAmt] = useState(''); const [benNote, setBenNote] = useState('')
-  const [retCat, setRetCat] = useState(''); const [retAmt, setRetAmt] = useState(''); const [retNote, setRetNote] = useState('')
-  const [otherCat, setOtherCat] = useState(''); const [otherAmt, setOtherAmt] = useState(''); const [otherNote, setOtherNote] = useState('')
 
   const yearStats = useMemo(
     () => computeCalendarYearStats(selectedYear, reports, schedules, settings, stipendMappings),
@@ -323,6 +415,7 @@ export default function Compensation() {
   function hasAnything(rec: AnnualExpenses): boolean {
     return (
       Object.values(rec.recurring ?? {}).some(v => v !== 0) ||
+      (rec.cashCompEntries?.length ?? 0) > 0 ||
       (rec.entries?.length ?? 0) > 0 ||
       (rec.benefitsEntries?.length ?? 0) > 0 ||
       (rec.retirementEntries?.length ?? 0) > 0 ||
@@ -334,7 +427,7 @@ export default function Compensation() {
     const amount = parseFloat(draft[key] ?? '') || 0
     const record = getOrCreate()
     const merged = { ...(record.recurring ?? {}), [key]: amount }
-    const updatedRecurring = Object.fromEntries(Object.entries(merged).filter(([k]) => ACTIVE_KEYS.has(k)))
+    const updatedRecurring = Object.fromEntries(Object.entries(merged).filter(([k]) => KNOWN_RECURRING_KEYS.has(k)))
     const updated = { ...record, recurring: updatedRecurring }
     if (!hasAnything(updated) && currentRecord) {
       await deleteAnnualExpenses(updated.id)
@@ -343,163 +436,79 @@ export default function Compensation() {
     }
   }
 
-  async function handleAddBiz() {
-    const amt = parseFloat(bizAmt)
-    if (!bizCat.trim() || isNaN(amt) || amt === 0) return
+  async function handleAddEntry(section: Section, category: string, amount: number, note?: string) {
+    if (!category.trim()) return
     const record = getOrCreate()
-    const entry: ExpenseEntry = { id: randomId(), category: bizCat.trim(), amount: amt, note: bizNote.trim() || undefined }
-    await saveAnnualExpenses({ ...record, entries: [...(record.entries ?? []), entry] })
-    setBizCat(''); setBizAmt(''); setBizNote('')
+    const field = SECTION_FIELD[section]
+    const entry: ExpenseEntry = { id: randomId(), category: category.trim(), amount: amount || 0, note: note?.trim() || undefined }
+    await saveAnnualExpenses({ ...record, [field]: [...(record[field] ?? []), entry] })
   }
 
-  async function handleAddBen() {
-    const amt = parseFloat(benAmt)
-    if (!benCat.trim() || isNaN(amt) || amt === 0) return
+  async function handleUpdateEntryAmount(section: Section, entryId: string, amount: number) {
     const record = getOrCreate()
-    const entry: ExpenseEntry = { id: randomId(), category: benCat.trim(), amount: amt, note: benNote.trim() || undefined }
-    await saveAnnualExpenses({ ...record, benefitsEntries: [...(record.benefitsEntries ?? []), entry] })
-    setBenCat(''); setBenAmt(''); setBenNote('')
-  }
-
-  async function handleAddRet() {
-    const amt = parseFloat(retAmt)
-    if (!retCat.trim() || isNaN(amt) || amt === 0) return
-    const record = getOrCreate()
-    const entry: ExpenseEntry = { id: randomId(), category: retCat.trim(), amount: amt, note: retNote.trim() || undefined }
-    await saveAnnualExpenses({ ...record, retirementEntries: [...(record.retirementEntries ?? []), entry] })
-    setRetCat(''); setRetAmt(''); setRetNote('')
-  }
-
-  async function handleAddOther() {
-    const amt = parseFloat(otherAmt)
-    if (!otherCat.trim() || isNaN(amt) || amt === 0) return
-    const record = getOrCreate()
-    const entry: ExpenseEntry = { id: randomId(), category: otherCat.trim(), amount: amt, note: otherNote.trim() || undefined }
-    await saveAnnualExpenses({ ...record, otherIncomeEntries: [...(record.otherIncomeEntries ?? []), entry] })
-    setOtherCat(''); setOtherAmt(''); setOtherNote('')
+    const field = SECTION_FIELD[section]
+    const updated = { ...record, [field]: (record[field] ?? []).map(e => e.id === entryId ? { ...e, amount } : e) }
+    await saveAnnualExpenses(updated)
   }
 
   async function handleDeleteEntry(section: Section, entryId: string) {
     const record = getOrCreate()
-    let updated: AnnualExpenses
-    if (section === 'business') {
-      updated = { ...record, entries: (record.entries ?? []).filter(e => e.id !== entryId) }
-    } else if (section === 'benefits') {
-      updated = { ...record, benefitsEntries: (record.benefitsEntries ?? []).filter(e => e.id !== entryId) }
-    } else if (section === 'retirement') {
-      updated = { ...record, retirementEntries: (record.retirementEntries ?? []).filter(e => e.id !== entryId) }
-    } else {
-      updated = { ...record, otherIncomeEntries: (record.otherIncomeEntries ?? []).filter(e => e.id !== entryId) }
-    }
+    const field = SECTION_FIELD[section]
+    const updated = { ...record, [field]: (record[field] ?? []).filter(e => e.id !== entryId) }
     if (!hasAnything(updated)) await deleteAnnualExpenses(updated.id)
     else await saveAnnualExpenses(updated)
   }
 
   // ── Sync from PCR ────────────────────────────────────────────────────────────
-  // Sums each PCR expense line (via PcrCategoryMapping) across every income
-  // statement for the selected year -- no payout lag here, unlike stipends;
-  // a PCR's expense column reflects that same month's own costs. A known leaf
-  // key updates `recurring[key]` directly; anything else is treated as a
-  // free-form category and upserted into `entries[]` by matching category name
-  // (so re-syncing updates the same entry instead of piling up duplicates).
+  // Core resolution/apply logic lives in utils/pcrExpenseSync.ts, shared with
+  // Upload.tsx's automatic "safe" sync (see applySafePcrSync there) so the
+  // manual review flow here and the automatic first-time-population path can
+  // never disagree about what a PCR label resolves to.
 
   function buildPcrSyncPreview(): PcrSyncPreview {
-    const proposedExpense: Record<string, number> = {}
-    const proposedOtherIncome: Record<string, number> = {}
-    const unmapped = new Set<string>()
-
-    for (const stmt of pcrIncomeStatements) {
-      if (stmt.year !== selectedYear) continue
-      for (const line of stmt.lines) {
-        if (line.section === 'otherIncome') {
-          const mapping = resolvePcrCategoryMapping(line.label, 'otherIncome', pcrCategoryMappings)
-          if (!mapping) { unmapped.add(line.label); continue }
-          proposedOtherIncome[mapping.targetKey] = (proposedOtherIncome[mapping.targetKey] ?? 0) + line.amount
-          continue
-        }
-        // "Operating Reserves" items (operating fee, development reserve, the
-        // flat operating expense) sit before the PCR's own EXPENSES header
-        // opens, so extraction tags them 'other' rather than 'expense' -- but
-        // they're still real Compensation-page categories, so a mapping can
-        // still target them. Restricted to Business Expenses keys specifically
-        // (the only category real Operating Reserves items ever belong to):
-        // a broader "any mapped 'other' line" rule also swept in unrelated
-        // 'other' lines whose label happens to share a substring with a
-        // mapping meant for something else entirely (e.g. "Cash Balance Plan
-        // - PCR Reserve", a distinct reserve/catch-up adjustment, matching the
-        // "Cash Balance Plan" mapping and inflating that retirement total).
-        // Everything else under 'other' is a revenue/balance rollup (PCR
-        // Surplus, rolled-forward balance, etc.) that was never meant to be
-        // categorized, so an unmapped 'other' line is never flagged the way
-        // an unmapped 'expense' line is.
-        if (line.section !== 'expense' && line.section !== 'other') continue
-        const mapping = resolvePcrCategoryMapping(line.label, 'expense', pcrCategoryMappings)
-        if (!mapping) { if (line.section === 'expense') unmapped.add(line.label); continue }
-        if (line.section === 'other' && !BUSINESS_KEYS.has(mapping.targetKey)) continue
-        proposedExpense[mapping.targetKey] = (proposedExpense[mapping.targetKey] ?? 0) + line.amount
-      }
-    }
-
-    const record = currentRecord
-    const changes: PcrSyncChange[] = []
-    for (const [key, proposedAmt] of Object.entries(proposedExpense)) {
-      const rounded = Math.round(proposedAmt * 100) / 100
-      const current = ACTIVE_KEYS.has(key)
-        ? (record?.recurring?.[key] ?? 0)
-        : (record?.entries ?? []).filter(e => e.category === key).reduce((s, e) => s + e.amount, 0)
-      if (Math.abs(rounded - current) < 0.01) continue
-      changes.push({ key, label: LEAF_LABELS[key] ?? key, current, proposed: rounded, section: 'expense' })
-    }
-    for (const [key, proposedAmt] of Object.entries(proposedOtherIncome)) {
-      const rounded = Math.round(proposedAmt * 100) / 100
-      const current = (record?.otherIncomeEntries ?? []).filter(e => e.category === key).reduce((s, e) => s + e.amount, 0)
-      if (Math.abs(rounded - current) < 0.01) continue
-      changes.push({ key, label: key, current, proposed: rounded, section: 'otherIncome' })
-    }
-    changes.sort((a, b) => a.label.localeCompare(b.label))
-
-    return { changes, unmappedLabels: [...unmapped].sort() }
+    return buildPcrSyncPreviewShared(
+      selectedYear, pcrIncomeStatements, pcrCategoryMappings, annualExpenses, currentRecord,
+      settings.hiddenPcrLabels?.expense ?? [], settings.dismissedUnmappedCategories ?? [],
+      settings.hiddenPcrLabels?.otherIncome ?? [],
+    )
   }
 
   async function applyPcrSync() {
     if (!pcrSyncPreview) return
     setPcrSyncing(true)
     try {
-      const record = getOrCreate()
-      const recurringUpdates: Record<string, number> = {}
-      const entries = [...(record.entries ?? [])]
-      const otherIncomeEntries = [...(record.otherIncomeEntries ?? [])]
-
-      for (const change of pcrSyncPreview.changes) {
-        if (change.section === 'otherIncome') {
-          const idx = otherIncomeEntries.findIndex(e => e.category === change.key)
-          if (idx >= 0) otherIncomeEntries[idx] = { ...otherIncomeEntries[idx], amount: change.proposed }
-          else if (change.proposed !== 0) otherIncomeEntries.push({ id: randomId(), category: change.key, amount: change.proposed })
-        } else if (ACTIVE_KEYS.has(change.key)) {
-          recurringUpdates[change.key] = change.proposed
-        } else {
-          const idx = entries.findIndex(e => e.category === change.key)
-          if (idx >= 0) entries[idx] = { ...entries[idx], amount: change.proposed }
-          else if (change.proposed !== 0) entries.push({ id: randomId(), category: change.key, amount: change.proposed })
-        }
-      }
-
-      const updated: AnnualExpenses = {
-        ...record,
-        recurring: { ...(record.recurring ?? {}), ...recurringUpdates },
-        entries: entries.filter(e => e.amount !== 0),
-        otherIncomeEntries: otherIncomeEntries.filter(e => e.amount !== 0),
-      }
+      const updated = applyPcrSyncChanges(getOrCreate(), pcrSyncPreview.changes)
       await saveAnnualExpenses(updated)
       setDraft(d => {
         const next = { ...d }
-        for (const [key, amt] of Object.entries(recurringUpdates)) next[key] = String(amt)
+        for (const change of pcrSyncPreview.changes) {
+          if (change.section === 'expense' && KNOWN_RECURRING_KEYS.has(change.key)) next[change.key] = String(change.proposed)
+        }
         return next
       })
       setPcrSyncPreview(null)
     } finally {
       setPcrSyncing(false)
     }
+  }
+
+  // Reuses the same dismiss list the PCR Category Mapping / Income Statement
+  // pages already use for genuinely-unmapped labels -- a "needs a home"
+  // label already has a mapping, but the underlying ask ("stop nagging me
+  // about this one") is the same, so it shares the list.
+  async function dismissNeedsHomeLabel(pcrLabel: string) {
+    const current = settings.hiddenPcrLabels ?? { stipend: [], expense: [] }
+    if ((current.expense ?? []).includes(pcrLabel)) return
+    await saveSettings({ ...settings, hiddenPcrLabels: { ...current, expense: [...(current.expense ?? []), pcrLabel] } })
+  }
+
+  // Mirror image of dismissNeedsHomeLabel -- this one starts from a category
+  // with no mapping at all, for a category that's deliberately hand-managed
+  // and was never meant to sync from the PCR.
+  async function dismissUnmappedCategory(category: string) {
+    const current = settings.dismissedUnmappedCategories ?? []
+    if (current.includes(category)) return
+    await saveSettings({ ...settings, dismissedUnmappedCategories: [...current, category] })
   }
 
   // ── Derived totals ────────────────────────────────────────────────────────────
@@ -512,15 +521,7 @@ export default function Compensation() {
   }
 
   const businessExpenses     = recurringSum(BUSINESS_KEYS) + (currentRecord?.entries?.reduce((s, e) => s + e.amount, 0) ?? 0)
-  // Benicomp/CME/Phone-Internet are cash reimbursements that land in the
-  // physician's own bank account, unlike the rest of Benefits (paid to a
-  // third party) -- excluded here so they fall into Net Income below instead.
-  // clinicalNet/netCompensation/totalComp are unaffected by this split
-  // (they cancel out algebraically no matter how benefitsTotal is divided);
-  // only how much of the total lands in the "Net Income" vs. "Benefits"
-  // pie slice changes.
-  const cashBenefitsTotal    = recurringSum(CASH_BENEFIT_KEYS)
-  const benefitsTotal        = recurringSum(BENEFITS_KEYS) - cashBenefitsTotal + (currentRecord?.benefitsEntries?.reduce((s, e) => s + e.amount, 0) ?? 0)
+  const benefitsTotal        = recurringSum(BENEFITS_KEYS) + (currentRecord?.benefitsEntries?.reduce((s, e) => s + e.amount, 0) ?? 0)
   const healthcareTotal      = recurringSum(HEALTHCARE_KEYS)
   const retirementTotal      = recurringSum(RETIREMENT_KEYS) + (currentRecord?.retirementEntries?.reduce((s, e) => s + e.amount, 0) ?? 0)
   const otherIncome          = (currentRecord?.otherIncomeEntries ?? []).reduce((s, e) => s + e.amount, 0)
@@ -530,6 +531,20 @@ export default function Compensation() {
   const clinicalNet          = annualGross - businessExpenses - benefitsTotal - retirementTotal
   const netCompensation      = clinicalNet + otherIncome + carryforwardIn - yearEndBalance
   const totalComp            = netCompensation + benefitsTotal + retirementTotal
+  // Cash Compensation is computed directly from what's actually been paid --
+  // Physician Salary (the PCR's own "MD Salaries" line) plus Cash
+  // Reimbursements (Benicomp/CME/Business Meetings/Phone-Internet, plus any
+  // free-form entries) -- rather than being a pure leftover. The PCR's MD
+  // Salaries line is a periodic draw that lags the physician's true earned
+  // pay (true-up'd whenever the PCR closes out), so the gap between what's
+  // been paid so far and netCompensation (the true total -- unchanged from
+  // before) is surfaced explicitly as "Outstanding Salary Balance" instead
+  // of being silently absorbed. It can go negative (more drawn than earned
+  // so far this year).
+  const physicianSalary        = currentRecord?.recurring?.['salary'] ?? 0
+  const cashReimbursements     = recurringSum(CASH_COMP_KEYS) - physicianSalary + (currentRecord?.cashCompEntries?.reduce((s, e) => s + e.amount, 0) ?? 0)
+  const cashCompPaid           = physicianSalary + cashReimbursements
+  const outstandingSalaryBalance = netCompensation - cashCompPaid
   const overheadPct          = annualGross > 0 ? businessExpenses / annualGross * 100 : 0
   const effectiveOverheadPct = (annualGross + otherIncome) > 0 ? businessExpenses / (annualGross + otherIncome) * 100 : 0
   const totalHours       = cashView
@@ -648,6 +663,175 @@ export default function Compensation() {
         </div>
       )}
 
+{/* Pie chart — Total Compensation breakdown */}
+      {totalComp > 0 && (() => {
+        const freeformBen = (currentRecord?.benefitsEntries ?? []).reduce((s, e) => s + e.amount, 0)
+        const freeformRet = (currentRecord?.retirementEntries ?? []).reduce((s, e) => s + e.amount, 0)
+
+        type Drill = 'benefits' | 'retirement' | 'netIncome' | 'cashReimbursements' | null
+        interface PieSlice { label: string; value: number; hex: string; drill?: Drill }
+
+        const freeformCash = (currentRecord?.cashCompEntries ?? []).reduce((s, e) => s + e.amount, 0)
+        // Benicomp/CME/Business Meetings/Phone-Internet, broken out
+        // individually -- one more level down from Cash Compensation's own
+        // "Cash Reimbursements" slice.
+        const cashReimbursementsSlices: PieSlice[] = [
+          { label: 'Benicomp',          value: rec.healthBenicomp ?? 0,   hex: '#f472b6' },
+          { label: 'CME',               value: rec.cme ?? 0,              hex: '#facc15' },
+          { label: 'Business Meetings', value: rec.businessMeetings ?? 0, hex: '#a78bfa' },
+          { label: 'Phone / Internet',  value: rec.phoneInternet ?? 0,    hex: '#f87171' },
+          { label: 'Other',             value: freeformCash,              hex: '#94a3b8' },
+        ].filter(d => d.value > 0)
+
+        const topSlices: PieSlice[] = [
+          { label: 'Cash Compensation', value: Math.max(netCompensation, 0), hex: '#818cf8', drill: 'netIncome' as Drill },
+          { label: 'Benefits',   value: Math.max(benefitsTotal, 0),   hex: '#fb923c', drill: 'benefits'   as Drill },
+          { label: 'Retirement', value: Math.max(retirementTotal, 0), hex: '#4ade80', drill: 'retirement' as Drill },
+        ].filter(d => d.value > 0)
+
+        // Splits "Cash Compensation" into what's actually been paid out --
+        // Physician Salary (the PCR's own "MD Salaries" line) and Cash
+        // Reimbursements (drills one level further into
+        // cashReimbursementsSlices) -- plus the gap against the true total,
+        // "Outstanding Salary Balance": the PCR's MD Salaries line is a
+        // periodic draw that lags the physician's true earned pay, so this
+        // can be negative (more drawn than earned so far) rather than
+        // silently absorbed. Kept even when non-positive (unlike every other
+        // slice here) so a real negative balance is never hidden.
+        const netIncomeSlices: PieSlice[] = [
+          { label: 'Physician Salary',   value: physicianSalary,          hex: '#818cf8' },
+          { label: 'Cash Reimbursements', value: cashReimbursements,      hex: '#f472b6', drill: 'cashReimbursements' as Drill },
+          { label: 'Outstanding Salary Balance', value: outstandingSalaryBalance, hex: '#fbbf24' },
+        ].filter(d => d.value !== 0)
+
+        // Benicomp/CME/Phone-Internet are deliberately excluded here -- they're
+        // cash reimbursements now folded into Net Income (see benefitsTotal
+        // above), so they're no longer part of what this Benefits total means.
+        const benefitsSlices: PieSlice[] = [
+          { label: 'Health Insurance',  value: (rec.healthDental ?? 0) + (rec.healthMedical ?? 0) + (rec.healthVision ?? 0), hex: '#38bdf8' },
+          { label: 'Licenses & Dues',   value: rec.licensesDues ?? 0,    hex: '#a78bfa' },
+          { label: 'Other',             value: freeformBen,               hex: '#94a3b8' },
+        ].filter(d => d.value > 0)
+
+        const retirementSlices: PieSlice[] = [
+          { label: 'Profit Sharing',  value: rec.profitSharing ?? 0,  hex: '#4ade80' },
+          { label: 'Cash Balance',    value: rec.cashBalance ?? 0,    hex: '#fb923c' },
+          { label: 'Other',           value: freeformRet,              hex: '#94a3b8' },
+        ].filter(d => d.value > 0)
+
+        const activeSlices = pieDrill === 'benefits' ? benefitsSlices
+          : pieDrill === 'retirement' ? retirementSlices
+          : pieDrill === 'netIncome' ? netIncomeSlices
+          : pieDrill === 'cashReimbursements' ? cashReimbursementsSlices
+          : topSlices
+        const total = activeSlices.reduce((s, d) => s + d.value, 0)
+        // A pie wedge can't be negative (Outstanding Salary Balance can be)
+        // -- floor just the drawn geometry so the circle still renders
+        // sensibly, while the legend/total below keep the real signed value.
+        const wedgeData = activeSlices.map(d => ({ ...d, value: Math.max(d.value, 0) }))
+        const drillLabel: Record<NonNullable<Drill>, string> = {
+          benefits: 'Benefits', retirement: 'Retirement', netIncome: 'Cash Compensation', cashReimbursements: 'Cash Reimbursements',
+        }
+        // Drilling into a slice nested under another drill (currently just
+        // Cash Reimbursements, under Cash Compensation) should step back up
+        // one level rather than all the way to the top -- everything else
+        // still goes straight back to Overview, same as before.
+        const parentDrill: Record<NonNullable<Drill>, Drill> = {
+          benefits: null, retirement: null, netIncome: null, cashReimbursements: 'netIncome',
+        }
+        const totalLabel = pieDrill ? drillLabel[pieDrill] : 'Total Compensation'
+        const totalColor = pieDrill === 'benefits' ? 'text-sky-400'
+          : pieDrill === 'retirement' ? 'text-teal-400'
+          : pieDrill === 'netIncome' ? 'text-indigo-400'
+          : pieDrill === 'cashReimbursements' ? 'text-pink-400'
+          : 'text-violet-400'
+
+        return (
+          <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden mb-6">
+            <button
+              onClick={() => toggleSection('pieChart')}
+              className="w-full flex items-center justify-between gap-3 px-5 py-3.5 text-left hover:bg-gray-800/50 transition-colors"
+            >
+              <span className="text-sm font-semibold text-gray-300">Total Compensation Breakdown</span>
+              <div className="flex items-center gap-3">
+                <span className="text-sm font-semibold text-violet-400">{formatCurrency(totalComp)}</span>
+                <svg className={`w-4 h-4 text-gray-500 transition-transform ${openSections.pieChart ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+              </div>
+            </button>
+            {openSections.pieChart && (
+            <div className="px-5 pb-5 pt-1 border-t border-gray-800/60">
+            <div className="flex items-center gap-3 mb-4">
+              {pieDrill && (
+                <button onClick={() => setPieDrill(parentDrill[pieDrill])} className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-300 transition-colors">
+                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                  </svg>
+                  {parentDrill[pieDrill] ? drillLabel[parentDrill[pieDrill]!] : 'Overview'}
+                </button>
+              )}
+              <p className="text-xs text-gray-500 uppercase tracking-wider">
+                {pieDrill ? `${drillLabel[pieDrill]} Breakdown` : 'Total Compensation Breakdown'}
+              </p>
+            </div>
+            <div className="flex flex-col md:flex-row items-center md:items-start gap-4 md:gap-6">
+              <div className="w-full md:w-[180px] md:flex-shrink-0">
+                <ResponsiveContainer width="100%" height={200}>
+                  <PieChart>
+                    <Pie
+                      data={wedgeData}
+                      dataKey="value"
+                      innerRadius={60}
+                      outerRadius={90}
+                      paddingAngle={2}
+                      strokeWidth={0}
+                      onClick={(entry: { drill?: Drill }) => { if (entry.drill) setPieDrill(entry.drill) }}
+                    >
+                      {wedgeData.map(d => <Cell key={d.label} fill={d.hex} style={{ cursor: d.drill ? 'pointer' : 'default' }} />)}
+                    </Pie>
+                    <Tooltip
+                      formatter={(value: number) => formatCurrency(value)}
+                      contentStyle={{ background: '#111827', border: '1px solid #374151', borderRadius: '8px', fontSize: '12px' }}
+                      itemStyle={{ color: '#d1d5db' }}
+                      labelStyle={{ color: '#9ca3af' }}
+                    />
+                  </PieChart>
+                </ResponsiveContainer>
+              </div>
+              <div className="w-full md:flex-1">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2 mb-3">
+                  {activeSlices.map(({ label, value, hex, drill }) => (
+                    <button
+                      key={label}
+                      type="button"
+                      onClick={() => { if (drill) setPieDrill(drill) }}
+                      className={`flex items-center gap-2 text-left rounded px-1 -mx-1 py-0.5 transition-colors ${drill ? 'hover:bg-gray-800/60 cursor-pointer' : 'cursor-default'}`}
+                    >
+                      <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: hex }} />
+                      <span className="text-xs text-gray-400 flex-1 truncate">{label}</span>
+                      <span className={`text-xs font-semibold tabular-nums ${value < 0 ? 'text-red-400' : 'text-gray-300'}`}>{formatCurrency(value)}</span>
+                      <span className="text-xs text-gray-600 tabular-nums w-9 text-right">{total > 0 ? (value / total * 100).toFixed(1) : '0.0'}%</span>
+                    </button>
+                  ))}
+                </div>
+                <div className="pt-2 border-t border-gray-800 flex items-center gap-2">
+                  <span className="w-2 h-2 flex-shrink-0" />
+                  <span className="text-xs text-gray-500 flex-1">{totalLabel}</span>
+                  <span className={`text-xs font-bold tabular-nums ${totalColor}`}>{formatCurrency(pieDrill ? total : totalComp)}</span>
+                  <span className="text-xs text-gray-600 w-9 text-right">100%</span>
+                </div>
+                {activeSlices.some(s => s.drill) && (
+                  <p className="text-xs text-gray-700 mt-2">Click a slice or label to drill down</p>
+                )}
+              </div>
+            </div>
+            </div>
+            )}
+          </div>
+        )
+      })()}
+
       {/* Stat cards */}
       <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-3 mb-6">
         {/* Total Gross Revenue — clinical + other income + reconciliation */}
@@ -764,28 +948,45 @@ export default function Compensation() {
         </div>
       </div>
 
-{/* Gross Revenue Breakdown */}
+{/* Revenues: Clinical + Non-clinical, visually paired under one parent */}
+      <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden mb-6">
+        <button
+          onClick={() => toggleSection('revenues')}
+          className="w-full flex items-center justify-between gap-3 px-5 py-3.5 text-left hover:bg-gray-800/50 transition-colors"
+        >
+          <span className="text-sm font-semibold text-gray-300">Revenues</span>
+          <div className="flex items-center gap-3">
+            <span className="text-sm font-semibold text-emerald-400">{formatCurrency(annualGross + otherIncome)}</span>
+            <svg className={`w-4 h-4 text-gray-500 transition-transform ${openSections.revenues ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+            </svg>
+          </div>
+        </button>
+        {openSections.revenues && (
+        <div className="border-t border-gray-800/60">
+
+      {/* Clinical Revenues Breakdown */}
       {annualGross > 0 && (
-        <div className="bg-gray-900 border border-gray-800 rounded-xl mb-6 overflow-hidden">
+        <div className="pl-4 pr-5 py-4 border-l-4 border-emerald-700">
           <button
-            onClick={() => setGrossBreakdownOpen(v => !v)}
-            className="w-full flex items-center justify-between px-5 py-3.5 text-left hover:bg-gray-800/50 transition-colors"
+            onClick={() => toggleSection('grossBreakdown')}
+            className="w-full flex items-center justify-between text-left"
           >
             <div className="flex items-center gap-2">
-              <span className="text-xs text-gray-500 uppercase tracking-wider">Gross Revenue Breakdown</span>
+              <span className="text-xs text-gray-500 uppercase tracking-wider">Clinical Revenues Breakdown</span>
               <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded ${cashView ? 'bg-emerald-900/50 text-emerald-400' : 'bg-gray-800 text-gray-500'}`}>
                 {cashView ? 'Cash' : 'Accrual'}
               </span>
             </div>
             <div className="flex items-center gap-3">
               <span className="text-sm font-semibold text-emerald-400">{formatCurrency(annualGross)}</span>
-              <svg className={`w-4 h-4 text-gray-500 transition-transform ${grossBreakdownOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg className={`w-4 h-4 text-gray-500 transition-transform ${openSections.grossBreakdown ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
               </svg>
             </div>
           </button>
-          {grossBreakdownOpen && (
-            <div className="px-5 pb-5 pt-1 space-y-4 border-t border-gray-800/60">
+          {openSections.grossBreakdown && (
+            <div className="pt-4 space-y-4">
               {/* Professional Fees */}
               <div className="pt-3">
                 <p className="text-[10px] text-gray-600 uppercase tracking-wider mb-2">Professional Fees</p>
@@ -857,59 +1058,56 @@ export default function Compensation() {
           )}
         </div>
       )}
+      {annualGross > 0 && <div className="border-t border-gray-800" />}
 
-{/* Other Income */}
-      <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden mb-6">
-        <div className="px-5 py-3 border-b border-gray-800 flex items-center justify-between">
+      {/* Non-clinical Revenues */}
+      <div className="pl-4 pr-5 py-4 border-l-4 border-teal-700">
+        <div className="flex items-center justify-between mb-3">
           <div>
-            <span className="text-sm font-semibold text-gray-300">Other Income</span>
+            <span className="text-sm font-semibold text-gray-300">Non-clinical Revenues</span>
             <span className="text-[11px] text-gray-600 ml-2">Administrative &amp; committee</span>
           </div>
           {otherIncome > 0 && (
             <span className="text-sm font-bold text-emerald-400 tabular-nums">{formatCurrency(otherIncome)}</span>
           )}
         </div>
-        <div className="pl-4 pr-5 py-4 border-l-4 border-emerald-800">
-          <EntryList entries={currentRecord?.otherIncomeEntries ?? []} onDelete={id => handleDeleteEntry('otherIncome', id)} />
-          <div className="flex flex-wrap items-end gap-2 pt-2">
-            <div className="flex-1 min-w-[130px]">
-              <label className="block text-[10px] text-gray-600 mb-1 uppercase tracking-wider">Source</label>
-              <input
-                list="other-cats"
-                value={otherCat} onChange={e => setOtherCat(e.target.value)}
-                onKeyDown={e => { if (e.key === 'Enter') handleAddOther() }}
-                placeholder="Description"
-                className="w-full bg-gray-800 border border-gray-700 rounded px-2.5 py-1.5 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-              />
-              <datalist id="other-cats">{['QA Committee','Credentials Committee','Department Chief','Medical Directorship','Teaching / Education','Other'].map(s => <option key={s} value={s} />)}</datalist>
-            </div>
-            <div className="w-28">
-              <label className="block text-[10px] text-gray-600 mb-1 uppercase tracking-wider">Amount</label>
-              <input type="number" step="1" value={otherAmt} onChange={e => setOtherAmt(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') handleAddOther() }} placeholder="0" className="w-full bg-gray-800 border border-gray-700 rounded px-2.5 py-1.5 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-indigo-500" />
-            </div>
-            <div className="flex-1 min-w-[90px]">
-              <label className="block text-[10px] text-gray-600 mb-1 uppercase tracking-wider">Note</label>
-              <input value={otherNote} onChange={e => setOtherNote(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') handleAddOther() }} placeholder="optional" className="w-full bg-gray-800 border border-gray-700 rounded px-2.5 py-1.5 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-indigo-500" />
-            </div>
-            <button onClick={handleAddOther} disabled={!otherCat.trim() || !otherAmt} className="px-3 py-1.5 bg-indigo-600 text-white text-sm rounded-md hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors font-medium">Add</button>
-          </div>
+          <EditableEntryList
+            entries={currentRecord?.otherIncomeEntries ?? []}
+            onAdd={(category, amount, note) => handleAddEntry('otherIncome', category, amount, note)}
+            onUpdateAmount={(id, amount) => handleUpdateEntryAmount('otherIncome', id, amount)}
+            onDelete={id => handleDeleteEntry('otherIncome', id)}
+            datalistId="other-cats"
+            datalistOptions={['QA Committee', 'Credentials Committee', 'Department Chief', 'Medical Directorship', 'Teaching / Education', 'Other']}
+          />
+      </div>
+
         </div>
+        )}
       </div>
 
 {/* Practice Reconciliation */}
       <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden mb-6">
-        <div className="px-5 py-3 border-b border-gray-800 flex items-center justify-between">
+        <button
+          onClick={() => toggleSection('practiceRecon')}
+          className="w-full flex items-center justify-between gap-3 px-5 py-3.5 text-left hover:bg-gray-800/50 transition-colors"
+        >
           <div>
             <span className="text-sm font-semibold text-gray-300">Practice Reconciliation</span>
             <span className="text-[11px] text-gray-600 ml-2">Year-end settlement adjustments</span>
           </div>
-          {(carryforwardIn !== 0 || yearEndBalance !== 0) && (
-            <span className={`text-sm font-bold tabular-nums ${carryforwardIn - yearEndBalance >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-              {carryforwardIn - yearEndBalance >= 0 ? '+' : ''}{formatCurrency(carryforwardIn - yearEndBalance)}
-            </span>
-          )}
-        </div>
-        <div className="pl-4 pr-5 py-4 border-l-4 border-sky-800 space-y-4">
+          <div className="flex items-center gap-3">
+            {(carryforwardIn !== 0 || yearEndBalance !== 0) && (
+              <span className={`text-sm font-bold tabular-nums ${carryforwardIn - yearEndBalance >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                {carryforwardIn - yearEndBalance >= 0 ? '+' : ''}{formatCurrency(carryforwardIn - yearEndBalance)}
+              </span>
+            )}
+            <svg className={`w-4 h-4 text-gray-500 transition-transform ${openSections.practiceRecon ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+            </svg>
+          </div>
+        </button>
+        {openSections.practiceRecon && (
+        <div className="pl-4 pr-5 py-4 border-t border-gray-800 border-l-4 border-sky-800 space-y-4">
           {/* Carryforward In */}
           <div className="flex items-start justify-between gap-4">
             <div>
@@ -954,155 +1152,34 @@ export default function Compensation() {
             />
           </div>
         </div>
+        )}
       </div>
-
-{/* Pie chart — Total Compensation breakdown */}
-      {totalComp > 0 && (() => {
-        const freeformBen = (currentRecord?.benefitsEntries ?? []).reduce((s, e) => s + e.amount, 0)
-        const freeformRet = (currentRecord?.retirementEntries ?? []).reduce((s, e) => s + e.amount, 0)
-
-        type Drill = 'benefits' | 'retirement' | 'netIncome' | 'cashBenefits' | null
-        interface PieSlice { label: string; value: number; hex: string; drill?: Drill }
-
-        // Benicomp/CME/Phone-Internet, broken out individually -- one more
-        // level down from Net Income's own "Cash Benefits" slice.
-        const cashBenefitsSlices: PieSlice[] = [
-          { label: 'Benicomp',          value: rec.healthBenicomp ?? 0, hex: '#f472b6' },
-          { label: 'CME',               value: rec.cme ?? 0,            hex: '#facc15' },
-          { label: 'Phone / Internet',  value: rec.phoneInternet ?? 0,  hex: '#f87171' },
-        ].filter(d => d.value > 0)
-
-        const topSlices: PieSlice[] = [
-          { label: 'Cash Compensation', value: Math.max(netCompensation, 0), hex: '#818cf8', drill: 'netIncome' as Drill },
-          { label: 'Benefits',   value: Math.max(benefitsTotal, 0),   hex: '#fb923c', drill: 'benefits'   as Drill },
-          { label: 'Retirement', value: Math.max(retirementTotal, 0), hex: '#4ade80', drill: 'retirement' as Drill },
-        ].filter(d => d.value > 0)
-
-        // Splits "Cash Compensation" into the cash reimbursements folded in
-        // above (Benicomp/CME/Phone-Internet) vs. everything else that makes
-        // up that figure (unit pay + stipends, net of business overhead,
-        // plus other income and any carryforward/year-end adjustment). Cash
-        // Benefits drills one level further into cashBenefitsSlices; Salary
-        // has no further breakdown.
-        const netIncomeSlices: PieSlice[] = [
-          { label: 'Salary',        value: netCompensation - cashBenefitsTotal, hex: '#818cf8' },
-          { label: 'Cash Benefits', value: cashBenefitsTotal,                    hex: '#f472b6', drill: 'cashBenefits' as Drill },
-        ].filter(d => d.value > 0)
-
-        // Benicomp/CME/Phone-Internet are deliberately excluded here -- they're
-        // cash reimbursements now folded into Net Income (see benefitsTotal
-        // above), so they're no longer part of what this Benefits total means.
-        const benefitsSlices: PieSlice[] = [
-          { label: 'Health Insurance',  value: (rec.healthDental ?? 0) + (rec.healthMedical ?? 0) + (rec.healthVision ?? 0), hex: '#38bdf8' },
-          { label: 'Licenses & Dues',   value: rec.licensesDues ?? 0,    hex: '#a78bfa' },
-          { label: 'Other',             value: freeformBen,               hex: '#94a3b8' },
-        ].filter(d => d.value > 0)
-
-        const retirementSlices: PieSlice[] = [
-          { label: 'Profit Sharing',  value: rec.profitSharing ?? 0,  hex: '#4ade80' },
-          { label: 'Cash Balance',    value: rec.cashBalance ?? 0,    hex: '#fb923c' },
-          { label: 'Other',           value: freeformRet,              hex: '#94a3b8' },
-        ].filter(d => d.value > 0)
-
-        const activeSlices = pieDrill === 'benefits' ? benefitsSlices
-          : pieDrill === 'retirement' ? retirementSlices
-          : pieDrill === 'netIncome' ? netIncomeSlices
-          : pieDrill === 'cashBenefits' ? cashBenefitsSlices
-          : topSlices
-        const total = activeSlices.reduce((s, d) => s + d.value, 0)
-        const drillLabel: Record<NonNullable<Drill>, string> = {
-          benefits: 'Benefits', retirement: 'Retirement', netIncome: 'Cash Compensation', cashBenefits: 'Cash Benefits',
-        }
-        // Drilling into a slice nested under another drill (currently just
-        // Cash Benefits, under Net Income) should step back up one level
-        // rather than all the way to the top -- everything else still goes
-        // straight back to Overview, same as before.
-        const parentDrill: Record<NonNullable<Drill>, Drill> = {
-          benefits: null, retirement: null, netIncome: null, cashBenefits: 'netIncome',
-        }
-        const totalLabel = pieDrill ? drillLabel[pieDrill] : 'Total Compensation'
-        const totalColor = pieDrill === 'benefits' ? 'text-sky-400'
-          : pieDrill === 'retirement' ? 'text-teal-400'
-          : pieDrill === 'netIncome' ? 'text-indigo-400'
-          : pieDrill === 'cashBenefits' ? 'text-pink-400'
-          : 'text-violet-400'
-
-        return (
-          <div className="bg-gray-900 border border-gray-800 rounded-xl p-5 mb-6">
-            <div className="flex items-center gap-3 mb-4">
-              {pieDrill && (
-                <button onClick={() => setPieDrill(parentDrill[pieDrill])} className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-300 transition-colors">
-                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-                  </svg>
-                  {parentDrill[pieDrill] ? drillLabel[parentDrill[pieDrill]!] : 'Overview'}
-                </button>
-              )}
-              <p className="text-xs text-gray-500 uppercase tracking-wider">
-                {pieDrill ? `${drillLabel[pieDrill]} Breakdown` : 'Total Compensation Breakdown'}
-              </p>
-            </div>
-            <div className="flex flex-col md:flex-row items-center md:items-start gap-4 md:gap-6">
-              <div className="w-full md:w-[180px] md:flex-shrink-0">
-                <ResponsiveContainer width="100%" height={200}>
-                  <PieChart>
-                    <Pie
-                      data={activeSlices}
-                      dataKey="value"
-                      innerRadius={60}
-                      outerRadius={90}
-                      paddingAngle={2}
-                      strokeWidth={0}
-                      onClick={(entry: { drill?: Drill }) => { if (entry.drill) setPieDrill(entry.drill) }}
-                    >
-                      {activeSlices.map(d => <Cell key={d.label} fill={d.hex} style={{ cursor: d.drill ? 'pointer' : 'default' }} />)}
-                    </Pie>
-                    <Tooltip
-                      formatter={(value: number) => formatCurrency(value)}
-                      contentStyle={{ background: '#111827', border: '1px solid #374151', borderRadius: '8px', fontSize: '12px' }}
-                      itemStyle={{ color: '#d1d5db' }}
-                      labelStyle={{ color: '#9ca3af' }}
-                    />
-                  </PieChart>
-                </ResponsiveContainer>
-              </div>
-              <div className="w-full md:flex-1">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2 mb-3">
-                  {activeSlices.map(({ label, value, hex }) => (
-                    <div key={label} className="flex items-center gap-2">
-                      <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: hex }} />
-                      <span className="text-xs text-gray-400 flex-1 truncate">{label}</span>
-                      <span className="text-xs font-semibold text-gray-300 tabular-nums">{formatCurrency(value)}</span>
-                      <span className="text-xs text-gray-600 tabular-nums w-9 text-right">{total > 0 ? (value / total * 100).toFixed(1) : '0.0'}%</span>
-                    </div>
-                  ))}
-                </div>
-                <div className="pt-2 border-t border-gray-800 flex items-center gap-2">
-                  <span className="w-2 h-2 flex-shrink-0" />
-                  <span className="text-xs text-gray-500 flex-1">{totalLabel}</span>
-                  <span className={`text-xs font-bold tabular-nums ${totalColor}`}>{formatCurrency(pieDrill ? total : totalComp)}</span>
-                  <span className="text-xs text-gray-600 w-9 text-right">100%</span>
-                </div>
-                {activeSlices.some(s => s.drill) && (
-                  <p className="text-xs text-gray-700 mt-2">Click a slice to drill down</p>
-                )}
-              </div>
-            </div>
-          </div>
-        )
-      })()}
 
       {/* Expense form */}
       <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
-        <div className="px-5 py-3 border-b border-gray-800 flex items-center justify-between gap-3">
-          <h3 className="text-sm font-semibold text-gray-300">{selectedYear} Expenses</h3>
+        <div className="flex items-center justify-between gap-3 px-5 py-3.5">
+          <button onClick={() => toggleSection('expenses')} className="flex items-center gap-2 min-w-0 text-left">
+            <svg className={`w-4 h-4 text-gray-500 flex-shrink-0 transition-transform ${openSections.expenses ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+            </svg>
+            <h3 className="text-sm font-semibold text-gray-300 truncate">PCR Breakdown</h3>
+            <span className="text-[11px] text-gray-600 flex-shrink-0 hidden sm:inline">{selectedYear}</span>
+          </button>
           <button
-            onClick={() => setPcrSyncPreview(buildPcrSyncPreview())}
-            className="text-xs text-indigo-400 hover:text-indigo-300 font-medium border border-indigo-800 rounded-md px-3 py-1.5 hover:bg-indigo-900/30 transition-colors"
+            onClick={() => { setPcrSyncPreview(buildPcrSyncPreview()); setOpenSections(o => ({ ...o, expenses: true })) }}
+            className="text-xs text-indigo-400 hover:text-indigo-300 font-medium border border-indigo-800 rounded-md px-3 py-1.5 hover:bg-indigo-900/30 transition-colors flex-shrink-0"
           >
             Sync from PCR
           </button>
         </div>
+
+        {openSections.expenses && (
+        <div className="border-t border-gray-800">
+          <p className="px-5 pt-3 text-[11px] text-gray-500 leading-snug">
+            Cash Compensation, Business Expenses, Benefits, and Retirement Benefits — editable by hand or synced
+            from the PCR income statement. Together these four sections should sum to Total Gross Revenue above,
+            and they drive every other total on this page (Total Compensation, Overhead, and the pie chart above).
+          </p>
 
         {pcrSyncPreview && (
           <div className="px-5 py-4 border-b border-gray-800 bg-gray-800/40 space-y-3">
@@ -1181,13 +1258,134 @@ export default function Compensation() {
                 </div>
               </div>
             )}
+
+            {pcrSyncPreview.needsHomeLabels.length > 0 && (
+              <div className="pt-2 border-t border-gray-800">
+                <p className="text-xs text-gray-400">
+                  <span className="text-gray-300 font-medium">
+                    {pcrSyncPreview.needsHomeLabels.length} categor{pcrSyncPreview.needsHomeLabels.length !== 1 ? 'ies need' : 'y needs'} a home
+                  </span>
+                  {' '}— mapped, but never added anywhere yet. Add it once via any section's "Add" form below (Cash Compensation,
+                  Business Expenses, Benefits, or Retirement) and it'll sync automatically from then on.
+                </p>
+                <div className="flex flex-wrap gap-1.5 mt-1.5">
+                  {pcrSyncPreview.needsHomeLabels.map(({ pcrLabel, category }) => (
+                    <span key={pcrLabel} className="flex items-center gap-1.5 pl-1.5 pr-1 py-0.5 rounded bg-gray-900 border border-gray-700 text-gray-500 font-mono text-[10px]">
+                      {category}
+                      <span className="text-gray-700 font-sans">({pcrLabel})</span>
+                      <button
+                        onClick={() => dismissNeedsHomeLabel(pcrLabel)}
+                        className="text-gray-700 hover:text-red-400 transition-colors leading-none"
+                        title="Dismiss this reminder"
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {pcrSyncPreview.categoriesWithoutMapping.length > 0 && (
+              <div className="pt-2 border-t border-gray-800">
+                <p className="text-xs text-gray-400">
+                  <span className="text-gray-300 font-medium">
+                    {pcrSyncPreview.categoriesWithoutMapping.length} categor{pcrSyncPreview.categoriesWithoutMapping.length !== 1 ? 'ies have' : 'y has'} no PCR mapping
+                  </span>
+                  {' '}— created below, but nothing currently maps a PCR label to {pcrSyncPreview.categoriesWithoutMapping.length !== 1 ? 'them' : 'it'}. Set one up in{' '}
+                  <button
+                    onClick={() => navigate('/settings/pcr-category-mapping')}
+                    className="text-indigo-400 hover:text-indigo-300 underline underline-offset-2"
+                  >
+                    PCR Category Mapping
+                  </button>
+                  {' '}if it should sync automatically, or dismiss if it's meant to stay hand-managed.
+                </p>
+                <div className="flex flex-wrap gap-1.5 mt-1.5">
+                  {pcrSyncPreview.categoriesWithoutMapping.map((category) => (
+                    <span key={category} className="flex items-center gap-1.5 pl-1.5 pr-1 py-0.5 rounded bg-gray-900 border border-gray-700 text-gray-500 font-mono text-[10px]">
+                      {category}
+                      <button
+                        onClick={() => dismissUnmappedCategory(category)}
+                        className="text-gray-700 hover:text-red-400 transition-colors leading-none"
+                        title="Dismiss this reminder"
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
         <div>
 
+          {/* ── Cash Compensation ── */}
+          <div className="pl-4 pr-5 py-4 border-l-4 border-indigo-700">
+            <span className="inline-block text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full bg-indigo-950 text-indigo-400 mb-3">Cash Compensation</span>
+
+            {/* Physician Salary */}
+            <div className="space-y-2 mb-4">
+              {CASH_COMP_LEAVES.filter(l => !l.subGroup).map(leaf => (
+                <div key={leaf.key} className="flex items-center justify-between gap-4">
+                  <span className="text-sm text-gray-400">{leaf.label}</span>
+                  <AmountInput
+                    value={draft[leaf.key] ?? ''}
+                    onChange={v => setDraft(d => ({ ...d, [leaf.key]: v }))}
+                    onBlur={() => handleBlur(leaf.key)}
+                  />
+                </div>
+              ))}
+            </div>
+
+            {/* Cash Reimbursements sub-group */}
+            <div className="mb-3">
+              <p className="text-xs text-gray-600 mb-2">Cash Reimbursements</p>
+              <div className="space-y-2 pl-3 border-l border-gray-800 mb-3">
+                {CASH_COMP_LEAVES.filter(l => l.subGroup).map(leaf => (
+                  <div key={leaf.key} className="flex items-center justify-between gap-4">
+                    <span className="text-sm text-gray-400">{leaf.label}</span>
+                    <AmountInput
+                      value={draft[leaf.key] ?? ''}
+                      onChange={v => setDraft(d => ({ ...d, [leaf.key]: v }))}
+                      onBlur={() => handleBlur(leaf.key)}
+                    />
+                  </div>
+                ))}
+                <EditableEntryList
+                  entries={currentRecord?.cashCompEntries ?? []}
+                  onAdd={(category, amount, note) => handleAddEntry('cashComp', category, amount, note)}
+                  onUpdateAmount={(id, amount) => handleUpdateEntryAmount('cashComp', id, amount)}
+                  onDelete={id => handleDeleteEntry('cashComp', id)}
+                  datalistId="cash-cats"
+                  datalistOptions={['Auto Allowance', 'Uniform Allowance', 'Other']}
+                />
+              </div>
+            </div>
+
+            {/* Computed: gap between what's been paid (Salary + Cash
+                Reimbursements) and the true Cash Compensation total for the
+                year -- can be negative if more has been drawn as salary than
+                earned so far. Not editable; it's a plug, not an entry. */}
+            <div className="flex items-center justify-between pt-3 border-t border-gray-800">
+              <div>
+                <span className="text-sm text-gray-400">Outstanding Salary Balance</span>
+                <p className="text-[11px] text-gray-600">True-up owed once the PCR closes out for the year</p>
+              </div>
+              <span className={`text-sm font-semibold tabular-nums ${outstandingSalaryBalance < 0 ? 'text-red-400' : 'text-gray-200'}`}>
+                {formatCurrency(outstandingSalaryBalance)}
+              </span>
+            </div>
+            <div className="flex items-center justify-between pt-3 mt-3 border-t border-gray-800">
+              <span className="text-sm text-gray-500">Cash Compensation Total</span>
+              <span className="text-sm font-bold text-indigo-400 tabular-nums">{formatCurrency(netCompensation)}</span>
+            </div>
+          </div>
+
           {/* ── Business Expenses ── */}
-          <div className="pl-4 pr-5 py-4 border-l-4 border-red-700">
+          <div className="pl-4 pr-5 py-4 border-t border-gray-800 border-l-4 border-red-700">
             <span className="inline-block text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full bg-red-950 text-red-400 mb-3">Business Expenses</span>
             <div className="space-y-2 mb-4">
               {BUSINESS_LEAVES.map(leaf => (
@@ -1201,23 +1399,14 @@ export default function Compensation() {
                 </div>
               ))}
             </div>
-            <EntryList entries={currentRecord?.entries ?? []} onDelete={id => handleDeleteEntry('business', id)} />
-            <div className="flex flex-wrap items-end gap-2 pt-2">
-              <div className="flex-1 min-w-[130px]">
-                <label className="block text-[10px] text-gray-600 mb-1 uppercase tracking-wider">Category</label>
-                <input list="biz-cats" value={bizCat} onChange={e => setBizCat(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') handleAddBiz() }} placeholder="Description" className="w-full bg-gray-800 border border-gray-700 rounded px-2.5 py-1.5 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-indigo-500" />
-                <datalist id="biz-cats">{['Accounting & Legal','Office & Subscriptions','Business Travel','Medical Equipment','Other'].map(s => <option key={s} value={s} />)}</datalist>
-              </div>
-              <div className="w-28">
-                <label className="block text-[10px] text-gray-600 mb-1 uppercase tracking-wider">Amount</label>
-                <input type="number" step="1" value={bizAmt} onChange={e => setBizAmt(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') handleAddBiz() }} placeholder="0" className="w-full bg-gray-800 border border-gray-700 rounded px-2.5 py-1.5 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-indigo-500" />
-              </div>
-              <div className="flex-1 min-w-[90px]">
-                <label className="block text-[10px] text-gray-600 mb-1 uppercase tracking-wider">Note</label>
-                <input value={bizNote} onChange={e => setBizNote(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') handleAddBiz() }} placeholder="optional" className="w-full bg-gray-800 border border-gray-700 rounded px-2.5 py-1.5 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-indigo-500" />
-              </div>
-              <button onClick={handleAddBiz} disabled={!bizCat.trim() || !bizAmt} className="px-3 py-1.5 bg-indigo-600 text-white text-sm rounded-md hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors font-medium">Add</button>
-            </div>
+            <EditableEntryList
+              entries={currentRecord?.entries ?? []}
+              onAdd={(category, amount, note) => handleAddEntry('business', category, amount, note)}
+              onUpdateAmount={(id, amount) => handleUpdateEntryAmount('business', id, amount)}
+              onDelete={id => handleDeleteEntry('business', id)}
+              datalistId="biz-cats"
+              datalistOptions={['Accounting & Legal', 'Office & Subscriptions', 'Business Travel', 'Medical Equipment', 'Other']}
+            />
             <div className="flex items-center justify-between pt-3 mt-3 border-t border-gray-800">
               <span className="text-sm text-gray-500">Business Expenses Total</span>
               <span className="text-sm font-bold text-red-400 tabular-nums">{formatCurrency(businessExpenses)}</span>
@@ -1259,23 +1448,14 @@ export default function Compensation() {
               ))}
             </div>
 
-            <EntryList entries={currentRecord?.benefitsEntries ?? []} onDelete={id => handleDeleteEntry('benefits', id)} />
-            <div className="flex flex-wrap items-end gap-2 pt-2">
-              <div className="flex-1 min-w-[130px]">
-                <label className="block text-[10px] text-gray-600 mb-1 uppercase tracking-wider">Category</label>
-                <input list="ben-cats" value={benCat} onChange={e => setBenCat(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') handleAddBen() }} placeholder="Description" className="w-full bg-gray-800 border border-gray-700 rounded px-2.5 py-1.5 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-indigo-500" />
-                <datalist id="ben-cats">{['Medical Licensing & DEA','Professional Dues','Conference Registration','Other'].map(s => <option key={s} value={s} />)}</datalist>
-              </div>
-              <div className="w-28">
-                <label className="block text-[10px] text-gray-600 mb-1 uppercase tracking-wider">Amount</label>
-                <input type="number" step="1" value={benAmt} onChange={e => setBenAmt(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') handleAddBen() }} placeholder="0" className="w-full bg-gray-800 border border-gray-700 rounded px-2.5 py-1.5 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-indigo-500" />
-              </div>
-              <div className="flex-1 min-w-[90px]">
-                <label className="block text-[10px] text-gray-600 mb-1 uppercase tracking-wider">Note</label>
-                <input value={benNote} onChange={e => setBenNote(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') handleAddBen() }} placeholder="optional" className="w-full bg-gray-800 border border-gray-700 rounded px-2.5 py-1.5 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-indigo-500" />
-              </div>
-              <button onClick={handleAddBen} disabled={!benCat.trim() || !benAmt} className="px-3 py-1.5 bg-indigo-600 text-white text-sm rounded-md hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors font-medium">Add</button>
-            </div>
+            <EditableEntryList
+              entries={currentRecord?.benefitsEntries ?? []}
+              onAdd={(category, amount, note) => handleAddEntry('benefits', category, amount, note)}
+              onUpdateAmount={(id, amount) => handleUpdateEntryAmount('benefits', id, amount)}
+              onDelete={id => handleDeleteEntry('benefits', id)}
+              datalistId="ben-cats"
+              datalistOptions={['Medical Licensing & DEA', 'Professional Dues', 'Conference Registration', 'Other']}
+            />
             <div className="flex items-center justify-between pt-3 mt-3 border-t border-gray-800">
               <span className="text-sm text-gray-500">Benefits Total</span>
               <span className="text-sm font-bold text-sky-400 tabular-nums">{formatCurrency(benefitsTotal)}</span>
@@ -1297,23 +1477,14 @@ export default function Compensation() {
                 </div>
               ))}
             </div>
-            <EntryList entries={currentRecord?.retirementEntries ?? []} onDelete={id => handleDeleteEntry('retirement', id)} />
-            <div className="flex flex-wrap items-end gap-2 pt-2">
-              <div className="flex-1 min-w-[130px]">
-                <label className="block text-[10px] text-gray-600 mb-1 uppercase tracking-wider">Category</label>
-                <input list="ret-cats" value={retCat} onChange={e => setRetCat(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') handleAddRet() }} placeholder="Description" className="w-full bg-gray-800 border border-gray-700 rounded px-2.5 py-1.5 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-indigo-500" />
-                <datalist id="ret-cats">{['IRA Contribution','HSA Contribution','Other'].map(s => <option key={s} value={s} />)}</datalist>
-              </div>
-              <div className="w-28">
-                <label className="block text-[10px] text-gray-600 mb-1 uppercase tracking-wider">Amount</label>
-                <input type="number" step="1" value={retAmt} onChange={e => setRetAmt(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') handleAddRet() }} placeholder="0" className="w-full bg-gray-800 border border-gray-700 rounded px-2.5 py-1.5 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-indigo-500" />
-              </div>
-              <div className="flex-1 min-w-[90px]">
-                <label className="block text-[10px] text-gray-600 mb-1 uppercase tracking-wider">Note</label>
-                <input value={retNote} onChange={e => setRetNote(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') handleAddRet() }} placeholder="optional" className="w-full bg-gray-800 border border-gray-700 rounded px-2.5 py-1.5 text-sm text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-indigo-500" />
-              </div>
-              <button onClick={handleAddRet} disabled={!retCat.trim() || !retAmt} className="px-3 py-1.5 bg-indigo-600 text-white text-sm rounded-md hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors font-medium">Add</button>
-            </div>
+            <EditableEntryList
+              entries={currentRecord?.retirementEntries ?? []}
+              onAdd={(category, amount, note) => handleAddEntry('retirement', category, amount, note)}
+              onUpdateAmount={(id, amount) => handleUpdateEntryAmount('retirement', id, amount)}
+              onDelete={id => handleDeleteEntry('retirement', id)}
+              datalistId="ret-cats"
+              datalistOptions={['IRA Contribution', 'HSA Contribution', 'Other']}
+            />
             <div className="flex items-center justify-between pt-3 mt-3 border-t border-gray-800">
               <span className="text-sm text-gray-500">Retirement Total</span>
               <span className="text-sm font-bold text-teal-400 tabular-nums">{formatCurrency(retirementTotal)}</span>
@@ -1321,6 +1492,8 @@ export default function Compensation() {
           </div>
 
         </div>
+        </div>
+        )}
       </div>
     </div>
   )

@@ -6,9 +6,11 @@ import { randomId } from '../utils/dateUtils'
 import { describeStipendGroupKey, STIPEND_BASE_GROUP_LABELS } from '../utils/calculations'
 import { resolvePcrCategoryMapping } from '../utils/pcrCategoryMatching'
 import { applyPcrStipendCarveoutsForAllStatements } from '../utils/pcrStipendCarveouts'
-import { BUSINESS_LEAVES, BENEFITS_LEAVES, RETIREMENT_LEAVES, ALL_LEAVES, LEAF_LABELS } from '../utils/expenseCategories'
+import { CASH_COMP_LEAVES, BUSINESS_LEAVES, BENEFITS_LEAVES, RETIREMENT_LEAVES, ALL_LEAVES, LEAF_LABELS } from '../utils/expenseCategories'
+import { findExpenseCategoryHome } from '../utils/pcrExpenseSync'
+import type { ExpenseGroup } from '../utils/pcrExpenseSync'
 
-const ALL_EXPENSE_LEAF_KEYS = new Set([...BUSINESS_LEAVES, ...BENEFITS_LEAVES, ...RETIREMENT_LEAVES].map((l) => l.key))
+const ALL_EXPENSE_LEAF_KEYS = new Set([...CASH_COMP_LEAVES, ...BUSINESS_LEAVES, ...BENEFITS_LEAVES, ...RETIREMENT_LEAVES].map((l) => l.key))
 
 // StipendCalculator's own internal group keys (webapp/src/pages/StipendCalculator.tsx,
 // classifyBase()/getStipendGroup()) -- a fixed, closed vocabulary, so a <select>
@@ -391,11 +393,25 @@ export default function PcrCategoryMappingPage() {
     const set = new Set<string>()
     for (const rec of annualExpenses) {
       for (const e of rec.entries ?? []) set.add(e.category)
+      for (const e of rec.cashCompEntries ?? []) set.add(e.category)
       for (const e of rec.benefitsEntries ?? []) set.add(e.category)
       for (const e of rec.retirementEntries ?? []) set.add(e.category)
     }
     return [...set].sort()
   }, [annualExpenses])
+
+  // Grouped by each category's established home (see utils/pcrExpenseSync.ts)
+  // so the dropdown below can list a custom category right alongside the
+  // fixed leaves of the section it actually belongs to, instead of a single
+  // flat "Custom Categories" list at the bottom disconnected from context.
+  const customExpenseCategoriesByGroup = useMemo(() => {
+    const groups: Record<ExpenseGroup, string[]> = { cashComp: [], business: [], benefits: [], retirement: [] }
+    for (const cat of customExpenseCategories) {
+      const home = findExpenseCategoryHome(annualExpenses, cat)
+      if (home) groups[home].push(cat)
+    }
+    return groups
+  }, [customExpenseCategories, annualExpenses])
 
   // Other Income has no fixed leaves at all on Compensation (it's entirely
   // free-form entries[]), so its only selectable categories are whatever the
@@ -508,20 +524,22 @@ export default function PcrCategoryMappingPage() {
               onKeyDown={(e) => { if (e.key === 'Enter') onEnter() }}
               className={inputCls + ' w-52'} autoFocus={autoFocus}>
               <option value="">Choose a category…</option>
+              <optgroup label="Cash Compensation">
+                {CASH_COMP_LEAVES.map((l) => <option key={l.key} value={l.key}>{l.label}</option>)}
+                {customExpenseCategoriesByGroup.cashComp.map((c) => <option key={c} value={c}>{c} (custom)</option>)}
+              </optgroup>
               <optgroup label="Business Expenses">
                 {BUSINESS_LEAVES.map((l) => <option key={l.key} value={l.key}>{l.label}</option>)}
+                {customExpenseCategoriesByGroup.business.map((c) => <option key={c} value={c}>{c} (custom)</option>)}
               </optgroup>
               <optgroup label="Benefits">
                 {BENEFITS_LEAVES.map((l) => <option key={l.key} value={l.key}>{l.label}</option>)}
+                {customExpenseCategoriesByGroup.benefits.map((c) => <option key={c} value={c}>{c} (custom)</option>)}
               </optgroup>
               <optgroup label="Retirement Benefits">
                 {RETIREMENT_LEAVES.map((l) => <option key={l.key} value={l.key}>{l.label}</option>)}
+                {customExpenseCategoriesByGroup.retirement.map((c) => <option key={c} value={c}>{c} (custom)</option>)}
               </optgroup>
-              {customExpenseCategories.length > 0 && (
-                <optgroup label="Custom Categories">
-                  {customExpenseCategories.map((c) => <option key={c} value={c}>{c}</option>)}
-                </optgroup>
-              )}
               {value && !isKnown && (
                 <option value={value}>{LEAF_LABELS[value] ?? value} (not yet on Compensation -- created automatically on first sync)</option>
               )}
