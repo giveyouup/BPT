@@ -1,5 +1,45 @@
 # Changelog
 
+## v3.11.0 — 2026-09-29
+
+- Fixed the Total Compensation pie chart's legend cutting off text on wide
+  screens — it now always shows as a single-column list instead of
+  cramming into two columns.
+- Settings → PCR Category Mapping: the "Expense Labels" table is no longer
+  one long flat list — it's now organized into the same Cash Compensation /
+  Business Expenses / Benefits / Retirement Benefits sections used on the
+  Compensation and PCR Income Statement pages.
+
+## v3.10.0 — 2026-09-29
+
+- **Cash Compensation redesign.** Rather than a left-over number, Cash
+  Compensation is now built up directly from Physician Salary (the PCR's
+  MD Salaries line) plus Cash Reimbursements (Benicomp, CME, Phone/
+  Internet, Business Meetings, and any custom category you add). The gap
+  between that and what's actually accrued so far is shown as "Outstanding
+  Salary Balance" — the true-up still owed once the PCR closes out for the
+  year, shown in red when negative.
+- Compensation's "Gross Revenue Breakdown" and "Other Income" sections are
+  renamed "Clinical Revenues Breakdown" and "Non-clinical Revenues" and
+  grouped together under a new "Revenues" section, matching how PCR
+  Breakdown is already organized.
+- The Total Compensation pie chart's legend labels are now clickable for
+  drill-down, not just the wedges.
+- "Sync from PCR" now applies automatically for any category that's
+  currently blank — only a change that would overwrite a value you've
+  already entered by hand waits for you to review and apply it.
+- Added reminders (in the Sync from PCR preview) when a mapped category
+  hasn't been created anywhere yet, and separately when a category you've
+  added has no PCR mapping pointing to it — both dismissible.
+- Fixed a bug where a dismissed "unmapped PCR label" kept reappearing in
+  that same reminder instead of staying hidden.
+- Adding a custom category on Compensation (Cash Compensation, Business
+  Expenses, Benefits, Retirement, or Other Income) no longer requires
+  entering a dollar amount up front — the field stays collapsed until you
+  click "+ Add category," and the amount can be filled in then or later,
+  same as any other row.
+- The PCR Breakdown section on Compensation is now expanded by default.
+
 ## v3.9.1 — 2026-09-28
 
 - Fixed schedule PDF import failing on some months. A grid that includes one
