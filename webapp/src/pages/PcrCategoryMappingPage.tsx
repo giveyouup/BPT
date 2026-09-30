@@ -36,9 +36,17 @@ const STIPEND_GROUP_OPTIONS: { value: string; hint?: string }[] = [
 const inputCls = 'bg-gray-900 border border-gray-600 rounded px-2 py-1 text-xs text-gray-100 focus:outline-none focus:ring-1 focus:ring-indigo-500'
 const thCls = 'px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase tracking-wider'
 
+// Visual grouping for a mapping table's rows -- mirrors the colored
+// left-border + badge convention used to organize the Compensation and PCR
+// Income Statement pages into Cash Compensation / Business Expenses /
+// Benefits / Retirement Benefits (see EXPENSE_GROUP_META below), so this
+// page reads as the same set of buckets instead of one long flat list.
+interface RowGroupMeta { title: string; badge: string; border: string }
+
 function MappingSection({
   title, description, section, mappings, targetKeyInput, save, remove, reset,
   unmappedLabels, hiddenLabels, onHideLabel, onUnhideLabel, describeTargetKey, categoryOrder,
+  groupOf, groupMeta, groupOrder,
 }: {
   title: string
   description: string
@@ -61,6 +69,12 @@ function MappingSection({
   // otherwise two labels mapped to the same category (e.g. "CV NIR" and "CV
   // Anesthesia", both -> NIR) can end up far apart in the list.
   categoryOrder: Map<string, number>
+  // Optional visual sub-grouping (currently only Expense Labels uses this):
+  // when provided, the table splits into one colored block per groupOrder
+  // key instead of one flat table.
+  groupOf?: (m: PcrCategoryMapping) => string
+  groupMeta?: Record<string, RowGroupMeta>
+  groupOrder?: string[]
 }) {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editForm, setEditForm] = useState({ label: '', targetKey: '' })
@@ -140,61 +154,109 @@ function MappingSection({
       </div>
       <p className="text-xs text-gray-600 mb-3">{description}</p>
 
-      <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden mb-3">
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-gray-800">
-                <th className={thCls}>PCR Label</th>
-                <th className={thCls + ' w-56'}>Maps To</th>
-                <th className={thCls + ' w-16'} />
-              </tr>
-            </thead>
-            <tbody>
-              {sorted.length === 0 && (
-                <tr><td colSpan={3} className="px-4 py-4 text-xs text-gray-600">No mappings configured yet.</td></tr>
+      {(() => {
+        const renderRows = (list: PcrCategoryMapping[]) => list.map((m) => {
+          const isEditing = editingId === m.id
+          return (
+            <tr key={m.id} className={`border-b border-gray-800 last:border-0 ${isEditing ? 'bg-indigo-950/20' : 'hover:bg-gray-800/40'}`}>
+              {isEditing ? (
+                <>
+                  <td className="px-4 py-2">
+                    <input type="text" value={editForm.label} onChange={(e) => setEditForm((f) => ({ ...f, label: e.target.value }))}
+                      onKeyDown={(e) => { if (e.key === 'Enter') saveEdit(m.id); if (e.key === 'Escape') setEditingId(null) }}
+                      className={inputCls + ' w-full'} autoFocus />
+                  </td>
+                  <td className="px-4 py-2">
+                    {targetKeyInput(editForm.targetKey, (v) => setEditForm((f) => ({ ...f, targetKey: v })), () => saveEdit(m.id))}
+                  </td>
+                  <td className="px-4 py-2">
+                    <div className="flex items-center gap-1.5">
+                      <button onClick={() => saveEdit(m.id)} disabled={saving} className="px-2 py-1 text-xs bg-indigo-600 text-white rounded hover:bg-indigo-500 disabled:opacity-50">Save</button>
+                      <button onClick={() => setEditingId(null)} className="px-2 py-1 text-xs text-gray-500 hover:text-gray-300">Cancel</button>
+                    </div>
+                  </td>
+                </>
+              ) : (
+                <>
+                  <td className="px-4 py-2.5 text-gray-300 text-xs cursor-pointer hover:text-indigo-400" onClick={() => startEdit(m)}>{m.label}</td>
+                  <td className="px-4 py-2.5 text-gray-400 text-xs cursor-pointer hover:text-indigo-400" onClick={() => startEdit(m)} title={m.targetKey}>{describeTargetKey(m.targetKey)}</td>
+                  <td className="px-4 py-2.5">
+                    <button onClick={() => remove(m.id)} className="text-gray-700 hover:text-red-400 transition-colors" title="Delete">
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                      </svg>
+                    </button>
+                  </td>
+                </>
               )}
-              {sorted.map((m) => {
-                const isEditing = editingId === m.id
+            </tr>
+          )
+        })
+
+        const tableHead = (
+          <thead>
+            <tr className="border-b border-gray-800">
+              <th className={thCls}>PCR Label</th>
+              <th className={thCls + ' w-56'}>Maps To</th>
+              <th className={thCls + ' w-16'} />
+            </tr>
+          </thead>
+        )
+
+        if (groupOf && groupMeta && groupOrder) {
+          const buckets = new Map<string, PcrCategoryMapping[]>()
+          for (const m of sorted) {
+            const key = groupOf(m)
+            if (!buckets.has(key)) buckets.set(key, [])
+            buckets.get(key)!.push(m)
+          }
+          // Always show every real category (so an empty one still tells the
+          // user where a mapping for it would go); only show the fallback
+          // "unresolved" bucket when something actually landed there.
+          const visibleKeys = groupOrder.filter((key) => key !== 'unresolved' || (buckets.get(key)?.length ?? 0) > 0)
+          return (
+            <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden mb-3 divide-y divide-gray-800">
+              {visibleKeys.map((key) => {
+                const meta = groupMeta[key]
+                const rows = buckets.get(key) ?? []
                 return (
-                  <tr key={m.id} className={`border-b border-gray-800 last:border-0 ${isEditing ? 'bg-indigo-950/20' : 'hover:bg-gray-800/40'}`}>
-                    {isEditing ? (
-                      <>
-                        <td className="px-4 py-2">
-                          <input type="text" value={editForm.label} onChange={(e) => setEditForm((f) => ({ ...f, label: e.target.value }))}
-                            onKeyDown={(e) => { if (e.key === 'Enter') saveEdit(m.id); if (e.key === 'Escape') setEditingId(null) }}
-                            className={inputCls + ' w-full'} autoFocus />
-                        </td>
-                        <td className="px-4 py-2">
-                          {targetKeyInput(editForm.targetKey, (v) => setEditForm((f) => ({ ...f, targetKey: v })), () => saveEdit(m.id))}
-                        </td>
-                        <td className="px-4 py-2">
-                          <div className="flex items-center gap-1.5">
-                            <button onClick={() => saveEdit(m.id)} disabled={saving} className="px-2 py-1 text-xs bg-indigo-600 text-white rounded hover:bg-indigo-500 disabled:opacity-50">Save</button>
-                            <button onClick={() => setEditingId(null)} className="px-2 py-1 text-xs text-gray-500 hover:text-gray-300">Cancel</button>
-                          </div>
-                        </td>
-                      </>
-                    ) : (
-                      <>
-                        <td className="px-4 py-2.5 text-gray-300 text-xs cursor-pointer hover:text-indigo-400" onClick={() => startEdit(m)}>{m.label}</td>
-                        <td className="px-4 py-2.5 text-gray-400 text-xs cursor-pointer hover:text-indigo-400" onClick={() => startEdit(m)} title={m.targetKey}>{describeTargetKey(m.targetKey)}</td>
-                        <td className="px-4 py-2.5">
-                          <button onClick={() => remove(m.id)} className="text-gray-700 hover:text-red-400 transition-colors" title="Delete">
-                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                            </svg>
-                          </button>
-                        </td>
-                      </>
-                    )}
-                  </tr>
+                  <div key={key} className={`pl-4 pr-5 py-4 border-l-4 ${meta.border}`}>
+                    <span className={`inline-block text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full mb-3 ${meta.badge}`}>
+                      {meta.title}
+                    </span>
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-sm">
+                        {tableHead}
+                        <tbody>
+                          {rows.length === 0 ? (
+                            <tr><td colSpan={3} className="px-4 py-3 text-xs text-gray-600">No mappings yet.</td></tr>
+                          ) : renderRows(rows)}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
                 )
               })}
-            </tbody>
-          </table>
-        </div>
-      </div>
+            </div>
+          )
+        }
+
+        return (
+          <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden mb-3">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                {tableHead}
+                <tbody>
+                  {sorted.length === 0 && (
+                    <tr><td colSpan={3} className="px-4 py-4 text-xs text-gray-600">No mappings configured yet.</td></tr>
+                  )}
+                  {renderRows(sorted)}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )
+      })()}
 
       {((unmappedLabels && unmappedLabels.length > 0) || (hiddenLabels && hiddenLabels.length > 0)) && (
         <div className="mb-3">
@@ -413,6 +475,30 @@ export default function PcrCategoryMappingPage() {
     return groups
   }, [customExpenseCategories, annualExpenses])
 
+  // Visual grouping for the Expense Labels table -- same colored
+  // left-border + badge convention as Compensation's PCR Breakdown and the
+  // PCR Income Statement page's expense buckets, so all three read as the
+  // same four categories instead of this page alone being one long list.
+  // "unresolved" catches a mapping whose targetKey isn't a fixed leaf and
+  // doesn't match any category currently on Compensation -- e.g. it pointed
+  // at a free-form category that was since renamed or deleted.
+  const EXPENSE_GROUP_META: Record<string, RowGroupMeta> = {
+    cashComp: { title: 'Cash Compensation', badge: 'bg-indigo-950 text-indigo-400', border: 'border-indigo-700' },
+    business: { title: 'Business Expenses', badge: 'bg-red-950 text-red-400', border: 'border-red-700' },
+    benefits: { title: 'Benefits', badge: 'bg-orange-950 text-orange-400', border: 'border-orange-700' },
+    retirement: { title: 'Retirement Benefits', badge: 'bg-green-950 text-green-400', border: 'border-green-700' },
+    unresolved: { title: 'Needs a Home', badge: 'bg-gray-800 text-gray-400', border: 'border-gray-700' },
+  }
+  const EXPENSE_GROUP_ORDER = ['cashComp', 'business', 'benefits', 'retirement', 'unresolved']
+
+  function resolveExpenseMappingGroup(targetKey: string): ExpenseGroup | 'unresolved' {
+    if (CASH_COMP_LEAVES.some((l) => l.key === targetKey) || customExpenseCategoriesByGroup.cashComp.includes(targetKey)) return 'cashComp'
+    if (BUSINESS_LEAVES.some((l) => l.key === targetKey) || customExpenseCategoriesByGroup.business.includes(targetKey)) return 'business'
+    if (BENEFITS_LEAVES.some((l) => l.key === targetKey) || customExpenseCategoriesByGroup.benefits.includes(targetKey)) return 'benefits'
+    if (RETIREMENT_LEAVES.some((l) => l.key === targetKey) || customExpenseCategoriesByGroup.retirement.includes(targetKey)) return 'retirement'
+    return 'unresolved'
+  }
+
   // Other Income has no fixed leaves at all on Compensation (it's entirely
   // free-form entries[]), so its only selectable categories are whatever the
   // user has already added there -- same idea as Expense's custom categories,
@@ -513,6 +599,9 @@ export default function PcrCategoryMappingPage() {
         reset={() => resetPcrCategoryMappings('expense')}
         describeTargetKey={describeExpenseTargetKey}
         categoryOrder={expenseCategoryOrder}
+        groupOf={(m) => resolveExpenseMappingGroup(m.targetKey)}
+        groupMeta={EXPENSE_GROUP_META}
+        groupOrder={EXPENSE_GROUP_ORDER}
         unmappedLabels={unmappedExpenseLabels}
         hiddenLabels={visibleHiddenExpenseLabels}
         onHideLabel={(label) => hideLabel('expense', label)}

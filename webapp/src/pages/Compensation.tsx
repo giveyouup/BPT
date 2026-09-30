@@ -800,7 +800,7 @@ export default function Compensation() {
                 </ResponsiveContainer>
               </div>
               <div className="w-full md:flex-1">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2 mb-3">
+                <div className="flex flex-col gap-y-2 mb-3">
                   {activeSlices.map(({ label, value, hex, drill }) => (
                     <button
                       key={label}
@@ -809,9 +809,9 @@ export default function Compensation() {
                       className={`flex items-center gap-2 text-left rounded px-1 -mx-1 py-0.5 transition-colors ${drill ? 'hover:bg-gray-800/60 cursor-pointer' : 'cursor-default'}`}
                     >
                       <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: hex }} />
-                      <span className="text-xs text-gray-400 flex-1 truncate">{label}</span>
-                      <span className={`text-xs font-semibold tabular-nums ${value < 0 ? 'text-red-400' : 'text-gray-300'}`}>{formatCurrency(value)}</span>
-                      <span className="text-xs text-gray-600 tabular-nums w-9 text-right">{total > 0 ? (value / total * 100).toFixed(1) : '0.0'}%</span>
+                      <span className="text-xs text-gray-400 flex-1 min-w-0 truncate">{label}</span>
+                      <span className={`text-xs font-semibold tabular-nums flex-shrink-0 ${value < 0 ? 'text-red-400' : 'text-gray-300'}`}>{formatCurrency(value)}</span>
+                      <span className="text-xs text-gray-600 tabular-nums w-9 flex-shrink-0 text-right">{total > 0 ? (value / total * 100).toFixed(1) : '0.0'}%</span>
                     </button>
                   ))}
                 </div>
