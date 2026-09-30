@@ -49,6 +49,19 @@ ROW_TOL_PT = 6.0
 DETECT_BAND_PT = 150.0    # top-of-page band scanned by `detect` (title + doctor-name row)
 DETECT_ZOOM = 2.0         # lower zoom for the cheap per-page pre-scan
 
+# The doctor-group-header row within the table body is normally printed as
+# "Doctor Name: 187 - OSMANI, BIJAN", but OCR sometimes drops the small
+# "Doctor Name:" label (confirmed non-deterministic across otherwise-identical
+# report templates -- some months read it, some don't). Without it, the row
+# fails the check above and the group silently starts with an empty name (see
+# the numeric-ticket-row fallback below), which shows up as a blank
+# "doctorName" in the extract --json output (display-only -- it no longer
+# gates anything, see the comment above find_bonus_pages). This fallback
+# recognizes the bare "<code> - <SURNAME>, <first>" row on its own, the same
+# tolerance detect_sections() already applies via its own separate top-band
+# scan.
+BARE_DOCTOR_ROW_RE = re.compile(r"^\d+\s*-\s*[A-Za-z][A-Za-z'\-]*\s*,\s*[A-Za-z]")
+
 KNOWN_MODIFIERS = [
     "AA", "ET", "RT", "LT", "26", "59", "AAQS", "AAQSPT", "AA78",
     "AG59", "AG59LT", "AG59RT", "59LT", "59RT", "AAET", "AAQS33",
@@ -68,16 +81,61 @@ SUMMARY_ROW_RE = re.compile(
 )
 MONTH_SUMMARY_TITLE_RE = re.compile(r"\d{1,2}\s*month\s*summary", re.IGNORECASE)
 CORRECTIONS_TITLE_RE = re.compile(r"\bcorrections?\b", re.IGNORECASE)
-ACCT_DATE_RE = re.compile(r"\b(\d{1,2})\s*/\s*(\d{4})\b")
+# Year is usually printed 2-digit ("1/24") on this page -- some report
+# vintages print 4-digit ("1/2024") instead, so both are accepted.
+ACCT_DATE_RE = re.compile(r"\b(\d{1,2})\s*/\s*(\d{2}|\d{4})\b")
+
+
+def resolve_acct_year(year_str):
+    """A 2-digit ACCT_DATE_RE year resolved to 4 digits (2000s only -- this
+    report family has no pre-2000 data), 4-digit left as-is."""
+    return int(year_str) if len(year_str) == 4 else 2000 + int(year_str)
+
 
 # Fixed anchor for the "PCR CORRECTION" row's value cell on the Corrections
 # page, calibrated against real samples the same way COLUMN_ANCHORS_PT is for
 # the line-items table -- this report family is template-generated, so the
-# position is consistent across documents. The cell is boxed in a red border
-# that badly confuses tesseract's binarization; red pixels are scrubbed to
-# white (see `read_correction_value`) before OCR rather than trying to crop
-# it out pixel-perfectly.
-CORRECTION_VALUE_RECT_PT = (500.0, 200.0, 612.0, 214.0)
+# position is broadly consistent across documents, but confirmed to drift
+# vertically by 10-15pt between individual monthly pages (one real sample's
+# row fell entirely outside a tighter, earlier version of this rect, reading
+# as blank); the extra margin here is deliberate headroom for that jitter.
+# The cell is boxed in a red border that badly confuses tesseract's
+# binarization; red pixels are scrubbed to white (see `read_correction_value`)
+# before OCR rather than trying to crop it out pixel-perfectly.
+CORRECTION_VALUE_RECT_PT = (500.0, 195.0, 612.0, 230.0)
+
+# Fixed anchor for the "Acct Date" cell in the same page's top-right "MONTH(S)
+# SUBMITTING" box, used to tell which month's correction this page is for
+# (a bundle can hold several). find_bonus_pages() below already OCRs this
+# page's whole top band as free text (twice: a cheap low-zoom pass, then a
+# high-zoom retry) to read it -- normally sufficient, but confirmed to
+# occasionally miss this one small cell even on an otherwise-clean, high-zoom
+# read of an identical report template. Isolating just this area (wider than
+# the correction-value cell above, since this field has no colored border to
+# scrub -- tesseract just needs the extra surrounding whitespace context to
+# segment it reliably) and OCRing it alone is a last-resort fallback, tried
+# only when the free-text passes fail.
+CORRECTION_ACCT_DATE_RECT_PT = (500.0, 30.0, 612.0, 110.0)
+
+
+def read_corrections_cell_text(doc, page_index, rect_pt):
+    """Isolates one region of the corrections page's top band and OCRs it as
+    a text block -- shared last-resort fallback for CORRECTION_ACCT_DATE_RECT_PT
+    (see comment above). Returns "" if the page isn't the expected size/layout."""
+    page = doc[page_index]
+    if (round(page.rect.width), round(page.rect.height)) != (
+        round(BONUS_PAGE_PT_SIZE[0]), round(BONUS_PAGE_PT_SIZE[1])
+    ):
+        return ""
+
+    zoom = 8
+    mat = fitz.Matrix(zoom, zoom)
+    clip = fitz.Rect(*rect_pt)
+    pix = page.get_pixmap(matrix=mat, clip=clip)
+    mode = "RGB" if pix.n < 4 else "RGBA"
+    img = Image.frombytes(mode, (pix.width, pix.height), pix.samples).convert("L")
+    bw = img.point(lambda v: 0 if v < 180 else 255, mode="L")
+    return pytesseract.image_to_string(bw, config="--psm 6").strip()
 
 
 def column_bounds_pt():
@@ -525,7 +583,7 @@ def extract(pdf_path, first_page=None, last_page=None, pages=None):
             descriptor = " ".join(c for c in cells[:5] if c).strip()
             descriptor_norm = re.sub(r"\s+", " ", descriptor)
 
-            if re.search(r"Doctor\s*Name", descriptor_norm, re.IGNORECASE):
+            if re.search(r"Doctor\s*Name", descriptor_norm, re.IGNORECASE) or BARE_DOCTOR_ROW_RE.match(descriptor_norm):
                 name = re.sub(r"Doctor\s*Name\s*:?", "", descriptor_norm, flags=re.IGNORECASE)
                 name = clean_name(name)
                 current = DoctorGroup(name)
@@ -706,33 +764,20 @@ def detect_sections(pdf_path):
 
 
 # ─── Bonus pages: 12-Month Summary ($/unit) + Corrections (unit adjustment) ───
+#
+# No physician-identity check is done here: a PCR PDF only ever covers one
+# physician (there is no bundled-multi-doctor case in practice), so the
+# doctor name is resolved once, from the Case Distribution Report itself
+# (see the "Doctor Name" row check in extract() below, and its
+# BARE_DOCTOR_ROW_RE fallback) -- these bonus pages are matched purely by
+# title (and, for Corrections, by month/year, since a bundle can still hold
+# several months' worth of those).
 
-def physician_tokens(name):
-    """Pull a doctor-number and surname out of a "187 - OSMANI, BIJAN" /
-    "187 OSMANI" / "187-OSMANI" style label, for a light identity check
-    against the bonus pages' own (differently-formatted) physician label."""
-    digits = re.search(r"\d+", name)
-    letters = re.findall(r"[A-Za-z]+", name)
-    surname = letters[0] if letters else None
-    return (digits.group(0) if digits else None), (surname.lower() if surname else None)
-
-
-def physician_matches(band_text_lower, cdr_doctor_name):
-    num, surname = physician_tokens(cdr_doctor_name)
-    if not surname:
-        return True  # nothing to check against -- don't block on it
-    if surname not in band_text_lower:
-        return False
-    return (num in band_text_lower) if num else True
-
-
-def find_bonus_pages(doc, cdr_doctor_name):
+def find_bonus_pages(doc):
     """Cheap top-band scan (same technique as detect_sections) for a
     "Physician 12 Month Summary" page and any "<MON> ... Corrections" pages
     bundled elsewhere in the same PDF. Returns (summary_page_index or None,
-    [{"page": i, "month": mm, "year": yyyy}, ...] for corrections pages).
-    Only pages whose header plausibly names the same physician as the
-    Case Distribution Report are considered."""
+    [{"page": i, "month": mm, "year": yyyy}, ...] for corrections pages)."""
     n_pages = len(doc)
     summary_page = None
     correction_pages = []
@@ -744,8 +789,7 @@ def find_bonus_pages(doc, cdr_doctor_name):
         text_lower = text.lower()
 
         if summary_page is None and MONTH_SUMMARY_TITLE_RE.search(text_lower):
-            if physician_matches(text_lower, cdr_doctor_name):
-                summary_page = pi
+            summary_page = pi
             continue
 
         if CORRECTIONS_TITLE_RE.search(text_lower):
@@ -758,14 +802,22 @@ def find_bonus_pages(doc, cdr_doctor_name):
                 hi_words = ocr_words(hi_img)
                 hi_text = " ".join(w["text"] for w in hi_words)
                 m = ACCT_DATE_RE.search(hi_text)
-                if not m:
+            if m:
+                month, year = int(m.group(1)), resolve_acct_year(m.group(2))
+            else:
+                # Both free-text passes missed the cell entirely (confirmed
+                # to happen even on an otherwise clean, high-zoom read) --
+                # isolate and OCR just that cell before giving up on the page.
+                cell_text = read_corrections_cell_text(doc, pi, CORRECTION_ACCT_DATE_RECT_PT)
+                fm = ACCT_DATE_RE.search(cell_text)
+                if not fm:
                     continue  # can't tell which month this correction is for
-            if not physician_matches(text_lower, cdr_doctor_name):
-                continue
+                month, year = int(fm.group(1)), resolve_acct_year(fm.group(2))
+
             correction_pages.append({
                 "page": pi,
-                "month": int(m.group(1)),
-                "year": int(m.group(2)),
+                "month": month,
+                "year": year,
             })
 
     return summary_page, correction_pages
@@ -803,8 +855,9 @@ def read_correction_value(doc, page_index):
     border that badly confuses tesseract's default binarization (misreads
     e.g. "0.5" as "08"); red pixels are scrubbed to white first, which
     fixed that reliably in testing against real samples. Returns a float,
-    or None if the page isn't the expected size/layout or nothing
-    number-shaped was read."""
+    or None if the page isn't the expected size/layout, the row wasn't
+    within the rect's vertical jitter margin, or nothing number-shaped
+    was read."""
     page = doc[page_index]
     if (round(page.rect.width), round(page.rect.height)) != (
         round(BONUS_PAGE_PT_SIZE[0]), round(BONUS_PAGE_PT_SIZE[1])
@@ -827,8 +880,12 @@ def read_correction_value(doc, page_index):
 
     gray = img.convert("L")
     bw = gray.point(lambda v: 0 if v < 180 else 255, mode="L")
+    # psm 7 (single line) is confirmed to occasionally return nothing at all
+    # when the true row sits close to this rect's edge (the extra headroom
+    # above reads as a second, empty "line"); psm 6 (a block, not assumed to
+    # be one line) reads the same crops reliably.
     text = pytesseract.image_to_string(
-        bw, config="--psm 7 -c tessedit_char_whitelist=0123456789.-"
+        bw, config="--psm 6 -c tessedit_char_whitelist=0123456789.-"
     ).strip()
 
     if not re.match(r"^-?\d+(\.\d+)?$", text):
@@ -836,13 +893,13 @@ def read_correction_value(doc, page_index):
     return float(text)
 
 
-def extract_unit_info(doc, doctors, cdr_doctor_name, target_month, target_year):
+def extract_unit_info(doc, doctors, target_month, target_year):
     """Best-effort: cross-reference the bundled 12-Month Summary / Corrections
     pages (if present) against the just-parsed line items to auto-fill $/unit
     and the unit correction, with a reconciliation check. Returns None if no
     summary page was found (the common case -- a bare line-items-only PDF),
     so callers can fall back to today's fully-manual entry unchanged."""
-    summary_page, correction_pages = find_bonus_pages(doc, cdr_doctor_name)
+    summary_page, correction_pages = find_bonus_pages(doc)
     if summary_page is None:
         return None
 
@@ -907,7 +964,7 @@ SECTION_CLOSER_KEYS = {
 }
 
 
-def find_income_statement_pages(doc, cdr_doctor_name):
+def find_income_statement_pages(doc):
     """Cheap top-band scan for the "PCR - <doctor>" income-statement pages
     bundled elsewhere in the PDF. These span 2-3 *consecutive* pages (a
     revenues page, then an expenses/summary continuation) -- returns that
@@ -918,7 +975,7 @@ def find_income_statement_pages(doc, cdr_doctor_name):
         img = render_page(doc, pi, zoom=DETECT_ZOOM, clip_pt=DETECT_BAND_PT)
         words = ocr_words(img, zoom=DETECT_ZOOM)
         text_lower = " ".join(w["text"] for w in words).lower()
-        if INCOME_STATEMENT_TITLE_RE.search(text_lower) and physician_matches(text_lower, cdr_doctor_name):
+        if INCOME_STATEMENT_TITLE_RE.search(text_lower):
             pages.append(pi)
     if not pages:
         return []
@@ -1311,15 +1368,20 @@ def main():
             doctors, criteria = extract(args.pdf, pages=args.pages)
             line_items = to_line_items(doctors)
             if args.json:
+                # doctor_name is display-only below (the "doctorName" field) --
+                # it does not gate or filter anything here. A PCR PDF only
+                # ever covers one physician, so the bonus-page lookups below
+                # don't re-verify identity against it (see the comment above
+                # find_bonus_pages).
                 doctor_name = primary_doctor_name(doctors)
                 unit_info = None
                 income_statement = []
                 date_match = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{4})$", criteria.get("date_from") or "")
-                if date_match and doctor_name:
+                if date_match:
                     target_month, target_year = int(date_match.group(1)), int(date_match.group(3))
                     bonus_doc = fitz.open(args.pdf)
-                    unit_info = extract_unit_info(bonus_doc, doctors, doctor_name, target_month, target_year)
-                    stmt_pages = find_income_statement_pages(bonus_doc, doctor_name)
+                    unit_info = extract_unit_info(bonus_doc, doctors, target_month, target_year)
+                    stmt_pages = find_income_statement_pages(bonus_doc)
                     if stmt_pages:
                         income_statement = extract_income_statement(bonus_doc, stmt_pages)
                 json.dump({

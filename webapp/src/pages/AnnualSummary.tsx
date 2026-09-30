@@ -537,6 +537,46 @@ export default function AnnualSummary() {
     return max || null
   })()
 
+  // Avg $/hr must respect the same cutoff -- yearStats spans the whole
+  // calendar year, including scheduled-but-not-yet-billed future days
+  // (deliberately, so "YTD Total Pay"/"YTD Hours" above can show what's
+  // already accrued). But a future day has an *estimated* default/fixed
+  // hour count and zero real units, while its projected stipend still
+  // counts in full -- blending that into a $/hr average skews it (a
+  // barely-scheduled month can show an inflated rate purely from having
+  // very few estimated hours). Filtered to whole days, same cutoff the
+  // billing-derived charts below already use.
+  const ytdRateThroughCutoff = (() => {
+    let hours = 0, pay = 0
+    for (const m of yearStats) {
+      for (const d of m.workingDays) {
+        if (shiftDataCutoff && d.date > shiftDataCutoff) continue
+        hours += d.hours
+        pay += d.totalDayPay
+      }
+    }
+    return { hours, pay }
+  })()
+  const ytdHoursThroughCutoff = ytdRateThroughCutoff.hours
+  const ytdTotalThroughCutoff = ytdRateThroughCutoff.pay
+
+  // Same cutoff for the What-If projection's $/hr -- hours don't depend on
+  // the stipend mapping or unit rate (see computeCalendarMonthStats), so
+  // they're identical to ytdHoursThroughCutoff above; only the projected
+  // pay needs recomputing, per day, from whichever override is active.
+  const wiTotalThroughCutoff = (() => {
+    const src = whatIfYearStats ?? yearStats
+    let pay = 0
+    for (const m of src) {
+      for (const d of m.workingDays) {
+        if (shiftDataCutoff && d.date > shiftDataCutoff) continue
+        const unitPay = whatIfUnitRate != null ? d.totalUnits * whatIfUnitRate : d.unitPay
+        pay += unitPay + d.stipendAmount + d.additionalStipend
+      }
+    }
+    return pay
+  })()
+
   const shiftStatsData = buildShiftStats(yearStats, shiftDataCutoff, allMappings, settings.shiftHours)
   const whatIfMappings = whatIfMapping
     ? [{ ...whatIfMapping, effectiveDate: '0000-01-01', endDate: undefined }]
@@ -1005,11 +1045,11 @@ export default function AnnualSummary() {
         <StatCard
           label="Avg $/hr"
           value={isProjectionActive && wiTotal != null
-            ? `$${(wiTotal / ytdHours).toFixed(0)}/hr`
-            : ytdHours > 0 ? `$${(ytdTotal / ytdHours).toFixed(0)}/hr` : '—'}
+            ? (ytdHoursThroughCutoff > 0 ? `$${(wiTotalThroughCutoff / ytdHoursThroughCutoff).toFixed(0)}/hr` : '—')
+            : ytdHoursThroughCutoff > 0 ? `$${(ytdTotalThroughCutoff / ytdHoursThroughCutoff).toFixed(0)}/hr` : '—'}
           sub={isProjectionActive && wiTotal != null
-            ? `Actual: $${(ytdTotal / ytdHours).toFixed(0)}/hr · ${deltaLabel(ytdTotal / ytdHours, wiTotal / ytdHours)}`
-            : 'Total compensation ÷ hours'}
+            ? `Actual: $${(ytdTotalThroughCutoff / ytdHoursThroughCutoff).toFixed(0)}/hr · ${deltaLabel(ytdTotalThroughCutoff / ytdHoursThroughCutoff, wiTotalThroughCutoff / ytdHoursThroughCutoff)}`
+            : shiftDataCutoff ? `Through ${formatDateFull(shiftDataCutoff)} · total ÷ hours` : 'Total compensation ÷ hours'}
           color="amber"
           private
         />
@@ -1820,11 +1860,11 @@ export default function AnnualSummary() {
                 <td className="px-4 py-3">
                   {wiTotal != null ? (
                     <span className="flex flex-col">
-                      <span className="text-amber-400">${(wiTotal / ytdHours).toFixed(0)}</span>
-                      <span className="text-gray-500 text-[10px] font-normal">actual: ${(ytdTotal / ytdHours).toFixed(0)}</span>
+                      <span className="text-amber-400">{ytdHoursThroughCutoff > 0 ? `$${(wiTotalThroughCutoff / ytdHoursThroughCutoff).toFixed(0)}` : '—'}</span>
+                      <span className="text-gray-500 text-[10px] font-normal">actual: {ytdHoursThroughCutoff > 0 ? `$${(ytdTotalThroughCutoff / ytdHoursThroughCutoff).toFixed(0)}` : '—'}</span>
                     </span>
                   ) : (
-                    <span className="text-amber-400">{ytdHours > 0 ? `$${(ytdTotal / ytdHours).toFixed(0)}` : '—'}</span>
+                    <span className="text-amber-400">{ytdHoursThroughCutoff > 0 ? `$${(ytdTotalThroughCutoff / ytdHoursThroughCutoff).toFixed(0)}` : '—'}</span>
                   )}
                 </td>
                 <td className="px-4 py-3 text-gray-300">{yearStats.reduce((s, m) => s + m.daysWorked, 0)}</td>
