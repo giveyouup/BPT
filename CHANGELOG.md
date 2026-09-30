@@ -1,5 +1,17 @@
 # Changelog
 
+## v3.12.0 — 2026-09-30
+
+- Annual Summary: the "Avg $/hr" card (and the Month-by-Month Breakdown
+  table's Year Total row) no longer get skewed by scheduled-but-unbilled
+  future days — both the dollar total and the hours behind it now stop at
+  the same billing cutoff the rest of the page's charts already use.
+- Fixed PCR PDF uploads sometimes not auto-filling Dollar Value per Unit
+  or Unit Correction, and sometimes not backfilling that month's Income
+  Statement — all three could silently fail on certain scans due to a
+  redundant identity check that's been removed, plus more tolerant
+  reading of a couple of small fields OCR occasionally missed.
+
 ## v3.11.0 — 2026-09-29
 
 - Fixed the Total Compensation pie chart's legend cutting off text on wide
