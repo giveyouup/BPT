@@ -166,7 +166,17 @@ export interface Settings {
   shiftHours: Record<string, number>
   holidays: Record<number, string[]> // year -> ["YYYY-MM-DD", ...]
   stipendMappingOverrides?: Record<string, string> // "YYYY-MM" -> mapping id (for months without a report)
-  cashCutoffs?: Record<number, string>             // year -> ISO date "YYYY-MM-DD" (end of unit-pay cash period)
+  cashCutoffs?: Record<number, string>             // year -> ISO date "YYYY-MM-DD" (end of unit-pay cash period) -- only read when cashUnitPayMode for that year is 'cutoff'
+  // Per-year choice for how Cash view computes Unit Pay: 'reports' sums each
+  // month's whole PCR report (same mechanism Accrual view already uses,
+  // ignoring individual line items' own service dates -- a report can
+  // legitimately contain lines dated outside its own month); 'cutoff' uses
+  // the cashCutoffs-driven date-window logic. A year with no entry here
+  // defaults to 'cutoff' if it already has a cashCutoffs value (preserves
+  // prior behavior for years already calibrated), else 'reports' (see
+  // resolveCashUnitPayMode in utils/calculations.ts -- use it rather than
+  // reading this field directly, to keep that fallback in one place).
+  cashUnitPayMode?: Record<number, 'reports' | 'cutoff'>
   promotedStipendCodes?: string[]                  // shift codes broken out of "Other G"/"Other" into their own column
   hiddenPcrLabels?: { stipend: string[]; expense: string[]; otherIncome?: string[] } // unmapped PCR labels dismissed from the mapping page's suggestion chips
   // User-customized row order on the PCR Income Statement page, keyed by

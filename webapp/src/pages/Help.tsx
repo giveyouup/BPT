@@ -401,8 +401,14 @@ export default function Help() {
           </li>
           <li>
             <span className="text-gray-300 font-medium">Compensation</span> — Cash view (calendar-year
-            cash-received tracking, with an editable per-year cutoff date) by default; switch to Accrual for the
-            PCR billing-period view instead. The <span className="text-gray-300">Revenues</span> section pairs
+            cash-received tracking) by default; switch to Accrual for the PCR billing-period view instead. In Cash
+            view, Unit Pay sums each month's whole PCR report for the year by default — the same report-based total
+            Accrual already uses — while Stipends always stay shifted one month back (Dec of the prior year through
+            Nov) to match the PCR's own payout lag. A year with Unit Pay already calibrated to a specific cutoff date
+            keeps using that cutoff automatically; otherwise, "use a custom cutoff date instead" next to the Unit Pay
+            row switches that year back to the older date-range method, filtering individual billing line items by
+            service date rather than summing whole reports — useful if a year's reports don't line up cleanly with
+            when the money actually arrived. The <span className="text-gray-300">Revenues</span> section pairs
             Clinical Revenues Breakdown (professional fees, stipends) with Non-clinical Revenues (everything else,
             e.g. committee pay) as the two streams that together make up Total Gross Revenue. The{' '}
             <span className="text-gray-300">PCR Breakdown</span> section below it (open by default) is where Cash
