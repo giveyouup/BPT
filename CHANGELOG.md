@@ -1,5 +1,12 @@
 # Changelog
 
+## v3.14.0
+
+- Fixed horizontal scrolling on the Dashboard page on mobile — the year
+  selector, month tabs, and "Hours by Week" section header now wrap or
+  scroll properly at narrow widths instead of forcing the page wider than
+  the screen.
+
 ## v3.13.0
 
 - Compensation's Cash view: Unit Pay now sums each month's own uploaded PCR
