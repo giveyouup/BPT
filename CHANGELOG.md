@@ -1,5 +1,14 @@
 # Changelog
 
+## v3.13.0
+
+- Compensation's Cash view: Unit Pay now sums each month's own uploaded PCR
+  report directly by default — the same total already shown on that
+  month's own page — instead of needing a configured cutoff date. A
+  year that already had a cutoff configured keeps using it automatically;
+  a new toggle next to the Unit Pay row lets any year switch between the
+  two methods. Stipends are unaffected either way.
+
 ## v3.12.0
 
 - Annual Summary: the "Avg $/hr" card (and the Month-by-Month Breakdown
