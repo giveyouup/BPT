@@ -344,7 +344,7 @@ export default function Dashboard() {
   return (
     <>
     <div className="p-4 md:p-8">
-      <div className="flex items-center gap-4 mb-6">
+      <div className="flex items-center gap-4 mb-6 flex-wrap">
         <div>
           <h2 className="text-2xl font-bold text-gray-100">{selectedYear} Overview</h2>
           <p className="text-sm text-gray-500 mt-0.5">
@@ -415,9 +415,11 @@ export default function Dashboard() {
       {/* Month selector + weekly hours panel */}
       {selStats && (
       <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden mb-6">
-        {/* Month tabs */}
-        <div className="border-b border-gray-800 px-4 py-3 flex items-center gap-1.5 flex-wrap">
-          <span className="text-xs font-semibold text-gray-600 uppercase tracking-wider mr-2">Month</span>
+        {/* Month tabs — a horizontally-scrollable strip on mobile (a wrapped
+            multi-row grid left an awkward, sparse final row); wraps normally
+            from sm: up, where there's room for it to look intentional. */}
+        <div className="border-b border-gray-800 px-4 py-3 flex items-center gap-1.5 overflow-x-auto flex-nowrap sm:flex-wrap sm:overflow-visible">
+          <span className="text-xs font-semibold text-gray-600 uppercase tracking-wider mr-2 flex-shrink-0">Month</span>
           {yearStats
             .slice()
             .reverse()
@@ -425,7 +427,7 @@ export default function Dashboard() {
               <button
                 key={s.id}
                 onClick={() => { setSelectedId(s.id); setSelectedWeek(null); setSelectedDayDate(null) }}
-                className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
+                className={`flex-shrink-0 px-3 py-1 rounded-full text-xs font-medium transition-colors ${
                   s.id === selStats.id
                     ? 'bg-indigo-600 text-white'
                     : 'bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-gray-200'
@@ -438,7 +440,7 @@ export default function Dashboard() {
             <button
               onClick={() => setShowProjection((v) => !v)}
               title={showProjection ? 'Hide projection' : `Project ${remainingDays.length} unprocessed day${remainingDays.length !== 1 ? 's' : ''}`}
-              className={`ml-auto flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium transition-colors border ${
+              className={`flex-shrink-0 sm:ml-auto flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium transition-colors border ${
                 showProjection
                   ? 'bg-amber-900/30 border-amber-700/50 text-amber-300'
                   : 'border-gray-700 text-gray-500 hover:text-gray-300 hover:border-gray-600'
@@ -552,11 +554,11 @@ export default function Dashboard() {
 
         {/* Weekly hours */}
         <div className="px-5 py-4">
-          <div className="flex items-center justify-between mb-4">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-4">
             <h3 className="text-sm font-semibold text-gray-300">
               Hours by Week — {formatMonthYear(selStats.year, selStats.month)}
             </h3>
-            <div className="flex items-center gap-3 text-xs text-gray-500">
+            <div className="flex items-center gap-3 text-xs text-gray-500 flex-wrap">
               <span>{prodDays.length} worked</span>
               {noProdDays.length > 0 && (
                 <span className="text-gray-600">{noProdDays.length} no production</span>
@@ -574,7 +576,7 @@ export default function Dashboard() {
               </button>
               <button
                 onClick={() => navigate(`/month/${selStats.id}`)}
-                className="text-indigo-400 font-medium hover:text-indigo-300"
+                className="text-indigo-400 font-medium hover:text-indigo-300 whitespace-nowrap"
               >
                 View details →
               </button>
