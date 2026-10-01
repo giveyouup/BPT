@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect, useRef, Fragment } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from 'recharts'
 import { useData } from '../context/DataContext'
-import { computeCalendarYearStats, computeCashYearStats, computeCalendarMonthStats, getStipendForDay, getApplicableMapping } from '../utils/calculations'
+import { computeCalendarYearStats, computeCashYearStats, computeCalendarMonthStats, getStipendForDay, getApplicableMapping, resolveCashUnitPayMode } from '../utils/calculations'
 import { formatCurrency, formatMonthYear, formatDateShort, randomId } from '../utils/dateUtils'
 import { resolveShiftAlias } from '../utils/shiftUtils'
 import {
@@ -405,6 +405,21 @@ export default function Compensation() {
     setEditingCutoff(false)
   }
 
+  // Explicitly records the user's choice for this year (rather than deleting
+  // the key to fall back to resolveCashUnitPayMode's default) -- a year with
+  // an existing cashCutoffs value defaults to 'cutoff', so switching such a
+  // year to 'reports' has to be recorded, not just cleared.
+  async function setUnitPayMode(mode: 'reports' | 'cutoff') {
+    const updated = { ...settings, cashUnitPayMode: { ...(settings.cashUnitPayMode ?? {}), [selectedYear]: mode } }
+    await saveSettings(updated)
+    if (mode === 'cutoff') {
+      setCutoffInput(settings.cashCutoffs?.[selectedYear] ?? '')
+      setEditingCutoff(true)
+    } else {
+      setEditingCutoff(false)
+    }
+  }
+
   function getOrCreate(): AnnualExpenses {
     return currentRecord ?? {
       id: String(selectedYear), year: selectedYear,
@@ -635,6 +650,15 @@ export default function Compensation() {
                   >Clear</button>
                 )}
               </div>
+            ) : resolveCashUnitPayMode(settings, selectedYear) === 'reports' ? (
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] text-emerald-300/80">Jan – Dec {selectedYear}</span>
+                <span className="text-[10px] text-gray-600">(from monthly PCR reports)</span>
+                <button
+                  onClick={() => setUnitPayMode('cutoff')}
+                  className="text-[10px] text-gray-500 hover:text-gray-300 underline underline-offset-2"
+                >use a custom cutoff date instead</button>
+              </div>
             ) : (() => {
               const hasCustomCutoff = !!settings.cashCutoffs?.[selectedYear]
               const endYear = cashStats.unitPayEnd.slice(0, 4)
@@ -649,6 +673,10 @@ export default function Compensation() {
                     onClick={() => { setCutoffInput(settings.cashCutoffs?.[selectedYear] ?? ''); setEditingCutoff(true) }}
                     className="text-[10px] text-gray-500 hover:text-gray-300 underline underline-offset-2"
                   >edit</button>
+                  <button
+                    onClick={() => setUnitPayMode('reports')}
+                    className="text-[10px] text-gray-500 hover:text-gray-300 underline underline-offset-2"
+                  >use monthly reports instead</button>
                 </div>
               )
             })()}

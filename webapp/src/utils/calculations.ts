@@ -1098,18 +1098,38 @@ function addOneDay(date: string): string {
 }
 
 /**
+ * Per-year choice of how computeCashYearStats computes Unit Pay (see the
+ * Settings.cashUnitPayMode comment in types.ts). An explicit choice always
+ * wins; otherwise a year defaults to 'cutoff' only when it already has its
+ * own cashCutoffs value (so years calibrated before this toggle existed
+ * keep behaving exactly as they did), else 'reports'.
+ *
+ * Deliberately keyed only off *this* year's own cutoff, not the previous
+ * year's -- computeCashYearStats's cutoff-mode window still reads the
+ * previous year's cutoff to anchor its own start date (see below), but
+ * that's purely a detail of how a cutoff-mode year computes its window; it
+ * must not also pull an otherwise-unconfigured *following* year into cutoff
+ * mode just because the one before it has a cutoff.
+ */
+export function resolveCashUnitPayMode(settings: Settings, year: number): 'reports' | 'cutoff' {
+  return settings.cashUnitPayMode?.[year] ?? (settings.cashCutoffs?.[year] ? 'cutoff' : 'reports')
+}
+
+/**
  * Compute compensation on a cash (payment-received) basis for a given year.
  *
- * Unit pay:
- *   - No cutoff set: include all reports tagged Jan Y – Dec Y (same months as accrual).
- *     Forward-uploaded PCRs are already payment-period scoped, so no date filtering needed.
- *   - Cutoff set (e.g. "2024-12-20"): filter ALL line items across ALL reports by serviceDate
- *     within (prevYearCutoff+1 … cutoff). Used for historical auto-split data where report
+ * Unit pay, per resolveCashUnitPayMode(settings, year):
+ *   - 'reports' (default): sum each month's whole PCR report tagged Jan Y – Dec Y,
+ *     the same mechanism Accrual view already uses -- a report's own (year, month)
+ *     is authoritative, regardless of whether some of its line items are
+ *     individually dated outside that month (normal and expected).
+ *   - 'cutoff': filter ALL line items across ALL reports by serviceDate within
+ *     (prevYearCutoff+1 … cutoff). Used for historical auto-split data where report
  *     month ≠ payment period.
  *
  * Stipends:
- *   Always shifted one month back: Dec(Y-1) through Nov(Y).
- *   Stipends are monthly lump sums so no service-date filtering is applied.
+ *   Always shifted one month back: Dec(Y-1) through Nov(Y), regardless of Unit Pay's
+ *   mode. Stipends are monthly lump sums so no service-date filtering is applied.
  */
 export function computeCashYearStats(
   year: number,
@@ -1129,13 +1149,7 @@ export function computeCashYearStats(
   let unitPayStart: string
   let unitPayEnd: string
 
-  // Use service-date filtering whenever either this year's or the prior year's cutoff is set.
-  // If only prevCutoff is set (this year has no cutoff yet), the window runs from prevCutoff+1
-  // through Dec 31 of this year — ensuring the late-December days from the previous year are
-  // never lost between years.
-  const useServiceDateFilter = !!(thisCutoff || prevCutoff)
-
-  if (useServiceDateFilter) {
+  if (resolveCashUnitPayMode(settings, year) === 'cutoff') {
     unitPayStart = prevCutoff ? addOneDay(prevCutoff) : `${year}-01-01`
     unitPayEnd   = thisCutoff ?? `${year}-12-31`
 
@@ -1172,14 +1186,28 @@ export function computeCashYearStats(
       if (curM === 12) { curY++; curM = 1 } else curM++
     }
   } else {
-    // No cutoffs at all — use whole report months Jan–Dec (correct for individually uploaded PCRs)
+    // 'reports' mode — sum each uploaded report tagged for this year using
+    // its OWN line items exactly as uploaded (computeMonthlyStats, the same
+    // per-report computation the PCR Reports sidebar's own month pages use),
+    // not computeCalendarYearStats/computeCalendarMonthStats: that function
+    // re-attributes EVERY line item system-wide by its own effective service
+    // date, pulling it into whichever calendar month that date falls in --
+    // which can differ from the report it was actually uploaded under (a
+    // late-posted case, a month-boundary case attributed to the adjoining
+    // day, etc.), legitimately and as expected. Accrual view deliberately
+    // wants that reattribution; this mode deliberately doesn't -- it's
+    // exactly the "sum what's in each report, full stop" behavior the user
+    // asked for.
     unitPayStart = `${year}-01-01`
     unitPayEnd   = `${year}-12-31`
 
-    const yearStats = computeCalendarYearStats(year, allReports, allSchedules, settings, allMappings)
-    totalUnitPay              = yearStats.reduce((s, m) => s + m.unitCompensation, 0)
-    totalDistributableUnits   = yearStats.reduce((s, m) => s + m.totalDistributableUnits, 0)
-    totalHours                = yearStats.reduce((s, m) => s + m.totalHours, 0)
+    for (const report of allReports) {
+      if (report.year !== year) continue
+      const stats = computeMonthlyStats(report, allSchedules, settings, allMappings)
+      totalUnitPay            += stats.unitCompensation
+      totalDistributableUnits += stats.totalDistributableUnits
+      totalHours              += stats.totalHours
+    }
   }
 
   // ── Stipends: Dec(Y-1) through Nov(Y) ────────────────────────────────────
