@@ -1,5 +1,24 @@
 # Changelog
 
+## v4.0.0
+
+- Added a year selector right under the app title that now applies
+  everywhere — Dashboard, Annual Summary, Compensation, Stipend
+  Calculator, Audits, PCR Income Statement, and Schedule — so switching
+  years is one action instead of several, and it's always clear which
+  year you're looking at. Quick buttons cover recent years, with a
+  dropdown for older ones.
+- Annual Summary and PCR Income Statement still have their own
+  bookmarkable links per year; Schedule keeps whatever month you're on
+  when you change years.
+- Fixed Schedule sometimes opening to the current year instead of
+  whichever year was selected.
+- Fixed a blank Dashboard when switching to a year with no uploaded
+  reports yet — it now says so instead of showing nothing.
+- Settings > Federal Holidays: the year list now includes every year
+  that actually has schedule or billing data, instead of a fixed
+  5-year window, and that section now has its own Save button.
+
 ## v3.14.0
 
 - Fixed horizontal scrolling on the Dashboard page on mobile — the year
