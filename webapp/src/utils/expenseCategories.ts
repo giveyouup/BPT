@@ -23,6 +23,8 @@ export const CASH_COMP_LEAVES: BenefitsLeaf[] = [
   { key: 'cme',              label: 'CME',              subGroup: 'Cash Reimbursements' },
   { key: 'businessMeetings', label: 'Business Meetings', subGroup: 'Cash Reimbursements' },
   { key: 'phoneInternet',    label: 'Phone / Internet', subGroup: 'Cash Reimbursements' },
+  { key: 'studentLoanReimbursement', label: 'Student Loan Reimbursement', subGroup: 'Cash Reimbursements' },
+  { key: 'equipmentSupplies',        label: 'Equipment and Supplies',     subGroup: 'Cash Reimbursements' },
 ]
 
 export const BUSINESS_LEAVES: Leaf[] = [

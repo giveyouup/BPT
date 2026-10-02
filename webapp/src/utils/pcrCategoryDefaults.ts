@@ -21,14 +21,25 @@
  * without flagging an unmapped 'other' line, since most of that bucket is
  * revenue/balance rollups that were never meant to be categorized).
  *
- * A handful of `otherIncome` and `expense` defaults below target a free-form
- * category name (e.g. "Committee", "Student Loan Reimbursement") rather than
- * a fixed leaf key -- Other Income has no fixed leaves at all, and these are
- * specific category names, not universal ones. They're included anyway
- * because Compensation's own sync auto-creates a same-named entry on first
- * apply if it doesn't already exist, so there's no dangling reference even on
- * a brand-new install -- just a specific naming choice a user is free to
- * rename or remap.
+ * A handful of `otherIncome` defaults below target a free-form category name
+ * (e.g. "CASE Board") rather than a fixed leaf key -- Other Income has no
+ * fixed leaves at all, so these are specific category names, not universal
+ * ones. They're included anyway because Compensation's own sync
+ * auto-creates a same-named entry on first apply if it doesn't already
+ * exist, so there's no dangling reference even on a brand-new install --
+ * just a specific naming choice a user is free to rename or remap.
+ *
+ * "CASE Board", "CASE Board / Chairs / Comm / Schedule", and "Leadership
+ * Stipend" all target the same "CASE Board" category because they're the
+ * same real-world line, just printed under different labels across report
+ * periods -- confirmed directly: 2024's PCRs print it as "Leadership
+ * Stipend" at a flat $1,488/month, and the identical $1,488/month continues
+ * uninterrupted from January 2025 onward under "CASE Board / Chairs / Comm /
+ * Schedule" instead. (v3.10.0 briefly unified these under a target named
+ * "Committee" instead, but that rename was never paired with a migration
+ * for an already-seeded database, so it never actually took effect anywhere
+ * -- "CASE Board" is reverted to here as the real, already-established
+ * category name.)
  *
  * `SMCS Weekend G3` / `Weekend Body IR` target *promoted* stipend columns
  * (webapp/src/utils/calculations.ts, STIPEND_PROMOTABLE_BASE_KEYS) rather
@@ -50,9 +61,11 @@ export const DEFAULT_PCR_CATEGORY_MAPPINGS: Array<{
   { label: 'ROC', section: 'stipend', targetKey: 'ROC' },
   { label: 'CV NIR', section: 'stipend', targetKey: 'NIR' },
   { label: 'CV Anesthesia', section: 'stipend', targetKey: 'NIR' },
+  { label: 'NIR', section: 'stipend', targetKey: 'NIR' },
   { label: 'SMCS General Call (1-2)', section: 'stipend', targetKey: 'mainOrCall' },
   { label: 'SMCS General Call (3-17)', section: 'stipend', targetKey: 'otherG' },
   { label: 'SMCS GI Weekend', section: 'stipend', targetKey: 'GI' },
+  { label: 'SMCS-GI Weekend', section: 'stipend', targetKey: 'GI' },
   { label: 'Alhambra', section: 'stipend', targetKey: 'alhambra' },
   { label: 'SMCS Weekend G3', section: 'stipend', targetKey: 'G3::weekend' },
   { label: 'Weekend Body IR', section: 'stipend', targetKey: 'BIR::weekday' },
@@ -67,13 +80,18 @@ export const DEFAULT_PCR_CATEGORY_MAPPINGS: Array<{
   { label: 'CME \\ Professional Development', section: 'expense', targetKey: 'cme' },
   { label: 'MD Salaries', section: 'expense', targetKey: 'salary' },
   { label: 'Business Meetings', section: 'expense', targetKey: 'businessMeetings' },
+  { label: 'Deductible Bus Meetings', section: 'expense', targetKey: 'businessMeetings' },
+  { label: 'Non-Deductible Bus Meetings', section: 'expense', targetKey: 'businessMeetings' },
   { label: 'Professional Liability-Physicians', section: 'expense', targetKey: 'liabilityInsurance' },
   { label: 'Telephone/Internet', section: 'expense', targetKey: 'phoneInternet' },
   { label: 'License/Dues', section: 'expense', targetKey: 'licensesDues' },
   { label: 'Corporate Development Reserve', section: 'expense', targetKey: 'developmentReserve' },
   { label: 'Corporate Operating Fee', section: 'expense', targetKey: 'operatingFee' },
   { label: 'Operating Expense', section: 'expense', targetKey: 'operatingExpense' },
-  { label: 'Student Loan Reimbursement-Cares Act', section: 'expense', targetKey: 'Student Loan Reimbursement' },
-  { label: 'CASE Board / Chairs / Comm / Schedule', section: 'otherIncome', targetKey: 'Committee' },
-  { label: 'CASE Board', section: 'otherIncome', targetKey: 'Committee' },
+  { label: 'Student Loan Reimbursement-Cares Act', section: 'expense', targetKey: 'studentLoanReimbursement' },
+  { label: 'Small Equipment', section: 'expense', targetKey: 'equipmentSupplies' },
+  { label: 'Supplies', section: 'expense', targetKey: 'equipmentSupplies' },
+  { label: 'CASE Board / Chairs / Comm / Schedule', section: 'otherIncome', targetKey: 'CASE Board' },
+  { label: 'CASE Board', section: 'otherIncome', targetKey: 'CASE Board' },
+  { label: 'Leadership Stipend', section: 'otherIncome', targetKey: 'CASE Board' },
 ]

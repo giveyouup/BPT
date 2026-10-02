@@ -143,6 +143,76 @@ migrateToCompositePhysicianKey('reports', defaultPhysicianId)
 migrateToCompositePhysicianKey('monthly_expenses', defaultPhysicianId)
 migrateToCompositePhysicianKey('annual_expenses', defaultPhysicianId)
 
+// "Student Loan Reimbursement" and "Equipment and Supplies" were previously
+// free-form Cash Compensation categories (living in a year's cashCompEntries
+// array under whatever name a user first typed -- "Student Loans" in
+// practice) before becoming fixed leaves (expenseCategories.ts,
+// CASH_COMP_LEAVES). Fold any existing free-form entry under either name
+// into the new fixed `recurring[key]` field so existing data isn't orphaned
+// or double-counted alongside the new fixed row. Safe to run on every
+// startup -- a no-op once no matching free-form entry remains.
+function migrateCashReimbursementFreeformToFixed() {
+  const FREEFORM_TO_FIXED: Record<string, string> = {
+    'Student Loans': 'studentLoanReimbursement',
+    'Student Loan Reimbursement': 'studentLoanReimbursement',
+    'Equipment and Supplies': 'equipmentSupplies',
+  }
+  type Row = { id: string; physician_id: string; data: string }
+  const rows = db.prepare('SELECT id, physician_id, data FROM annual_expenses').all() as Row[]
+  const update = db.prepare('UPDATE annual_expenses SET data = ? WHERE id = ? AND physician_id = ?')
+  for (const row of rows) {
+    const rec = JSON.parse(row.data)
+    const list: Array<{ category: string; amount: number }> = rec.cashCompEntries ?? []
+    if (list.length === 0) continue
+    const remaining: typeof list = []
+    let changed = false
+    for (const e of list) {
+      const fixedKey = FREEFORM_TO_FIXED[e.category]
+      if (fixedKey) {
+        rec.recurring = rec.recurring ?? {}
+        rec.recurring[fixedKey] = (rec.recurring[fixedKey] ?? 0) + e.amount
+        changed = true
+      } else {
+        remaining.push(e)
+      }
+    }
+    if (changed) {
+      rec.cashCompEntries = remaining
+      update.run(JSON.stringify(rec), row.id, row.physician_id)
+    }
+  }
+}
+migrateCashReimbursementFreeformToFixed()
+
+// Any pre-existing pcr_category_mappings row targeting one of the old
+// free-form category names now needs to point at the matching fixed leaf
+// key instead (DEFAULT_PCR_CATEGORY_MAPPINGS already uses the new keys for a
+// fresh install, but seedPcrCategoryMappings only runs once, so an existing
+// database keeps whatever it was originally seeded -- or later hand-edited
+// -- with otherwise). Covers both the original default target name
+// ("Student Loan Reimbursement") and the actual free-form category name in
+// practice ("Student Loans"), plus every label a user has pointed at
+// "Equipment and Supplies".
+const RETARGET_TO_FIXED: Record<string, string> = {
+  'Student Loan Reimbursement': 'studentLoanReimbursement',
+  'Student Loans': 'studentLoanReimbursement',
+  'Equipment and Supplies': 'equipmentSupplies',
+}
+const retargetStmt = db.prepare("UPDATE pcr_category_mappings SET target_key = ? WHERE section = 'expense' AND target_key = ?")
+for (const [oldKey, newKey] of Object.entries(RETARGET_TO_FIXED)) {
+  retargetStmt.run(newKey, oldKey)
+}
+
+// v3.10.0 briefly unified the "CASE Board" / "CASE Board / Chairs / Comm /
+// Schedule" otherIncome defaults under a target named "Committee" instead,
+// but (same gap as above) that rename was never paired with a migration, so
+// an already-seeded database kept targeting whatever it had before and the
+// rename never actually took effect anywhere. Reverted in
+// pcrCategoryDefaults.ts back to "CASE Board" -- the real, already-
+// established Other Income category name -- so retarget any row that did
+// pick up "Committee" back to match.
+db.prepare("UPDATE pcr_category_mappings SET target_key = 'CASE Board' WHERE section = 'otherIncome' AND target_key = 'Committee'").run()
+
 // ─── CPT seed ─────────────────────────────────────────────────────────────────
 
 function seedCptRanges() {
