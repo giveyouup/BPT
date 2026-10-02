@@ -82,6 +82,7 @@ export default function Settings() {
     pcrCategoryMappings,
     physicians,
     savePhysician,
+    years: dataYears,
   } = useData()
 
   const [settings, setSettings] = useState(apiSettings)
@@ -249,7 +250,10 @@ export default function Settings() {
     setTimeout(() => setSaved(false), 2000)
   }
 
-  const years = Array.from({ length: 5 }, (_, i) => new Date().getFullYear() - 1 + i)
+  // Every year with any schedule/billing data (from DataContext, same list
+  // the top-level year selector uses), plus one year ahead so next year's
+  // holidays can be configured before any data exists for it yet.
+  const years = [...new Set([...dataYears, new Date().getFullYear() + 1])].sort((a, b) => b - a)
 
   // ── Stipend schedules ────────────────────────────────────────────────────────
   const stipendMappings = [...ctxMappings].sort((a, b) => b.effectiveDate.localeCompare(a.effectiveDate))
@@ -742,6 +746,18 @@ export default function Settings() {
                 Add custom date
               </button>
             </div>
+
+            {hasUnsavedChanges && (
+              <div className="flex items-center justify-end gap-3 border-t border-gray-800 pt-3 mt-3">
+                <span className="text-xs text-amber-400">Unsaved changes</span>
+                <button
+                  onClick={handleSave}
+                  className="px-3 py-1.5 bg-indigo-600 text-white text-xs font-medium rounded-md hover:bg-indigo-500 transition-colors"
+                >
+                  {saved ? 'Saved!' : 'Save'}
+                </button>
+              </div>
+            )}
           </div>
         )}
       </section>

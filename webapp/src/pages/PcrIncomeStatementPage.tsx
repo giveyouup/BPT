@@ -1,4 +1,4 @@
-import { createContext, useContext, useMemo, useState } from 'react'
+import { createContext, useContext, useMemo, useState, useEffect, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useData } from '../context/DataContext'
 import { formatCurrency, getMonthName } from '../utils/dateUtils'
@@ -349,6 +349,7 @@ export default function PcrIncomeStatementPage() {
   const {
     pcrIncomeStatements, pcrCategoryMappings, annualExpenses, settings, saveSettings,
     savePcrIncomeStatement, reports, schedules, stipendMappings, saveReport, activePhysicianId,
+    selectedYear, setSelectedYear,
   } = useData()
   const [editTarget, setEditTarget] = useState<{ month: number; labels?: string[] } | null>(null)
 
@@ -364,11 +365,25 @@ export default function PcrIncomeStatementPage() {
     saveSettings({ ...settings, pcrRowOrder: { ...(settings.pcrRowOrder ?? {}), [groupId]: newOrder } })
   }
 
-  const years = useMemo(
-    () => [...new Set(pcrIncomeStatements.map((s) => s.year))].sort((a, b) => b - a),
-    [pcrIncomeStatements],
-  )
-  const year = yearParam ? parseInt(yearParam) : (years[0] ?? new Date().getFullYear())
+  const year = yearParam ? parseInt(yearParam) : selectedYear
+
+  // Bidirectional sync with the shared, top-level year selector -- see the
+  // identical pattern (and the reasoning for the ref) in AnnualSummary.tsx.
+  const lastSyncedYearRef = useRef<number | null>(null)
+  useEffect(() => {
+    const paramYear = yearParam ? parseInt(yearParam) : null
+    const paramYearValid = paramYear !== null && !isNaN(paramYear)
+    if (paramYearValid && paramYear !== selectedYear && paramYear !== lastSyncedYearRef.current) {
+      lastSyncedYearRef.current = paramYear
+      setSelectedYear(paramYear)
+    } else if (!paramYearValid || paramYear !== selectedYear) {
+      lastSyncedYearRef.current = selectedYear
+      navigate(`/income-statement/${selectedYear}`, { replace: true })
+    }
+  }, [yearParam, selectedYear]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Close any open line-edit panel if the year changes out from under it.
+  useEffect(() => { setEditTarget(null) }, [year])
 
   const [openSections, setOpenSections] = useState<Record<string, boolean>>(
     () => ({ revenue: true, ...Object.fromEntries(SECTION_META.map((s) => [s.key, s.defaultOpen])) }),
@@ -568,16 +583,7 @@ export default function PcrIncomeStatementPage() {
   return (
     <div className="p-4 md:p-8 max-w-6xl">
       <div className="flex items-center gap-3 mb-2">
-        <h2 className="text-2xl font-bold text-gray-100">PCR Income Statement</h2>
-        {years.length > 0 && (
-          <select
-            value={year}
-            onChange={(e) => navigate(`/income-statement/${e.target.value}`)}
-            className="bg-gray-900 border border-gray-700 text-gray-300 text-sm rounded-md px-2 py-1 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-          >
-            {years.map((y) => <option key={y} value={y}>{y}</option>)}
-          </select>
-        )}
+        <h2 className="text-2xl font-bold text-gray-100">PCR Income Statement — {year}</h2>
       </div>
       <p className="text-xs text-gray-600 mb-8">
         Reconstructed from every uploaded PCR's income-statement pages for {year} -- one column per month found,

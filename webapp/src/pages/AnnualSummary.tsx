@@ -313,9 +313,37 @@ export default function AnnualSummary() {
   const { year: yearParam } = useParams<{ year: string }>()
   const navigate = useNavigate()
 
-  const { reports, schedules: allSchedules, settings, stipendMappings: allMappings } = useData()
-  const years = [...new Set(reports.map((r) => r.year))].sort((a, b) => b - a)
-  const year = yearParam ? parseInt(yearParam) : years[0]
+  const { reports, schedules: allSchedules, settings, stipendMappings: allMappings, years, selectedYear, setSelectedYear } = useData()
+  const year = yearParam ? parseInt(yearParam) : selectedYear
+
+  // Bidirectional sync with the shared, top-level year selector, keeping the
+  // /annual/:year URL bookmarkable. A ref distinguishes "the URL segment
+  // itself just changed" (a link/bookmark/back-button navigation, which
+  // should win) from "selectedYear changed some other way" (the sidebar
+  // selector, which should push into the URL) -- without it, both directions
+  // firing off the same stale render would fight each other on mount.
+  const lastSyncedYearRef = useRef<number | null>(null)
+  useEffect(() => {
+    const paramYear = yearParam ? parseInt(yearParam) : null
+    const paramYearValid = paramYear !== null && !isNaN(paramYear)
+    if (paramYearValid && paramYear !== selectedYear && paramYear !== lastSyncedYearRef.current) {
+      lastSyncedYearRef.current = paramYear
+      setSelectedYear(paramYear)
+    } else if (!paramYearValid || paramYear !== selectedYear) {
+      lastSyncedYearRef.current = selectedYear
+      navigate(`/annual/${selectedYear}`, { replace: true })
+    }
+  }, [yearParam, selectedYear]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // A year change (from either direction above) invalidates this page's own
+  // what-if/comparison UI state -- it's specific to whichever year it was
+  // opened for.
+  useEffect(() => {
+    setWhatIfMappingId(null)
+    setWhatIfUnitRate(null)
+    setShowYoY(false)
+    setSelectedBucketIdx(null)
+  }, [year])
 
   // ── Memoized stats (must be before early return to satisfy rules of hooks) ─
   const yearStats = useMemo(
@@ -792,35 +820,9 @@ export default function AnnualSummary() {
   return (
     <div className="p-4 md:p-8">
 
-      {/* Header + year selector + what-if selector */}
+      {/* Header + what-if selector */}
       <div className="flex items-center gap-4 mb-4 flex-wrap">
         <h2 className="text-2xl font-bold text-gray-100">{year} Annual Summary</h2>
-        {years.length > 1 && (
-          <div className="flex items-center gap-2 ml-4">
-            {years.slice(0, 3).map((y) => (
-              <button key={y} onClick={() => { navigate(`/annual/${y}`); setWhatIfMappingId(null); setWhatIfUnitRate(null); setShowYoY(false); setSelectedBucketIdx(null) }}
-                className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
-                  y === year ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-gray-200'
-                }`}>
-                {y}
-              </button>
-            ))}
-            {years.length > 3 && (
-              <select
-                value={years.slice(3).includes(year!) ? year : ''}
-                onChange={e => { navigate(`/annual/${e.target.value}`); setWhatIfMappingId(null); setWhatIfUnitRate(null); setShowYoY(false); setSelectedBucketIdx(null) }}
-                className={`bg-gray-900 border rounded-md px-2 py-1 text-sm font-medium focus:outline-none focus:ring-1 focus:ring-indigo-500 ${
-                  years.slice(3).includes(year!)
-                    ? 'border-indigo-600 text-white'
-                    : 'border-gray-700 text-gray-400 hover:border-gray-600'
-                }`}
-              >
-                {!years.slice(3).includes(year!) && <option value="" disabled>More…</option>}
-                {years.slice(3).map(y => <option key={y} value={y}>{y}</option>)}
-              </select>
-            )}
-          </div>
-        )}
         {years.length > 1 && (
           <button
             onClick={() => setShowYoY((v) => !v)}

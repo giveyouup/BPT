@@ -36,6 +36,14 @@ interface DataContextValue {
   setActivePhysicianId: (id: string) => void
   savePhysician: (p: { id: string; name: string }) => Promise<void>
   deletePhysician: (id: string) => Promise<void>
+  // Top-level year selection, shared across Dashboard/Annual Summary/
+  // Compensation/Stipend Calc/Schedule/Audits/PCR Reports so switching years
+  // is one action instead of five. `years` is the union of every year with
+  // any data at all (reports, annual expenses, PCR income statements, or
+  // schedule entries) for the active physician, newest first.
+  years: number[]
+  selectedYear: number
+  setSelectedYear: (y: number) => void
   reports: MonthlyReport[]
   schedules: Schedule[]
   settings: Settings
@@ -85,6 +93,12 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
 
   const [physicians, setPhysicians] = useState<Physician[]>([])
   const [activePhysicianId, setActivePhysicianIdState] = useState<string>('')
+
+  const [selectedYear, setSelectedYearState] = useState<number>(() => {
+    const stored = localStorage.getItem('selectedYear')
+    const parsed = stored ? parseInt(stored) : NaN
+    return !isNaN(parsed) ? parsed : new Date().getFullYear()
+  })
 
   const [rawReports, setRawReports] = useState<MonthlyReport[]>([])
   const [rawSchedules, setRawSchedules] = useState<Schedule[]>([])
@@ -154,6 +168,37 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
     localStorage.setItem('activePhysicianId', id)
     setActivePhysicianIdState(id)
   }
+
+  const setSelectedYear = (y: number) => {
+    localStorage.setItem('selectedYear', String(y))
+    setSelectedYearState(y)
+  }
+
+  const years = useMemo(() => {
+    // Always offer the current calendar year even with zero data yet, so a
+    // new year can be selected proactively (e.g. to start entering annual
+    // expenses before the first PCR of the year is uploaded).
+    const s = new Set<number>([new Date().getFullYear()])
+    for (const r of rawReports) s.add(r.year)
+    for (const e of annualExpenses) s.add(e.year)
+    for (const stmt of pcrIncomeStatements) s.add(stmt.year)
+    for (const sched of rawSchedules) {
+      for (const entry of sched.entries) {
+        const y = parseInt(entry.date.slice(0, 4))
+        if (!isNaN(y)) s.add(y)
+      }
+    }
+    return [...s].sort((a, b) => b - a)
+  }, [rawReports, annualExpenses, pcrIncomeStatements, rawSchedules])
+
+  // Re-validate the persisted/previous selection whenever the available years
+  // change (e.g. switching to a physician with different data) -- only snaps
+  // to the most recent year when the current selection no longer has any
+  // data at all, never just because new data was added elsewhere.
+  useEffect(() => {
+    if (!initialized || years.length === 0) return
+    if (!years.includes(selectedYear)) setSelectedYear(years[0])
+  }, [initialized, years]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const reports = useMemo(
     () => withEffectiveUnitValues(rawReports.map(normalizeReport), pcrIncomeStatements),
@@ -381,6 +426,7 @@ export function DataProvider({ children }: { children: React.ReactNode }) {
   return (
     <DataContext.Provider value={{
       physicians, activePhysicianId, setActivePhysicianId, savePhysician, deletePhysician,
+      years, selectedYear, setSelectedYear,
       reports, schedules, settings, stipendMappings, cptRanges, loading, loadError,
       saveReport, deleteReport,
       saveSchedule, deleteSchedule, saveManualShift, deleteManualShift,

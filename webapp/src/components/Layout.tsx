@@ -4,11 +4,9 @@ import { useData } from '../context/DataContext'
 import { formatMonthYear } from '../utils/dateUtils'
 
 export default function Layout({ children }: { children: React.ReactNode }) {
-  const { reports, pcrIncomeStatements } = useData()
+  const { reports, pcrIncomeStatements, years, selectedYear, setSelectedYear } = useData()
   const navigate = useNavigate()
 
-  const years = [...new Set(reports.map((r) => r.year))].sort((a, b) => b - a)
-  const [selectedYear, setSelectedYear] = useState<number>(years[0] ?? new Date().getFullYear())
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [desktopCollapsed, setDesktopCollapsed] = useState(false)
   const [headerHidden, setHeaderHidden] = useState(false)
@@ -76,7 +74,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
         ${desktopCollapsed ? 'md:w-12' : 'md:w-56'}
       `}>
         {/* Header */}
-        <div className="px-4 py-5 border-b border-gray-800 flex items-center justify-between min-h-[72px]">
+        <div className="px-4 py-5 flex items-center justify-between min-h-[72px]">
           {/* BRACT title — hidden on desktop when collapsed */}
           <div className={desktopCollapsed ? 'hidden' : ''}>
             <h1 className="text-lg font-bold tracking-tight bg-gradient-to-r from-indigo-400 via-violet-400 to-fuchsia-400 bg-clip-text text-transparent">BRACT</h1>
@@ -111,6 +109,45 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           </button>
         </div>
 
+        {/* Top-level year selector — drives Dashboard, Annual Summary,
+            Compensation, Stipend Calc, Schedule, Audits, and the PCR Reports
+            list below, so changing years is one action instead of several.
+            Hidden on desktop when collapsed, same as the title above. */}
+        {years.length > 0 && (
+          <div className={`px-4 pb-4 border-b border-gray-800 ${desktopCollapsed ? 'hidden' : ''}`}>
+            <p className="text-[10px] font-semibold text-gray-600 uppercase tracking-wider mb-1.5">Year</p>
+            <div className="flex items-center gap-1.5 flex-wrap">
+              {years.slice(0, 3).map((y) => (
+                <button
+                  key={y}
+                  onClick={() => setSelectedYear(y)}
+                  className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
+                    y === selectedYear
+                      ? 'bg-indigo-600 text-white'
+                      : 'bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-gray-200'
+                  }`}
+                >
+                  {y}
+                </button>
+              ))}
+            </div>
+            {years.length > 3 && (
+              <select
+                value={years.slice(3).includes(selectedYear) ? selectedYear : ''}
+                onChange={(e) => setSelectedYear(Number(e.target.value))}
+                className={`mt-1.5 w-full bg-gray-900 border rounded-md px-2 py-1 text-xs font-medium focus:outline-none focus:ring-1 focus:ring-indigo-500 ${
+                  years.slice(3).includes(selectedYear)
+                    ? 'border-indigo-600 text-white'
+                    : 'border-gray-700 text-gray-400'
+                }`}
+              >
+                {!years.slice(3).includes(selectedYear) && <option value="" disabled>More years…</option>}
+                {years.slice(3).map((y) => <option key={y} value={y}>{y}</option>)}
+              </select>
+            )}
+          </div>
+        )}
+
         <nav className="flex-1 px-2 py-4 space-y-0.5 overflow-y-auto flex flex-col">
           <NavLink to="/" end onClick={() => setSidebarOpen(false)} className={navLinkClass}>
             <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -121,7 +158,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           </NavLink>
 
           {reports.length > 0 && (
-            <NavLink to={`/annual/${years[0]}`} onClick={() => setSidebarOpen(false)} className={navLinkClass}>
+            <NavLink to={`/annual/${selectedYear}`} onClick={() => setSidebarOpen(false)} className={navLinkClass}>
               <svg className="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
                   d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
@@ -190,20 +227,9 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           {/* PCR Reports list — hidden on desktop when collapsed */}
           {reports.length > 0 && (
             <div className={`pt-4 flex flex-col min-h-0 flex-1 ${desktopCollapsed ? 'md:hidden' : ''}`}>
-              <div className="flex items-center justify-between px-3 mb-2">
-                <p className="text-xs font-semibold text-gray-600 uppercase tracking-wider">PCR Reports</p>
-                {years.length > 1 && (
-                  <select
-                    value={selectedYear}
-                    onChange={(e) => setSelectedYear(Number(e.target.value))}
-                    className="bg-gray-800 border border-gray-700 rounded px-1.5 py-0.5 text-xs text-gray-400 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                  >
-                    {years.map((y) => (
-                      <option key={y} value={y}>{y}</option>
-                    ))}
-                  </select>
-                )}
-              </div>
+              <p className="text-xs font-semibold text-gray-600 uppercase tracking-wider px-3 mb-2">
+                PCR Reports — {selectedYear}
+              </p>
               {pcrIncomeStatements.some((s) => s.year === selectedYear) && (
                 <button
                   onClick={() => { navigate(`/income-statement/${selectedYear}`); setSidebarOpen(false) }}

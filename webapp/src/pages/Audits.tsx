@@ -49,27 +49,16 @@ function EmptyCheck({ message }: { message: string }) {
 }
 
 export default function Audits() {
-  const { reports, schedules, settings, stipendMappings, saveReport, pcrIncomeStatements, pcrCategoryMappings } = useData()
+  const { reports, schedules, settings, stipendMappings, saveReport, pcrIncomeStatements, pcrCategoryMappings, selectedYear } = useData()
   const navigate = useNavigate()
 
-  const now = new Date()
-
-  const years = useMemo(() => {
-    const s = new Set<number>()
-    s.add(now.getFullYear())
-    for (const r of reports) s.add(r.year)
-    for (const sched of schedules)
-      for (const e of sched.entries) {
-        const y = parseInt(e.date.slice(0, 4))
-        if (!isNaN(y)) s.add(y)
-      }
-    return [...s].sort((a, b) => b - a)
-  }, [reports, schedules])
-
-  const [selectedYear, setSelectedYear] = useState<number>(years[0] ?? now.getFullYear())
   const [reassignPopover, setReassignPopover] = useState<{ date: string; input: string } | null>(null)
   const [saving, setSaving] = useState(false)
   const dateInputRef = useRef<HTMLInputElement>(null)
+
+  // Close any open reassignment popover if the (shared, top-level) year
+  // changes out from under it.
+  useEffect(() => { setReassignPopover(null) }, [selectedYear])
 
   // Derived from persisted report logs — survives refresh
   const resolvedItems = useMemo(
@@ -302,15 +291,8 @@ export default function Audits() {
   return (
     <div className="p-4 md:p-8 max-w-4xl">
       {/* Header */}
-      <div className="flex items-center gap-3 mb-8">
-        <h2 className="text-2xl font-bold text-gray-100">Audits</h2>
-        <select
-          value={selectedYear}
-          onChange={e => { setSelectedYear(Number(e.target.value)); setReassignPopover(null) }}
-          className="bg-gray-900 border border-gray-700 text-gray-300 text-sm rounded-md px-2 py-1 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-        >
-          {years.map(y => <option key={y} value={y}>{y}</option>)}
-        </select>
+      <div className="mb-8">
+        <h2 className="text-2xl font-bold text-gray-100">Audits — {selectedYear}</h2>
       </div>
 
       {!hasData && (

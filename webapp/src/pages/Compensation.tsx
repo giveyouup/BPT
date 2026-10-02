@@ -221,23 +221,16 @@ function EditableEntryList({
 export default function Compensation() {
   const {
     reports, schedules, settings, stipendMappings, annualExpenses, saveAnnualExpenses, deleteAnnualExpenses, saveSettings,
-    pcrIncomeStatements, pcrCategoryMappings,
+    pcrIncomeStatements, pcrCategoryMappings, selectedYear,
   } = useData()
   const navigate = useNavigate()
 
-  const now = new Date()
-  const currentYear = now.getFullYear()
-
-  const years = useMemo(() => {
-    const s = new Set<number>([currentYear])
-    for (const r of reports) s.add(r.year)
-    for (const e of annualExpenses) s.add(e.year)
-    return [...s].sort((a, b) => b - a)
-  }, [reports, annualExpenses, currentYear])
-
-  const [selectedYear, setSelectedYear] = useState<number>(years[0] ?? currentYear)
   const [cashView, setCashView] = useState(true)
   const [editingCutoff, setEditingCutoff] = useState(false)
+  // The cutoff editor is year-specific -- close it if the (shared, top-level)
+  // year changes out from under it instead of leaving it open against the
+  // wrong year.
+  useEffect(() => { setEditingCutoff(false) }, [selectedYear])
   const [cutoffInput, setCutoffInput] = useState('')
   const [draft, setDraft] = useState<Record<string, string>>({})
   const [pcrSyncPreview, setPcrSyncPreview] = useState<PcrSyncPreview | null>(null)
@@ -575,28 +568,8 @@ export default function Compensation() {
     <div className="p-4 md:p-8 max-w-3xl">
 
       {/* Header */}
-      <div className="flex items-center gap-4 mb-6 flex-wrap">
-        <h2 className="text-2xl font-bold text-gray-100">Compensation</h2>
-        <div className="flex items-center gap-2 ml-2">
-          {years.slice(0, 3).map(y => (
-            <button key={y} onClick={() => { setSelectedYear(y); setEditingCutoff(false) }}
-              className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
-                y === selectedYear ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-gray-200'
-              }`}>{y}</button>
-          ))}
-          {years.length > 3 && (
-            <select
-              value={years.slice(3).includes(selectedYear) ? selectedYear : ''}
-              onChange={e => { setSelectedYear(Number(e.target.value)); setEditingCutoff(false) }}
-              className={`bg-gray-900 border rounded-md px-2 py-1 text-sm font-medium focus:outline-none focus:ring-1 focus:ring-indigo-500 ${
-                years.slice(3).includes(selectedYear) ? 'border-indigo-600 text-white' : 'border-gray-700 text-gray-400'
-              }`}
-            >
-              {!years.slice(3).includes(selectedYear) && <option value="" disabled>More…</option>}
-              {years.slice(3).map(y => <option key={y} value={y}>{y}</option>)}
-            </select>
-          )}
-        </div>
+      <div className="mb-6">
+        <h2 className="text-2xl font-bold text-gray-100">Compensation — {selectedYear}</h2>
       </div>
 
       {/* Accrual / Cash toggle */}
