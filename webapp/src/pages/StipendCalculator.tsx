@@ -182,15 +182,10 @@ function PcrMatchBadge({ status, paid, owed }: { status: PcrMatchStatus; paid: n
 export default function StipendCalculator() {
   const {
     reports, schedules: allSchedules, settings, stipendMappings: allMappings, saveReport, saveSettings,
-    pcrIncomeStatements, pcrCategoryMappings, activePhysicianId,
+    pcrIncomeStatements, pcrCategoryMappings, activePhysicianId, selectedYear, setSelectedYear,
   } = useData()
   const [searchParams, setSearchParams] = useSearchParams()
 
-  const scheduleYears = allSchedules.flatMap((s) => s.entries.map((e) => parseInt(e.date.slice(0, 4))))
-  const reportYears = reports.map((r) => r.year)
-  const years = [...new Set([...scheduleYears, ...reportYears])].sort((a, b) => b - a)
-
-  const [selectedYear, setSelectedYear] = useState<number>(years[0] ?? new Date().getFullYear())
   const [activeCell, setActiveCell] = useState<{ month: number; group: string } | null>(null)
   const [savingMonth, setSavingMonth] = useState<number | null>(null)
   const [configOpen, setConfigOpen] = useState(false)
@@ -549,19 +544,7 @@ export default function StipendCalculator() {
   return (
     <div className="p-4 md:p-8">
       <div className="flex items-center gap-4 mb-6 flex-wrap">
-        <h2 className="text-2xl font-bold text-gray-100">Stipend Calculator</h2>
-        {years.length > 1 && (
-          <div className="flex gap-2 ml-4">
-            {years.map((y) => (
-              <button key={y} onClick={() => { setSelectedYear(y); setActiveCell(null) }}
-                className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
-                  y === selectedYear ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-gray-200'
-                }`}>
-                {y}
-              </button>
-            ))}
-          </div>
-        )}
+        <h2 className="text-2xl font-bold text-gray-100">Stipend Calculator — {selectedYear}</h2>
         <div className="ml-auto flex items-center gap-1 bg-gray-900 border border-gray-800 rounded-md p-0.5">
           {(['accrual', 'pcr'] as const).map((mode) => (
             <button

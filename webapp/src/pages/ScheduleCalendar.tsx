@@ -60,18 +60,31 @@ function ShiftStatCard({
 }
 
 export default function ScheduleCalendar() {
-  const { schedules, saveManualShift, deleteManualShift, settings } = useData()
+  const { schedules, saveManualShift, deleteManualShift, settings, selectedYear, setSelectedYear } = useData()
   const location = useLocation()
   const navState = location.state as { year?: number; month?: number } | null
 
   const now = new Date()
   const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
 
-  const [year, setYear] = useState(navState?.year ?? now.getFullYear())
+  const [year, setYear] = useState(navState?.year ?? selectedYear)
   const [month, setMonth] = useState(navState?.month ?? now.getMonth() + 1)
   const [viewMode, setViewMode] = useState<'month' | 'year'>('month')
-  const [summaryYear, setSummaryYear] = useState(now.getFullYear())
   const [summaryView, setSummaryView] = useState<'cards' | 'chart'>('cards')
+
+  // When the shared, top-level year changes (the sidebar selector, not this
+  // page's own prev/next-month navigation), jump this page's month view to
+  // that year, keeping the same month. The ref means this only reacts to
+  // *changes* -- it deliberately does not run on mount, so a specific
+  // incoming navState (e.g. "open March 2024" from a day-bar click
+  // elsewhere) isn't immediately clobbered by the global year.
+  const prevGlobalYearRef = useRef(selectedYear)
+  useEffect(() => {
+    if (selectedYear !== prevGlobalYearRef.current) {
+      prevGlobalYearRef.current = selectedYear
+      setYear(selectedYear)
+    }
+  }, [selectedYear])
   const [chartGroup, setChartGroup] = useState<'G' | 'Special' | 'FS' | 'Other'>('G')
   const [popover, setPopover] = useState<{ date: string; input: string } | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -154,23 +167,10 @@ export default function ScheduleCalendar() {
     setPopover(null)
   }
 
-  // ── Year range for summary dropdown ──────────────────────────────────────
-  const summaryYears = useMemo(() => {
-    const years = new Set<number>()
-    years.add(now.getFullYear())
-    for (const sched of schedules) {
-      for (const entry of sched.entries) {
-        const y = parseInt(entry.date.slice(0, 4))
-        if (!isNaN(y)) years.add(y)
-      }
-    }
-    return [...years].sort((a, b) => b - a)
-  }, [schedules])
-
   // ── Year-wide shift summary ───────────────────────────────────────────────
   const yearSummary = useMemo(() => {
-    const prefix = `${summaryYear}-`
-    const holidayList: string[] = settings.holidays[summaryYear] ?? computeFederalHolidays(summaryYear)
+    const prefix = `${selectedYear}-`
+    const holidayList: string[] = settings.holidays[selectedYear] ?? computeFederalHolidays(selectedYear)
 
     const manualS = schedules.find(s => s.id === 'manual_shifts')
     const ov: Record<string, string[]> = {}
@@ -241,7 +241,7 @@ export default function ScheduleCalendar() {
     }
 
     return { totalWorking, weekdayWorking, weekendWorking, holidayWorking, daysOff, vacation, holidayOff, postcall, byShift }
-  }, [summaryYear, schedules, settings])
+  }, [selectedYear, schedules, settings])
 
   // Group shift entries for display rows
   const shiftEntries = [...yearSummary.byShift.entries()]
@@ -340,8 +340,14 @@ export default function ScheduleCalendar() {
         <div className="flex items-center gap-3 mb-3 flex-wrap">
           <h2 className="text-2xl font-bold text-gray-100">Schedule</h2>
           <div className="flex items-center gap-1 ml-4">
+            {/* Previous/Next year: kept as its own control (rather than
+                folded into the top-level selector) because it can reach a
+                year with zero data at all -- e.g. starting next year's
+                schedule in advance -- which the top-level selector's
+                data-driven year list can't offer. Also updates the shared
+                selector so the rest of the app follows along. */}
             <button
-              onClick={() => setYear(y => y - 1)}
+              onClick={() => { const y = year - 1; setYear(y); setSelectedYear(y) }}
               className="p-1.5 rounded-md text-gray-400 hover:bg-gray-800 hover:text-gray-100 transition-colors"
               aria-label="Previous year"
             >
@@ -351,7 +357,7 @@ export default function ScheduleCalendar() {
             </button>
             <span className="text-sm font-semibold text-gray-200 w-12 text-center">{year}</span>
             <button
-              onClick={() => setYear(y => y + 1)}
+              onClick={() => { const y = year + 1; setYear(y); setSelectedYear(y) }}
               className="p-1.5 rounded-md text-gray-400 hover:bg-gray-800 hover:text-gray-100 transition-colors"
               aria-label="Next year"
             >
@@ -360,7 +366,7 @@ export default function ScheduleCalendar() {
               </svg>
             </button>
             <button
-              onClick={() => { setYear(now.getFullYear()); setMonth(now.getMonth() + 1) }}
+              onClick={() => { setYear(now.getFullYear()); setMonth(now.getMonth() + 1); setSelectedYear(now.getFullYear()) }}
               className="ml-2 px-2.5 py-1 text-xs rounded-md text-gray-500 hover:bg-gray-800 hover:text-gray-200 border border-gray-800 transition-colors"
             >
               Today
@@ -679,20 +685,11 @@ export default function ScheduleCalendar() {
       {/* ── Shift Summary ──────────────────────────────────────────────────── */}
       <div className="mt-10 pt-8 border-t border-gray-800">
         <div className="max-w-4xl">
-          {/* Section header with year dropdown + view toggle */}
+          {/* Section header with view toggle */}
           <div className="flex items-center gap-3 mb-4 flex-wrap">
             <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wider">
-              Shift Summary
+              Shift Summary — {selectedYear}
             </h3>
-            <select
-              value={summaryYear}
-              onChange={e => setSummaryYear(Number(e.target.value))}
-              className="bg-gray-900 border border-gray-700 text-gray-300 text-xs rounded-md px-2 py-1 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-            >
-              {summaryYears.map(y => (
-                <option key={y} value={y}>{y}</option>
-              ))}
-            </select>
             <div className="ml-auto flex items-center gap-0.5 bg-gray-900 border border-gray-800 rounded-lg p-0.5">
               {(['cards', 'chart'] as const).map(v => (
                 <button
@@ -833,7 +830,7 @@ export default function ScheduleCalendar() {
                   </BarChart>
                 </ResponsiveContainer>
               ) : (
-                <p className="text-xs text-gray-600 py-8 text-center">No {chartGroup} shift data for {summaryYear}</p>
+                <p className="text-xs text-gray-600 py-8 text-center">No {chartGroup} shift data for {selectedYear}</p>
               )}
             </div>
           )}

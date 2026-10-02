@@ -49,16 +49,10 @@ function groupByWeek(workingDays: WorkingDayStats[]): WeekBucket[] {
 export default function Dashboard() {
   const navigate = useNavigate()
   const location = useLocation()
-  const { reports, schedules: allSchedules, settings, stipendMappings: allMappings, cptRanges, saveReport, saveManualShift, deleteManualShift, activePhysicianId } = useData()
+  const { reports, schedules: allSchedules, settings, stipendMappings: allMappings, cptRanges, saveReport, saveManualShift, deleteManualShift, activePhysicianId, selectedYear, setSelectedYear } = useData()
 
   const incomingDate = (location.state as { date?: string; week?: string } | null)?.date ?? null
   const incomingWeek = (location.state as { date?: string; week?: string } | null)?.week ?? null
-
-  const years = [...new Set(reports.map((r) => r.year))].sort((a, b) => b - a)
-  const [selectedYear, setSelectedYear] = useState<number>(() => {
-    if (incomingDate) return parseInt(incomingDate.slice(0, 4))
-    return years[0] ?? new Date().getFullYear()
-  })
 
   const yearStats = useMemo(
     () => computeCalendarYearStats(selectedYear, reports, allSchedules, settings, allMappings),
@@ -90,8 +84,9 @@ export default function Dashboard() {
     return () => window.removeEventListener('keydown', handler)
   }, [])
 
-  // When navigating here with a pre-selected date, update year + month tab
-  // (useEffect needed because useState initializers only run on first mount)
+  // When navigating here with a pre-selected date, update the (shared,
+  // top-level) year + this page's own month tab to match -- e.g. clicking a
+  // specific day's bar elsewhere in the app.
   useEffect(() => {
     if (!incomingDate) return
     const year = parseInt(incomingDate.slice(0, 4))
@@ -260,7 +255,18 @@ export default function Dashboard() {
     )
   }
 
-  if (!selStats) return null
+  // Reachable now that the year selector is shared app-wide: e.g. Schedule's
+  // own Previous/Next-year navigation can reach a future year with no PCR
+  // data yet (deliberately, to let a schedule be entered in advance) --
+  // landing here should say so, not render nothing.
+  if (!selStats) {
+    return (
+      <div className="p-4 md:p-8">
+        <h2 className="text-2xl font-bold text-gray-100 mb-1">{selectedYear} Overview</h2>
+        <p className="text-gray-500 text-sm">No PCR reports uploaded for {selectedYear} yet.</p>
+      </div>
+    )
+  }
 
   const ytdUnits = yearStats.reduce((s, m) => s + m.totalDistributableUnits, 0)
   const ytdCompensation = yearStats.reduce((s, m) => s + m.totalCompensation, 0)
@@ -344,39 +350,11 @@ export default function Dashboard() {
   return (
     <>
     <div className="p-4 md:p-8">
-      <div className="flex items-center gap-4 mb-6 flex-wrap">
-        <div>
-          <h2 className="text-2xl font-bold text-gray-100">{selectedYear} Overview</h2>
-          <p className="text-sm text-gray-500 mt-0.5">
-            {yearStats.length} month{yearStats.length !== 1 ? 's' : ''} uploaded
-          </p>
-        </div>
-        {years.length > 1 && (
-          <div className="flex items-center gap-2 ml-4">
-            {years.slice(0, 3).map((y) => (
-              <button key={y} onClick={() => setSelectedYear(y)}
-                className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
-                  y === selectedYear ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-gray-200'
-                }`}>
-                {y}
-              </button>
-            ))}
-            {years.length > 3 && (
-              <select
-                value={years.slice(3).includes(selectedYear) ? selectedYear : ''}
-                onChange={e => setSelectedYear(Number(e.target.value))}
-                className={`bg-gray-900 border rounded-md px-2 py-1 text-sm font-medium focus:outline-none focus:ring-1 focus:ring-indigo-500 ${
-                  years.slice(3).includes(selectedYear)
-                    ? 'border-indigo-600 text-white'
-                    : 'border-gray-700 text-gray-400 hover:border-gray-600'
-                }`}
-              >
-                {!years.slice(3).includes(selectedYear) && <option value="" disabled>More…</option>}
-                {years.slice(3).map(y => <option key={y} value={y}>{y}</option>)}
-              </select>
-            )}
-          </div>
-        )}
+      <div className="mb-6">
+        <h2 className="text-2xl font-bold text-gray-100">{selectedYear} Overview</h2>
+        <p className="text-sm text-gray-500 mt-0.5">
+          {yearStats.length} month{yearStats.length !== 1 ? 's' : ''} uploaded
+        </p>
       </div>
 
       {/* YTD pulse strip */}
