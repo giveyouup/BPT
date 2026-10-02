@@ -1,5 +1,19 @@
 # Changelog
 
+## v4.0.1
+
+- "Student Loan Reimbursement" and "Equipment and Supplies" are now their
+  own line items under Compensation's Cash Reimbursements, instead of
+  needing to be typed in by hand each year — existing entries are
+  carried over automatically.
+- PCR uploads now recognize a few more label variants out of the box
+  (alternate wording for GI Weekend, NIR, Business Meetings, and
+  Equipment/Supplies lines), so fewer PCR lines show up as unmapped.
+- Fixed "CASE Board", "CASE Board / Chairs / Comm / Schedule", and
+  "Leadership Stipend" sometimes being treated as separate Other Income
+  categories when they're the same line, just relabeled between report
+  periods — they now consistently combine into one.
+
 ## v4.0.0
 
 - Added a year selector right under the app title that now applies
