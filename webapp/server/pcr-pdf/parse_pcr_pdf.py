@@ -1125,6 +1125,27 @@ def extract_income_statement(doc, page_indices):
             label = re.sub(r'^[\'"‘’“”]+', "", label)
             if not label:
                 continue
+            # Some report periods prefix most (not all -- confirmed: "EXPENSES"
+            # itself stayed bare the same month "STIPENDS" and "OTHER
+            # PROFESSIONAL INCOME" didn't) income-statement rows with an
+            # internal GL/account code (e.g. "30218 SMCS Acute Pain" instead of
+            # "SMCS Acute Pain"). The code can sit right at the start of the
+            # label, or -- on a section's own closing subtotal row -- right
+            # after a leading "Total " (confirmed real case: "Total 30200
+            # STIPENDS", "Total 31000 OTHER PROFESSIONAL INCOME"); both forms
+            # are stripped here, once, before the label is used for anything.
+            # This matters beyond cosmetics: section-opener/closer matching
+            # below is an exact match on the bare header text, so a prefixed
+            # opener or closer would otherwise never fire, mistagging every
+            # row in between as 'other' (confirmed on a real sample: this
+            # silently dropped every stipend line from the audit and the one
+            # Other Income line from Compensation's sync, same failure mode
+            # as the stray-quote case above -- and left the *next* section's
+            # rows mistagged too, since a closer that never fires leaves the
+            # previous section open until the next real opener).
+            label = re.sub(r'^(Total\s+)?\d{4,6}\s+', r'\1', label, flags=re.IGNORECASE)
+            if not label:
+                continue
 
             # Normalize away spacing (OCR occasionally merges "Total X"
             # into one word, as already seen elsewhere in this file) for
