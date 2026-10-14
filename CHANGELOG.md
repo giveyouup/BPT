@@ -1,5 +1,11 @@
 # Changelog
 
+## v4.0.4
+
+- Compensation's Hospital/ASC Stipends rows now follow the same order you
+  set with the drag handles on the PCR Income Statement page's Stipends
+  table — reorder them there, and Compensation's breakdown follows.
+
 ## v4.0.3
 
 - Compensation's Hospital/ASC Stipends breakdown now stays in sync with
