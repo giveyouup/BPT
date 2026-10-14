@@ -4,7 +4,7 @@ import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from 'recharts'
 import { useData } from '../context/DataContext'
 import {
   computeCalendarYearStats, computeCashYearStats, computeCalendarMonthStats, getStipendForDay, getApplicableMapping,
-  resolveCashUnitPayMode, getStipendGroupKey, describeStipendGroupKey,
+  resolveCashUnitPayMode, getStipendGroupKey, describeStipendGroupKey, applyCustomOrder,
 } from '../utils/calculations'
 import { formatCurrency, formatMonthYear, formatDateShort, randomId } from '../utils/dateUtils'
 import { resolveShiftAlias } from '../utils/shiftUtils'
@@ -355,16 +355,24 @@ export default function Compensation() {
       }
     }
 
-    // Known bases in their original fixed order, then any promoted key
-    // (sorted), then the "other" catch-all last.
+    // Default order: known bases in their original fixed order, then any
+    // promoted key (sorted), then the "other" catch-all last. The PCR Income
+    // Statement page's own "Stipends" drag-and-drop order (Settings.
+    // pcrRowOrder['stipend']) -- keyed by the same group/target-key id space
+    // -- is then layered on top via the shared applyCustomOrder(), so
+    // reordering stipend rows there reorders them here too. Each bucket
+    // (hospital/ASC) only ever contains its own keys, so sharing one flat
+    // saved order between both buckets is safe -- a key belonging to the
+    // other bucket just isn't present to rank.
     function orderedRows(totals: Record<string, number>, baseOrder: string[]): { label: string; amount: number }[] {
       const seen = new Set<string>()
       const keys: string[] = []
       for (const k of baseOrder) if (k in totals) { keys.push(k); seen.add(k) }
       for (const k of Object.keys(totals).filter(k => !seen.has(k) && k !== 'other').sort()) keys.push(k)
       if ('other' in totals) keys.push('other')
-      return keys
-        .map((group) => ({ label: describeStipendGroupKey(group), amount: totals[group] }))
+      const ids = keys.map((id) => ({ id }))
+      return applyCustomOrder(ids, settings.pcrRowOrder?.['stipend'])
+        .map(({ id: group }) => ({ label: describeStipendGroupKey(group), amount: totals[group] }))
         .filter((r) => r.amount > 0)
     }
 

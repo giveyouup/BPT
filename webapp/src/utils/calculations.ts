@@ -151,6 +151,26 @@ export function describeStipendGroupKey(key: string): string {
   return STIPEND_BASE_GROUP_LABELS[key] ?? key
 }
 
+/**
+ * Re-ranks `items` by a user's saved drag-and-drop order (a flat array of
+ * ids, lowest index first) -- shared by PcrIncomeStatementPage.tsx (where
+ * the drag handles themselves live, writing to Settings.pcrRowOrder) and
+ * Compensation.tsx's Hospital/ASC Stipends breakdown (which has no drag UI
+ * of its own, but reuses the PCR page's "stipend" row order so the two
+ * pages agree, since both are keyed by the same stipend group/target key).
+ * An id with no entry in `savedOrder` keeps its position relative to other
+ * unlisted ids (stable sort on the original array index), appended after
+ * every listed id.
+ */
+export function applyCustomOrder<T extends { id: string }>(items: T[], savedOrder: string[] | undefined): T[] {
+  if (!savedOrder || savedOrder.length === 0) return items
+  const rank = new Map(savedOrder.map((id, i) => [id, i]))
+  return items
+    .map((item, i) => ({ item, key: rank.has(item.id) ? rank.get(item.id)! : 100000 + i }))
+    .sort((a, b) => a.key - b.key)
+    .map((x) => x.item)
+}
+
 export function getShiftStipendAmount(raw: string, isWeekend: boolean, mapping: StipendMapping): number {
   const shiftType = resolveShiftAlias(raw.toUpperCase())
   if (isCallShift(shiftType)) {
