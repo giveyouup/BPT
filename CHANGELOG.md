@@ -1,5 +1,14 @@
 # Changelog
 
+## v4.0.3
+
+- Compensation's Hospital/ASC Stipends breakdown now stays in sync with
+  the Stipend Calculator page, including any custom stipend column
+  you've broken out there — it previously had its own separate list and
+  could silently lump a custom column into "Other" instead of showing
+  it on its own line. Dollar totals are unaffected; only how they're
+  broken out improves.
+
 ## v4.0.2
 
 - Fixed PCR uploads where the report added a numeric code in front of
