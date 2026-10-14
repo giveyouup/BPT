@@ -2,7 +2,10 @@ import { useState, useMemo, useEffect, useRef, Fragment } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { PieChart, Pie, Cell, Tooltip, ResponsiveContainer } from 'recharts'
 import { useData } from '../context/DataContext'
-import { computeCalendarYearStats, computeCashYearStats, computeCalendarMonthStats, getStipendForDay, getApplicableMapping, resolveCashUnitPayMode } from '../utils/calculations'
+import {
+  computeCalendarYearStats, computeCashYearStats, computeCalendarMonthStats, getStipendForDay, getApplicableMapping,
+  resolveCashUnitPayMode, getStipendGroupKey, describeStipendGroupKey,
+} from '../utils/calculations'
 import { formatCurrency, formatMonthYear, formatDateShort, randomId } from '../utils/dateUtils'
 import { resolveShiftAlias } from '../utils/shiftUtils'
 import {
@@ -272,65 +275,67 @@ export default function Compensation() {
   )
 
   const stipendBreakdown = useMemo(() => {
-    const HOSP_CATS = [
-      { label: 'NIR',        pattern: /^NIR$/i },
-      { label: 'BR',         pattern: /^BR$/i },
-      { label: 'G1/G2 Call', pattern: /^G[12]$/i },
-      { label: 'Other G',    pattern: /^G[3-9]$|^G\d{2,}$/i },
-      { label: 'APS',        pattern: /^APS$/i },
-      { label: 'ROC',        pattern: /^ROC$/i },
-      { label: 'GI',         pattern: /^(GI|ENDO)$/i },
-    ]
-    const ASC_CATS = [
-      { label: 'FS',       pattern: /^FS\d*$/i },
-      { label: 'Alhambra', pattern: /^A\d+$/i },
-    ]
-    const ASC_SHIFT = /^(FS\d*|A\d+)$/i
+    const promoted = new Set(settings.promotedStipendCodes ?? [])
 
-    const hospTotals: Record<string, number> = Object.fromEntries(HOSP_CATS.map(c => [c.label, 0]))
-    const ascTotals:  Record<string, number> = Object.fromEntries(ASC_CATS.map(c => [c.label, 0]))
-    let hospOther = 0, hospAdditional = 0, ascAdditional = 0
+    // Hospital vs ASC split -- provably complete today: promotion can only
+    // ever pull a code out of the otherG/other catch-alls (see
+    // STIPEND_PROMOTABLE_BASE_KEYS in calculations.ts), and FS/alhambra can
+    // never be promoted-from, so a promoted column can never need to land in
+    // ASC. If a genuinely new ASC-type stipend ever appears (a second ASC
+    // facility, say), the natural extension point is a per-promoted-key
+    // "this is an ASC stipend" toggle alongside promotion itself in Stipend
+    // Calculator's Columns popover, feeding into this Set instead of the
+    // fixed pair below -- not built speculatively here since there's no
+    // second real case yet to validate the shape against.
+    const ASC_GROUP_KEYS = new Set(['FS', 'alhambra'])
+    // Display order matching the original hardcoded HOSP_CATS/ASC_CATS
+    // ordering; any promoted key present falls in afterward (sorted), then
+    // the generic "other" catch-all, then "Additional".
+    const HOSP_ORDER = ['NIR', 'BR', 'mainOrCall', 'otherG', 'APS', 'ROC', 'GI']
+    const ASC_ORDER = ['FS', 'alhambra']
+
+    const hospTotals: Record<string, number> = {}
+    const ascTotals: Record<string, number> = {}
+    let hospAdditional = 0, ascAdditional = 0
 
     function processMonth(year: number, month: number, days: typeof yearStats[0]['workingDays']) {
       const mapping = getApplicableMapping(year, month, stipendMappings)
       for (const day of days) {
-        const dayIsAsc = day.shiftTypes.some(r => ASC_SHIFT.test(resolveShiftAlias(r.toUpperCase())))
+        // Every distinct group this day's shifts classify into (via the same
+        // canonical classifier Stipend Calculator itself uses, promoted
+        // columns included) -- used both for per-shift totals below and to
+        // resolve a day-level "Additional Stipend" adjustment to a specific
+        // group when unambiguous.
+        const dayGroups = new Set<string>()
 
         for (const raw of day.shiftTypes) {
           const canonical = resolveShiftAlias(raw.toUpperCase())
+          const group = getStipendGroupKey(canonical, day.isCallWeekend, promoted)
+          dayGroups.add(group)
           const amt = getStipendForDay([raw], day.isCallWeekend, mapping)
           if (amt === 0) continue
-
-          let matched = false
-          for (const c of ASC_CATS) {
-            if (c.pattern.test(canonical)) { ascTotals[c.label] += amt; matched = true; break }
-          }
-          if (!matched) {
-            for (const c of HOSP_CATS) {
-              if (c.pattern.test(canonical)) { hospTotals[c.label] += amt; matched = true; break }
-            }
-            if (!matched) hospOther += amt
-          }
+          if (ASC_GROUP_KEYS.has(group)) ascTotals[group] = (ascTotals[group] ?? 0) + amt
+          else hospTotals[group] = (hospTotals[group] ?? 0) + amt
         }
 
         if (day.additionalStipend !== 0) {
+          // "other" is a catch-all, not a real attributable category -- same
+          // as the original hardcoded category lists never including it.
+          const specificGroups = [...dayGroups].filter(g => g !== 'other')
+          const ascGroups = specificGroups.filter(g => ASC_GROUP_KEYS.has(g))
+          const hospGroups = specificGroups.filter(g => !ASC_GROUP_KEYS.has(g))
+          const dayIsAsc = [...dayGroups].some(g => ASC_GROUP_KEYS.has(g))
           if (dayIsAsc) {
-            // Attribute to the specific ASC category if unambiguous, else "Additional"
-            const ascCatsOnDay = ASC_CATS.filter(c =>
-              day.shiftTypes.some(r => c.pattern.test(resolveShiftAlias(r.toUpperCase())))
-            )
-            if (ascCatsOnDay.length === 1) {
-              ascTotals[ascCatsOnDay[0].label] += day.additionalStipend
+            // Attribute to the specific ASC group if unambiguous, else "Additional"
+            if (ascGroups.length === 1) {
+              ascTotals[ascGroups[0]] = (ascTotals[ascGroups[0]] ?? 0) + day.additionalStipend
             } else {
               ascAdditional += day.additionalStipend
             }
           } else {
-            // Attribute to the specific hospital category if unambiguous, else "Additional"
-            const hospCatsOnDay = HOSP_CATS.filter(c =>
-              day.shiftTypes.some(r => c.pattern.test(resolveShiftAlias(r.toUpperCase())))
-            )
-            if (hospCatsOnDay.length === 1) {
-              hospTotals[hospCatsOnDay[0].label] += day.additionalStipend
+            // Attribute to the specific hospital group if unambiguous, else "Additional"
+            if (hospGroups.length === 1) {
+              hospTotals[hospGroups[0]] = (hospTotals[hospGroups[0]] ?? 0) + day.additionalStipend
             } else {
               hospAdditional += day.additionalStipend
             }
@@ -350,17 +355,29 @@ export default function Compensation() {
       }
     }
 
+    // Known bases in their original fixed order, then any promoted key
+    // (sorted), then the "other" catch-all last.
+    function orderedRows(totals: Record<string, number>, baseOrder: string[]): { label: string; amount: number }[] {
+      const seen = new Set<string>()
+      const keys: string[] = []
+      for (const k of baseOrder) if (k in totals) { keys.push(k); seen.add(k) }
+      for (const k of Object.keys(totals).filter(k => !seen.has(k) && k !== 'other').sort()) keys.push(k)
+      if ('other' in totals) keys.push('other')
+      return keys
+        .map((group) => ({ label: describeStipendGroupKey(group), amount: totals[group] }))
+        .filter((r) => r.amount > 0)
+    }
+
     const hospital = [
-      ...HOSP_CATS.map(c => ({ label: c.label, amount: hospTotals[c.label] })).filter(r => r.amount > 0),
-      ...(hospOther      > 0 ? [{ label: 'Other',      amount: hospOther      }] : []),
+      ...orderedRows(hospTotals, HOSP_ORDER),
       ...(hospAdditional > 0 ? [{ label: 'Additional', amount: hospAdditional }] : []),
     ]
     const asc = [
-      ...ASC_CATS.map(c => ({ label: c.label, amount: ascTotals[c.label] })).filter(r => r.amount > 0),
+      ...orderedRows(ascTotals, ASC_ORDER),
       ...(ascAdditional  > 0 ? [{ label: 'Additional', amount: ascAdditional  }] : []),
     ]
     return { hospital, asc }
-  }, [cashView, selectedYear, yearStats, prevDecWorkingDays, stipendMappings])
+  }, [cashView, selectedYear, yearStats, prevDecWorkingDays, stipendMappings, settings])
 
   const currentRecord = useMemo(
     () => annualExpenses.find(e => e.year === selectedYear),

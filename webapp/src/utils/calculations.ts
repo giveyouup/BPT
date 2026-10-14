@@ -105,6 +105,18 @@ export const STIPEND_BASE_GROUP_LABELS: Record<string, string> = {
 // to their own standalone group — shared by StipendCalculator.tsx (its own display
 // columns), the PCR Category Mapping page (its target-key options), and Audits.tsx
 // (owed-amount computation) so all three agree on what a promoted key means.
+//
+// This set is also, incidentally, why Compensation.tsx's Hospital-vs-ASC
+// stipend split (stipendBreakdown) can hardcode its ASC bucket as exactly
+// {FS, alhambra} with no per-code configuration: a promoted key can only
+// ever have originated from "otherG" or "other", never from "FS"/"alhambra"
+// directly, so a promoted column can never need to land in the ASC bucket.
+// That stops being true the moment a *third* base key needs to be
+// ASC-eligible (a second real ASC facility, say) -- at that point the right
+// extension is a per-promoted-key "this is an ASC stipend" toggle living
+// alongside promotion itself in Stipend Calculator's Columns popover, not a
+// third hardcoded pattern in Compensation.tsx. Deliberately not built ahead
+// of that actually happening -- see stipendBreakdown's own comment.
 export const STIPEND_PROMOTABLE_BASE_KEYS = new Set(['otherG', 'other'])
 const STIPEND_PROMO_SEP = '::'
 
