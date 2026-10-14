@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { useData } from '../context/DataContext'
 import { formatCurrency, getMonthName } from '../utils/dateUtils'
 import { resolvePcrCategoryMapping } from '../utils/pcrCategoryMatching'
-import { describeStipendGroupKey } from '../utils/calculations'
+import { describeStipendGroupKey, applyCustomOrder } from '../utils/calculations'
 import { CASH_COMP_LEAVES, BUSINESS_LEAVES, BENEFITS_LEAVES, RETIREMENT_LEAVES, CASH_COMP_KEYS, BUSINESS_KEYS, BENEFITS_KEYS, RETIREMENT_KEYS, LEAF_LABELS } from '../utils/expenseCategories'
 import type { PcrStatementLine, PcrCategoryMapping, PcrIncomeStatement } from '../types'
 import StatementLineEditor from '../components/StatementLineEditor'
@@ -142,15 +142,6 @@ function sortByOrder(rows: OrderedRow[], order: Map<string, number>): OrderedRow
 // already-default-sorted rows: items present in the saved order come first,
 // in that order; anything new since the order was saved (a label that
 // wasn't around yet) is appended afterward, in its existing default order.
-function applyCustomOrder(items: OrderedRow[], savedOrder: string[] | undefined): OrderedRow[] {
-  if (!savedOrder || savedOrder.length === 0) return items
-  const rank = new Map(savedOrder.map((id, i) => [id, i]))
-  return items
-    .map((item, i) => ({ item, key: rank.has(item.id) ? rank.get(item.id)! : 100000 + i }))
-    .sort((a, b) => a.key - b.key)
-    .map((x) => x.item)
-}
-
 // Splits a flat section's rows into mapped / unmapped / hidden (via
 // PcrCategoryMapping plus settings.hiddenPcrLabels -- the same "dismissed"
 // list the PCR Category Mapping settings page uses for its suggestion chips,
