@@ -1,5 +1,13 @@
 # Changelog
 
+## v4.0.2
+
+- Fixed PCR uploads where the report added a numeric code in front of
+  every income-statement line (seen starting with the August 2026
+  report). Those lines were silently being treated as uncategorized,
+  which could throw off the Stipend Calculator's PCR audit and
+  Compensation's revenue breakdown for that month.
+
 ## v4.0.1
 
 - "Student Loan Reimbursement" and "Equipment and Supplies" are now their
