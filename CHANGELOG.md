@@ -1,5 +1,11 @@
 # Changelog
 
+## v4.0.5
+
+- Fixed the app failing to start on newer Node.js/npm setups (a database
+  build step was being silently skipped) — only relevant if you're
+  building from source.
+
 ## v4.0.4
 
 - Compensation's Hospital/ASC Stipends rows now follow the same order you
