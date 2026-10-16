@@ -827,6 +827,21 @@ export default function AnnualSummary() {
   // Dollar/hr chart data for shift analytics — use what-if when active
   const activeShiftStats = whatIfShiftStats ?? shiftStatsData
 
+  // Display-only: drop the "WD" suffix from a G-shift that has no "WE"
+  // counterpart this year (e.g. G4+), since the split only means something
+  // when both exist. Row keys stay suffixed so shiftDayMap lookups still match.
+  const shiftKeysWithWeekend = new Set(
+    [...shiftStatsData, ...(whatIfShiftStats ?? [])]
+      .filter(r => / WE$/.test(r.shift))
+      .map(r => r.shift.replace(/ WE$/, '')),
+  )
+  const shiftLabel = (shift: string): string => {
+    const base = shift.replace(/ WD$/, '')
+    return base !== shift && !shiftKeysWithWeekend.has(base) ? base : shift
+  }
+  const shiftTooltipLabel = (shift: string): string =>
+    shiftLabel(shift).replace(/ WD$/, ' Weekday').replace(/ WE$/, ' Weekend')
+
   return (
     <div className="p-4 md:p-8">
 
@@ -1509,10 +1524,10 @@ export default function AnnualSummary() {
               <ResponsiveContainer width="100%" height={180}>
                 <BarChart data={hoursData} margin={{ top: 0, right: 32, bottom: 0, left: -10 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
-                  <XAxis dataKey="shift" {...AXIS_PROPS} />
+                  <XAxis dataKey="shift" {...AXIS_PROPS} tickFormatter={shiftLabel} />
                   <YAxis {...AXIS_PROPS} tickFormatter={(v) => `${v}h`} />
                   <Tooltip
-                    labelFormatter={(label: string) => label.replace(/ WD$/, ' Weekday').replace(/ WE$/, ' Weekend')}
+                    labelFormatter={shiftTooltipLabel}
                     formatter={(v: number, _: string, entry: { payload?: { days: number } }) =>
                       [`${v}h avg · ${entry.payload?.days ?? 0} days`, 'Shift length']}
                     {...CHART_STYLE}
@@ -1550,10 +1565,10 @@ export default function AnnualSummary() {
                 <ResponsiveContainer width="100%" height={180}>
                   <BarChart data={dollarsData} margin={{ top: 0, right: 8, bottom: 0, left: -10 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
-                    <XAxis dataKey="shift" {...AXIS_PROPS} />
+                    <XAxis dataKey="shift" {...AXIS_PROPS} tickFormatter={shiftLabel} />
                     <YAxis {...AXIS_PROPS} tickFormatter={(v) => `$${v}`} domain={[0, 650]} />
                     <Tooltip
-                      labelFormatter={(label: string) => label.replace(/ WD$/, ' Weekday').replace(/ WE$/, ' Weekend')}
+                      labelFormatter={shiftTooltipLabel}
                       formatter={(v: number, _: string, entry: { payload?: { days: number } }) =>
                         [`$${v}/hr avg · ${entry.payload?.days ?? 0} days`, '$/hr']}
                       {...CHART_STYLE}
@@ -1635,7 +1650,7 @@ export default function AnnualSummary() {
                                     fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                                   </svg>
-                                  {row.shift}
+                                  {shiftLabel(row.shift)}
                                 </span>
                               </td>
                               <td className="px-4 py-2.5 text-gray-400">{row.days}</td>
