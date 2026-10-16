@@ -1,5 +1,18 @@
 # Changelog
 
+## v4.0.8
+
+- Maintenance and security release — no changes to how the app works or
+  to your data.
+- The Docker image now runs on Node.js 22 (Node.js 20 is no longer
+  receiving security updates).
+- Updated the app's dependencies to pick up security fixes, including a
+  newer version of the spreadsheet library used for Excel imports and
+  exports.
+- The PDF/OCR import components are now pinned to fixed versions, so
+  future image rebuilds can't unexpectedly change how PCR or schedule
+  PDFs are read.
+
 ## v4.0.7
 
 - Annual Summary's Shift Type Analytics no longer tacks a "WD" (weekday)
