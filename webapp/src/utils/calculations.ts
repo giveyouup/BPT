@@ -774,6 +774,7 @@ export function computeCalendarMonthWorkingDays(
 
     let hours = 0
     let isOverridden = false
+    let usedDefaultHours = false
 
     if (mergedOverrides[date] !== undefined) {
       hours = mergedOverrides[date]
@@ -787,6 +788,7 @@ export function computeCalendarMonthWorkingDays(
       hours = 0
     } else {
       hours = defaultNoTimeHours
+      usedDefaultHours = true
     }
 
     result.push({
@@ -797,7 +799,7 @@ export function computeCalendarMonthWorkingDays(
       lastEndTime: null,
       hours,
       isOverridden,
-      isDefault: false,
+      isDefault: usedDefaultHours,
       shiftTypes,
       hasProduction: false,
       isCallWeekend,

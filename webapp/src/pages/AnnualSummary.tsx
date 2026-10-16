@@ -11,7 +11,7 @@ import {
   formatCurrency, formatCurrencyFull, formatDateFull, formatHours, formatMonthYear, getMonthName, MONTH_ABBREVS,
 } from '../utils/dateUtils'
 import StatCard from '../components/StatCard'
-import { isOffDayShift, isFixedShift, getFixedHours, isCallShift, resolveShiftAlias, computeFederalHolidays, isVacationShift, isHolidayOffShift, isPostcallShift, shiftBadgeClass } from '../utils/shiftUtils'
+import { isOffDayShift, isFixedShift, getFixedHours, resolveShiftAlias, computeFederalHolidays, isVacationShift, isHolidayOffShift, isPostcallShift, shiftBadgeClass } from '../utils/shiftUtils'
 import type { MonthlyStats, StipendMapping } from '../types'
 
 function shiftSortKey(shift: string): string {
@@ -106,8 +106,18 @@ type ShiftRow = {
   isFixed: boolean
 }
 
+// Any G-numbered shift (G1, G2, G3, ...) gets its own weekday/weekend row --
+// not just G1/G2 (isCallShift) -- since the rate sheet can assign a distinct
+// weekend rate to any G-code (e.g. a promoted "G3::weekend" column), and
+// shiftSortKey()/shiftBarColor() below already assume every G-shift carries
+// a "WD"/"WE" suffix, not just G1/G2. Previously only G1/G2 split, silently
+// blending a weekday and a weekend G3 shift into one combined row.
+function isGNumberedShift(canonical: string): boolean {
+  return /^G\d+$/i.test(canonical)
+}
+
 function shiftKey(canonical: string, isCallWeekend: boolean, shiftHours: Record<string, number>): string {
-  return (!isFixedShift(canonical, shiftHours) && isCallShift(canonical))
+  return (!isFixedShift(canonical, shiftHours) && isGNumberedShift(canonical))
     ? `${canonical} ${isCallWeekend ? 'WE' : 'WD'}`
     : canonical
 }

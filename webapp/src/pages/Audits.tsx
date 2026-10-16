@@ -239,12 +239,14 @@ export default function Audits() {
     return out
   }, [noProdDays])
 
-  // Section 3: production days where case times were missing and hours were estimated
+  // Section 3: days where hours were estimated via the default-hours fallback —
+  // either production exists but case times were missing, or a scheduled shift has
+  // no production at all (excludes fixed-hour shifts and post-cutoff days)
   const defaultHoursDays = useMemo(
     () => allDays
-      .filter(d => d.hasProduction && d.isDefault)
+      .filter(d => d.isDefault && (billingCutoff === null || d.date <= billingCutoff))
       .sort((a, b) => a.date.localeCompare(b.date)),
-    [allDays]
+    [allDays, billingCutoff]
   )
 
   // Section 4: days on federal/custom holidays with production or a shift assignment
@@ -602,7 +604,7 @@ export default function Audits() {
               <SectionBadge count={defaultHoursDays.length} variant="warn" />
             </div>
             <p className="text-xs text-gray-600 mb-4">
-              Production days where no case start/end times were available. Hours were estimated using the default fallback, making the $/hr rate for these days unreliable.
+              Days where no case start/end times were available — or no production at all for a scheduled shift. Hours were estimated using the default fallback, making the $/hr rate for these days unreliable.
             </p>
 
             {defaultHoursDays.length === 0 ? (
