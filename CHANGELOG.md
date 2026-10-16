@@ -1,5 +1,16 @@
 # Changelog
 
+## v4.0.6
+
+- Annual Summary's shift breakdown was lumping weekend and weekday G3
+  shifts into a single row instead of splitting them, the same way it
+  already does for G1/G2. Fixed.
+- Audits' "Days Using Default Hours" section now also flags scheduled
+  shifts with no billing data at all (not just days with billing data
+  missing case times), so days like an unbilled weekend shift show up
+  there too — still excluding fixed-hour shifts and days after your
+  latest uploaded billing data.
+
 ## v4.0.5
 
 - Fixed the app failing to start on newer Node.js/npm setups (a database
