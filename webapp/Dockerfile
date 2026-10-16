@@ -1,5 +1,5 @@
 # Stage 1: Install prod dependencies (compile native modules)
-FROM node:20-bookworm-slim AS prod-deps
+FROM node:22-bookworm-slim AS prod-deps
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ \
   && rm -rf /var/lib/apt/lists/*
@@ -20,7 +20,7 @@ RUN npm ci --omit=dev \
      \) -exec rm -rf {} + 2>/dev/null || true
 
 # Stage 2: Build frontend + server
-FROM node:20-bookworm-slim AS build
+FROM node:22-bookworm-slim AS build
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ \
   && rm -rf /var/lib/apt/lists/*
@@ -30,7 +30,7 @@ COPY . .
 RUN npm run build:all
 
 # Stage 3: Production image
-FROM node:20-bookworm-slim
+FROM node:22-bookworm-slim
 WORKDIR /app
 # tesseract-ocr + python3/pip: runtime for the vendored PCR-PDF OCR pipeline
 # (server/pcr-pdf/parse_pcr_pdf.py, invoked as a subprocess by pdfParser.ts).
