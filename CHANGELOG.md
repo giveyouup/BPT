@@ -1,5 +1,12 @@
 # Changelog
 
+## v4.0.7
+
+- Annual Summary's Shift Type Analytics no longer tacks a "WD" (weekday)
+  label onto G-shifts that never fall on a weekend, like G4 and up — they
+  now just show as "G4", "G5", etc. Shifts that do have both weekday and
+  weekend rows (G1–G3) still show "WD"/"WE" so you can tell them apart.
+
 ## v4.0.6
 
 - Annual Summary's shift breakdown was lumping weekend and weekday G3
